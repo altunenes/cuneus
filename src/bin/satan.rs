@@ -36,7 +36,17 @@ impl UniformProvider for AttractorParams {
         bytemuck::bytes_of(self)
     }
 }
-
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct ResolutionUniform {
+    resolution: [f32; 2],
+    _padding: [f32; 2], // 16-byte alignment
+}
+impl UniformProvider for ResolutionUniform {
+    fn as_bytes(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
+    }
+}
 struct AttractorShader {
     base: BaseShader,
     renderer_pass2: Renderer,
@@ -50,6 +60,8 @@ struct AttractorShader {
     texture_bind_group_layout: wgpu::BindGroupLayout,
     time_bind_group_layout: wgpu::BindGroupLayout,
     params_bind_group_layout: wgpu::BindGroupLayout,
+    resolution_uniform: UniformBinding<ResolutionUniform>,
+    resolution_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl AttractorShader {
@@ -270,6 +282,31 @@ impl ShaderManager for AttractorShader {
             }],
             label: Some("params_bind_group_layout"),
         });
+        let resolution_bind_group_layout = core.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+            label: Some("resolution_bind_group_layout"),
+        });
+
+        let resolution_uniform = UniformBinding::new(
+            &core.device,
+            "Resolution Uniform",
+            ResolutionUniform {
+                resolution: [core.config.width as f32, core.config.height as f32],
+                _padding: [0.0; 2],
+            },
+            &resolution_bind_group_layout,
+            0,
+        );
+
 
         let time_uniform = UniformBinding::new(
             &core.device,
@@ -329,6 +366,7 @@ impl ShaderManager for AttractorShader {
                 &texture_bind_group_layout,
                 &time_bind_group_layout,
                 &params_bind_group_layout,
+                &resolution_bind_group_layout,
             ],
             push_constant_ranges: &[],
         });
@@ -341,6 +379,7 @@ impl ShaderManager for AttractorShader {
                 &texture_bind_group_layout,
                 &time_bind_group_layout,
                 &params_bind_group_layout,
+                &resolution_bind_group_layout,
             ],
             Some("fs_pass1"),
         );
@@ -385,9 +424,27 @@ impl ShaderManager for AttractorShader {
             texture_bind_group_layout,
             time_bind_group_layout,
             params_bind_group_layout,
+            resolution_uniform,
+            resolution_bind_group_layout,
         }
     }
-
+    fn resize(&mut self, core: &Core) {
+        self.resolution_uniform.data.resolution = [core.config.width as f32, core.config.height as f32];
+        self.resolution_uniform.update(&core.queue);
+        self.texture_pair1 = create_feedback_texture_pair(
+            core,
+            core.config.width,
+            core.config.height,
+            &self.texture_bind_group_layout,
+        );
+        
+        self.texture_pair2 = create_feedback_texture_pair(
+            core,
+            core.config.width,
+            core.config.height,
+            &self.texture_bind_group_layout,
+        );
+    }
     fn update(&mut self, core: &Core) {
         self.time_uniform.data.time = self.base.start_time.elapsed().as_secs_f32();
         self.time_uniform.update(&core.queue);
@@ -502,9 +559,9 @@ impl ShaderManager for AttractorShader {
             render_pass.set_bind_group(0, &source_tex.bind_group, &[]);
             render_pass.set_bind_group(1, &self.time_uniform.bind_group, &[]);
             render_pass.set_bind_group(2, &self.params_uniform.bind_group, &[]);
+            render_pass.set_bind_group(3, &self.resolution_uniform.bind_group, &[]); // Add resolution bind group
             render_pass.draw(0..4, 0..1);
         }
-    
         {
             let source_tex = if self.frame_count % 2 == 0 {
                 &self.texture_pair1.0  // Result from Pass 1
@@ -538,6 +595,7 @@ impl ShaderManager for AttractorShader {
             render_pass.set_bind_group(0, &source_tex.bind_group, &[]); // Using the result from Pass 1
             render_pass.set_bind_group(1, &self.time_uniform.bind_group, &[]);
             render_pass.set_bind_group(2, &self.params_uniform.bind_group, &[]);
+            render_pass.set_bind_group(3, &self.resolution_uniform.bind_group, &[]); // Add resolution bind group
             render_pass.draw(0..4, 0..1);
         }
     
@@ -569,6 +627,7 @@ impl ShaderManager for AttractorShader {
             render_pass.set_bind_group(0, &source_tex.bind_group, &[]);
             render_pass.set_bind_group(1, &self.time_uniform.bind_group, &[]);
             render_pass.set_bind_group(2, &self.params_uniform.bind_group, &[]);
+            render_pass.set_bind_group(3, &self.resolution_uniform.bind_group, &[]); // Add resolution bind group
             render_pass.draw(0..4, 0..1);
         }
     

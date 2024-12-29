@@ -5,6 +5,12 @@ struct TimeUniform {
 @group(0) @binding(0) var smoke_and_pentagram: texture_2d<f32>;
 @group(0) @binding(1) var tex_sampler: sampler;
 @group(1) @binding(0) var<uniform> time_data: TimeUniform;
+struct ResolutionUniform {
+    resolution: vec2<f32>,
+};
+
+@group(3) @binding(0) var<uniform> iResolution: ResolutionUniform;
+
 struct Params {
     min_radius: f32,
     max_radius: f32,
@@ -151,8 +157,8 @@ fn pin_sdf(p: vec2<f32>, time: f32) -> f32 {
 
 @fragment
 fn fs_pass1(@builtin(position) FragCoord: vec4<f32>) -> @location(0) vec4<f32> {
-    let dimensions = vec2<f32>(1920.0, 1080.0);
-    let uv = (2.0 * FragCoord.xy - dimensions) / min(dimensions.x, dimensions.y);
+    let uv = (2.0 * FragCoord.xy - iResolution.resolution.xy) / min(iResolution.resolution.x, iResolution.resolution.y);
+
     let time = time_data.time;
     
     let rotated_uv = vec2<f32>(
@@ -229,8 +235,8 @@ fn fbm_b(p: vec2<f32>, time: f32) -> f32 {
 
 @fragment
 fn fs_pass2(@builtin(position) FragCoord: vec4<f32>, @location(0) tex_coords: vec2<f32>) -> @location(0) vec4<f32> {
-    let dimensions = vec2<f32>(textureDimensions(smoke_and_pentagram));
-    let uv = FragCoord.xy / dimensions;
+    let uv = FragCoord.xy / iResolution.resolution.xy;
+
     let p = uv * 3.0;
     
     let prevData = textureSample(smoke_and_pentagram, tex_sampler, uv);
@@ -261,7 +267,8 @@ fn fs_pass2(@builtin(position) FragCoord: vec4<f32>, @location(0) tex_coords: ve
 
 @fragment
 fn fs_pass3(@builtin(position) FragCoord: vec4<f32>, @location(0) tex_coords: vec2<f32>) -> @location(0) vec4<f32> {
-    let uv = tex_coords;
+    let uv = FragCoord.xy / iResolution.resolution.xy;
+
     
     let data = textureSample(smoke_and_pentagram, tex_sampler, uv);
     var col = data.rgb;
