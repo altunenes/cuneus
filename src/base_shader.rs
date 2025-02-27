@@ -1,7 +1,8 @@
 use std::time::Instant;
 use egui_wgpu::ScreenDescriptor;
 use egui::ViewportId;
-use crate::{Core, Renderer, TextureManager, UniformProvider, UniformBinding,KeyInputHandler,ExportManager,ShaderControls,ControlsRequest,ResolutionUniform};
+use std::path::PathBuf;
+use crate::{Core, Renderer, TextureManager, UniformProvider, UniformBinding,KeyInputHandler,ExportManager,ShaderControls,ControlsRequest,ResolutionUniform,VideoManager};
 #[cfg(target_os = "macos")]
 pub const CAPTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 #[cfg(not(target_os = "macos"))]
@@ -21,6 +22,8 @@ impl UniformProvider for TimeUniform {
 pub struct BaseShader {
     pub renderer: Renderer,
     pub texture_manager: Option<TextureManager>,
+    pub video_manager: Option<VideoManager>,
+    pub last_media_path: Option<PathBuf>,
     pub egui_renderer: egui_wgpu::Renderer,
     pub egui_state: egui_winit::State,
     pub context: egui::Context,
@@ -153,6 +156,8 @@ impl BaseShader {
         Self {
             renderer,
             texture_manager: Some(texture_manager),
+            video_manager: None,
+            last_media_path: None, 
             egui_renderer,
             egui_state,
             context,
@@ -289,18 +294,75 @@ impl BaseShader {
             self.egui_renderer.free_texture(id);
         }
     }
-
-    pub fn load_image(&mut self, core: &Core, path: std::path::PathBuf) {
-        if let Ok(img) = image::open(path) {
-            let rgba_image = img.into_rgba8();
-            let new_texture_manager = TextureManager::new(
-                &core.device,
-                &core.queue,
-                &rgba_image,
-                &self.texture_bind_group_layout,
-            );
-            self.texture_manager = Some(new_texture_manager);
+    pub fn load_media(&mut self, core: &Core, path: std::path::PathBuf) {
+        self.last_media_path = Some(path.clone());
+        
+        let extension = path.extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+            
+        match extension.as_str() {
+            // Video formats
+            "mp4" | "webm" | "mov" | "avi" | "mkv" => {
+                match VideoManager::new(
+                    &core.device,
+                    &core.queue,
+                    &path,
+                    &self.texture_bind_group_layout,
+                    30,
+                ) {
+                    Ok(video_mgr) => {
+                        let frame_count = video_mgr.frame_count;
+                        let fps = video_mgr.fps;
+                        
+                        self.video_manager = Some(video_mgr);
+                        self.texture_manager = None;
+                        
+                        println!("Loaded video: {} frames @ {:.2} fps", 
+                                frame_count, fps);
+                    },
+                    Err(e) => {
+                        eprintln!("Failed to load video: {:?}", e);
+                        self.video_manager = None;
+                        self.texture_manager = Some(Self::create_default_texture_manager(
+                            core, &self.texture_bind_group_layout
+                        ));
+                    }
+                }
+            },
+            "png" | "jpg" | "jpeg" | "bmp" | "tga" => {
+                if let Ok(img) = image::open(&path) {
+                    let rgba_image = img.into_rgba8();
+                    self.texture_manager = Some(TextureManager::new(
+                        &core.device,
+                        &core.queue,
+                        &rgba_image,
+                        &self.texture_bind_group_layout,
+                    ));
+                    self.video_manager = None;
+                }
+            },
+            _ => {
+                eprintln!("Unsupported file format: {}", extension);
+            }
         }
+    }
+    
+    pub fn update_video(&mut self, queue: &wgpu::Queue) -> bool {
+        if let (Some(video_mgr), Some(path)) = (&mut self.video_manager, &self.last_media_path) {
+            match video_mgr.update(queue, path) {
+                Ok(updated) => return updated,
+                Err(e) => {
+                    eprintln!("Error updating video: {:?}", e);
+                    return false;
+                }
+            }
+        }
+        false
+    }
+    pub fn load_image(&mut self, core: &Core, path: std::path::PathBuf) {
+        self.load_media(core, path);
     }
     pub fn create_capture_texture(
         &self,
