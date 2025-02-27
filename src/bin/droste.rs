@@ -21,8 +21,10 @@ impl UniformProvider for ShaderParams {
         bytemuck::bytes_of(self)
     }
 }
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
+    ffmpeg_sidecar::download::auto_download()?;
     let (app, event_loop) = ShaderApp::new("Droste", 800, 600);
     let shader = SpiralShader::init(app.core());
     app.run(event_loop, shader)
@@ -73,7 +75,9 @@ impl SpiralShader {
             });
             render_pass.set_pipeline(&self.base.renderer.render_pipeline);
             render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
-            if let Some(texture_manager) = &self.base.texture_manager {
+            if let Some(video_mgr) = &self.base.video_manager {
+                render_pass.set_bind_group(0, &video_mgr.texture_manager.bind_group, &[]);
+            } else if let Some(texture_manager) = &self.base.texture_manager {
                 render_pass.set_bind_group(0, &texture_manager.bind_group, &[]);
             }
             // Time (group 1)
@@ -311,6 +315,8 @@ impl ShaderManager for SpiralShader {
                 None,
             );
         }
+        self.base.update_video(&core.queue);
+        
         if self.base.export_manager.is_exporting() {
             self.handle_export(core);
         }
@@ -318,7 +324,7 @@ impl ShaderManager for SpiralShader {
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
         let output = core.surface.get_current_texture()?;
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut reload_image = false;
+        let mut reload_media = false;
         let mut selected_path = None;
         
         let mut params = self.params_uniform.data;
@@ -329,49 +335,107 @@ impl ShaderManager for SpiralShader {
             &self.base.start_time,
             &core.size
         );
-
+        let has_video = self.base.video_manager.is_some();
+        let mut video_is_playing = false;
+        let mut video_loop = false;
+        let mut video_current_frame = 0;
+        let mut video_frame_count = 0;
+        let mut video_width = 0;
+        let mut video_height = 0;
+        let mut video_fps = 0.0;
+        
+        if let Some(video_mgr) = &self.base.video_manager {
+            video_is_playing = video_mgr.is_playing;
+            video_loop = video_mgr.loop_video;
+            video_current_frame = video_mgr.current_frame;
+            video_frame_count = video_mgr.frame_count;
+            video_width = video_mgr.width;
+            video_height = video_mgr.height;
+            video_fps = video_mgr.fps;
+        }
+        
+        let mut video_state_changed = false;
+        let mut video_seek_to_frame = None;
+        
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
                 egui::Window::new("Shader Settings").show(ctx, |ui| {
-                    if ui.button("Load Image").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Image", &["png", "jpg", "jpeg"])
-                            .pick_file() 
-                        {
-                            selected_path = Some(path);
-                            reload_image = true;
+                    ui.group(|ui| {
+                        ui.label("Media");
+                        
+                        if ui.button("Load Media").clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("Media", &["png", "jpg", "jpeg", "mp4", "webm", "mov", "avi", "mkv"])
+                                .pick_file() 
+                            {
+                                selected_path = Some(path);
+                                reload_media = true;
+                            }
                         }
+                    });
+                    if has_video {
+                        ui.group(|ui| {
+                            ui.label("Video Controls");
+                            
+                            if ui.button(if video_is_playing { "Pause" } else { "Play" }).clicked() {
+                                video_is_playing = !video_is_playing;
+                                video_state_changed = true;
+                            }
+                            
+                            if ui.checkbox(&mut video_loop, "Loop Video").changed() {
+                                video_state_changed = true;
+                            }
+                            
+                            let mut current_frame = video_current_frame as i32;
+                            
+                            if ui.add(egui::Slider::new(&mut current_frame, 0..=(video_frame_count as i32 - 1))
+                                .text("Frame")
+                                .clamp_to_range(true)).changed() {
+                                
+                                video_seek_to_frame = Some(current_frame as usize);
+                            }
+                            
+                            ui.label(format!("Frame: {}/{}", video_current_frame + 1, video_frame_count));
+                            ui.label(format!("Time: {:.2}s / {:.2}s", 
+                                            video_current_frame as f32 / video_fps, 
+                                            video_frame_count as f32 / video_fps));
+                            ui.label(format!("FPS: {:.2}", video_fps));
+                            ui.label(format!("Resolution: {}x{}", video_width, video_height));
+                        });
                     }
-        ui.group(|ui| {
-            ui.label("Basic Parameters");
-            changed |= ui.add(egui::Slider::new(&mut params.branches, -20.0..=20.0).text("Branches")).changed();
-            changed |= ui.add(egui::Slider::new(&mut params.scale, 0.0..=2.0).text("Scale")).changed();
-            changed |= ui.add(egui::Slider::new(&mut params.zoom, 0.1..=5.0).text("uv")).changed();
-        });
-        ui.group(|ui| {
-            ui.label("Animation");
-            let mut use_anim = params.use_animation > 0.5;
-            if ui.checkbox(&mut use_anim, "Enable Animation").changed() {
-                changed = true;
-                params.use_animation = if use_anim { 1.0 } else { 0.0 };
-            }
-            if use_anim {
-                changed |= ui.add(egui::Slider::new(&mut params.time_scale, -5.0..=5.0).text("Animation Speed")).changed();
-            }
-            changed |= ui.add(egui::Slider::new(&mut params.rotation, -6.28..=6.28).text("Rotation")).changed();
-        });
-
-        ui.group(|ui| {
-            ui.label("Advanced Parameters");
-            changed |= ui.add(egui::Slider::new(&mut params.iterations, -10.0..=10.0).text("Iterations")).changed();
-            changed |= ui.add(egui::Slider::new(&mut params.smoothing, -1.0..=1.0).text("Smoothing")).changed();
-        });
-        ui.group(|ui| {
-            ui.label("Texture Offset");
-            changed |= ui.add(egui::Slider::new(&mut params.offset_x, -1.0..=1.0).text("X Offset")).changed();
-            changed |= ui.add(egui::Slider::new(&mut params.offset_y, -1.0..=1.0).text("Y Offset")).changed();
-        });
-
+                    
+                    ui.group(|ui| {
+                        ui.label("Basic Parameters");
+                        changed |= ui.add(egui::Slider::new(&mut params.branches, -20.0..=20.0).text("Branches")).changed();
+                        changed |= ui.add(egui::Slider::new(&mut params.scale, 0.0..=2.0).text("Scale")).changed();
+                        changed |= ui.add(egui::Slider::new(&mut params.zoom, 0.1..=5.0).text("uv")).changed();
+                    });
+                    
+                    ui.group(|ui| {
+                        ui.label("Animation");
+                        let mut use_anim = params.use_animation > 0.5;
+                        if ui.checkbox(&mut use_anim, "Enable Animation").changed() {
+                            changed = true;
+                            params.use_animation = if use_anim { 1.0 } else { 0.0 };
+                        }
+                        if use_anim {
+                            changed |= ui.add(egui::Slider::new(&mut params.time_scale, -5.0..=5.0).text("Animation Speed")).changed();
+                        }
+                        changed |= ui.add(egui::Slider::new(&mut params.rotation, -6.28..=6.28).text("Rotation")).changed();
+                    });
+    
+                    ui.group(|ui| {
+                        ui.label("Advanced Parameters");
+                        changed |= ui.add(egui::Slider::new(&mut params.iterations, -10.0..=10.0).text("Iterations")).changed();
+                        changed |= ui.add(egui::Slider::new(&mut params.smoothing, -1.0..=1.0).text("Smoothing")).changed();
+                    });
+                    
+                    ui.group(|ui| {
+                        ui.label("Texture Offset");
+                        changed |= ui.add(egui::Slider::new(&mut params.offset_x, -1.0..=1.0).text("X Offset")).changed();
+                        changed |= ui.add(egui::Slider::new(&mut params.offset_y, -1.0..=1.0).text("Y Offset")).changed();
+                    });
+    
                     ui.separator();
                     ShaderControls::render_controls_widget(ui, &mut controls_request);
                     ui.separator();
@@ -381,6 +445,24 @@ impl ShaderManager for SpiralShader {
         } else {
             self.base.render_ui(core, |_ctx| {})
         };
+        if video_state_changed {
+            if let Some(video_mgr) = &mut self.base.video_manager {
+                video_mgr.is_playing = video_is_playing;
+                video_mgr.loop_video = video_loop;
+                
+                if video_is_playing {
+                    video_mgr.last_update_time = std::time::Instant::now();
+                }
+            }
+        }
+        if let Some(frame) = video_seek_to_frame {
+            if let (Some(video_mgr), Some(path)) = (&mut self.base.video_manager, &self.base.last_media_path) {
+                if let Err(e) = video_mgr.seek_to_frame(&core.queue, path, frame) {
+                    eprintln!("Error seeking: {:?}", e);
+                }
+            }
+        }
+        
         self.base.export_manager.apply_ui_request(export_request);
         self.base.apply_control_request(controls_request);
         let current_time = self.base.controls.get_time(&self.base.start_time);
@@ -394,9 +476,9 @@ impl ShaderManager for SpiralShader {
         if should_start_export {
             self.base.export_manager.start_export();
         }
-        if reload_image {
+        if reload_media {
             if let Some(path) = selected_path {
-                self.base.load_image(core, path);
+                self.base.load_media(core, path);
             }
         }
         let mut encoder = core.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -421,7 +503,9 @@ impl ShaderManager for SpiralShader {
             render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
             
             // Texture (group 0)
-            if let Some(texture_manager) = &self.base.texture_manager {
+            if let Some(video_mgr) = &self.base.video_manager {
+                render_pass.set_bind_group(0, &video_mgr.texture_manager.bind_group, &[]);
+            } else if let Some(texture_manager) = &self.base.texture_manager {
                 render_pass.set_bind_group(0, &texture_manager.bind_group, &[]);
             }
             // Time (group 1)
