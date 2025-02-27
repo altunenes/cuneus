@@ -22,3 +22,6 @@ env_logger = "0.11.6"
 pollster = "0.4.0"
 rfd = "0.15.1"
 notify = "7.0.0"
+ffmpeg-sidecar = { version = "2.0.5", features = ["download_ffmpeg"] }
+
+anyhow = "1.0.96"
