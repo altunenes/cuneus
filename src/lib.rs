@@ -112,4 +112,5 @@ mod export;
 mod hot;
 mod controls;
 mod atomic;
+#[cfg(not(target_os = "windows"))]
 pub mod gst;

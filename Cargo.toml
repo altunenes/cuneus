@@ -22,12 +22,14 @@ env_logger = "0.11.6"
 pollster = "0.4.0"
 rfd = "0.15.1"
 notify = "7.0.0"
+anyhow = "1.0.96"
+log = "0.4.25"
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
 gstreamer = "0.23.4"
 gstreamer-video = "0.23.4"
 gstreamer-app = "0.23.4"
 gstreamer-pbutils = "0.23.4"
-anyhow = "1.0.96"
-log = "0.4.25"
 
 [dev-dependencies]
 crossterm = "0.28.1"

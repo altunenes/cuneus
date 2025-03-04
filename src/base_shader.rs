@@ -1,6 +1,7 @@
 use std::time::Instant;
 use egui_wgpu::ScreenDescriptor;
 use egui::ViewportId;
+#[cfg(not(target_os = "windows"))]
 use crate::gst::video::VideoTextureManager;
 use std::path::Path;
 use log::{warn, info, error};
@@ -23,7 +24,10 @@ impl UniformProvider for TimeUniform {
 }
 pub struct BaseShader {
     pub renderer: Renderer,
+    #[cfg(not(target_os = "windows"))]
     pub video_texture_manager: Option<VideoTextureManager>,
+    #[cfg(target_os = "windows")]
+    pub video_texture_manager: Option<()>,
     pub using_video_texture: bool,
     pub texture_manager: Option<TextureManager>,
     pub egui_renderer: egui_wgpu::Renderer,
@@ -322,6 +326,7 @@ impl BaseShader {
                     Err(anyhow::anyhow!("Failed to open image"))
                 }
             },
+            #[cfg(not(target_os = "windows"))]
             Some(ext) if ["mp4", "avi", "mkv", "mov", "webm"].contains(&ext.as_str()) => {
                 info!("Loading video: {:?}", path_ref);
                 match VideoTextureManager::new(
@@ -331,6 +336,7 @@ impl BaseShader {
                     path_ref,
                 ) {
                     Ok(video_manager) => {
+                        #[cfg(not(target_os = "windows"))]
                         self.video_texture_manager = Some(video_manager);
                         self.using_video_texture = true;
                         if let Err(e) = self.play_video() {
@@ -351,6 +357,7 @@ impl BaseShader {
             }
         }
     }
+    #[cfg(not(target_os = "windows"))]
     pub fn update_video_texture(&mut self, core: &Core, queue: &wgpu::Queue) -> bool {
         if self.using_video_texture {
             if let Some(video_manager) = &mut self.video_texture_manager {
@@ -365,25 +372,31 @@ impl BaseShader {
         }
         false
     }
+    #[cfg(not(target_os = "windows"))]
     pub fn play_video(&mut self) -> anyhow::Result<()> {
         if let Some(video_manager) = &mut self.video_texture_manager {
             video_manager.play()?;
         }
         Ok(())
     }
+    #[cfg(not(target_os = "windows"))]
     pub fn pause_video(&mut self) -> anyhow::Result<()> {
         if let Some(video_manager) = &mut self.video_texture_manager {
             video_manager.pause()?;
         }
         Ok(())
     }
+    #[cfg(not(target_os = "windows"))]
     pub fn seek_video(&mut self, position_seconds: f64) -> anyhow::Result<()> {
         if let Some(video_manager) = &mut self.video_texture_manager {
+            #[cfg(not(target_os = "windows"))] {
             let position = gstreamer::ClockTime::from_seconds(position_seconds as u64);
             video_manager.seek(position)?;
+            }
         }
         Ok(())
     }
+    #[cfg(not(target_os = "windows"))]
     pub fn set_video_loop(&mut self, should_loop: bool) {
         if let Some(video_manager) = &mut self.video_texture_manager {
             video_manager.set_loop(should_loop);
@@ -441,6 +454,7 @@ impl BaseShader {
         self.controls.apply_ui_request(request);
     }
     
+    #[cfg(not(target_os = "windows"))]
     pub fn handle_video_requests(&mut self, core: &Core, request: &ControlsRequest) {
         if let Some(path) = &request.load_media_path {
             if let Err(e) = self.load_media(core, path) {
@@ -471,6 +485,7 @@ impl BaseShader {
     }
     
     /// Get video information if a video texture is loaded
+    #[cfg(not(target_os = "windows"))]
     pub fn get_video_info(&self) -> Option<(Option<f32>, f32, (u32, u32), Option<f32>, bool)> {
         if self.using_video_texture {
             if let Some(vm) = &self.video_texture_manager {

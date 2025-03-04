@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+
+#[cfg(not(target_os = "windows"))]
 use crate::gst::video::VideoTextureManager;
 
 #[derive(Clone)]
@@ -119,10 +121,13 @@ impl ShaderControls {
     }
 
     /// Extract video info from a video texture manager
+    #[cfg(not(target_os = "windows"))]
     pub fn get_video_info(
         using_video_texture: bool,
+        #[cfg(not(target_os = "windows"))]
         video_manager: Option<&VideoTextureManager>,
     ) -> Option<VideoInfo> {
+        #[cfg(not(target_os = "windows"))]
         if using_video_texture {
             if let Some(vm) = video_manager {
                 Some((
@@ -164,6 +169,7 @@ impl ShaderControls {
             });
             
             // Only show video controls if we're using a video texture
+            #[cfg(not(target_os = "windows"))]
             if using_video_texture {
                 ui.collapsing("Controls", |ui| {
                     // Main video controls
