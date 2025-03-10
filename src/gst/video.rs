@@ -7,8 +7,33 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use gst::prelude::*;
+use gst::glib::ControlFlow;
 use crate::texture::TextureManager;
 use wgpu;
+
+#[derive(Debug, Clone)]
+pub struct SpectrumData {
+    /// Number of frequency bands
+    pub bands: usize,
+    /// Magnitude values for each frequency band in dB
+    pub magnitudes: Vec<f32>,
+    /// Phase values for each frequency band
+    pub phases: Option<Vec<f32>>,
+    /// Timestamp of the spectrum data
+    pub timestamp: Option<gst::ClockTime>,
+}
+
+impl Default for SpectrumData {
+    fn default() -> Self {
+        Self {
+            bands: 0,
+            magnitudes: Vec::new(),
+            phases: None,
+            timestamp: None,
+        }
+    }
+}
+
 /// Here I created a struct to organize the video text mang.
 /// Manages a video texture that can be updated frame by frame
 pub struct VideoTextureManager {
@@ -45,7 +70,16 @@ pub struct VideoTextureManager {
     texture_initialized: bool,
     /// Frame counter for debugging
     frame_count: usize,
+    /// Spectrum analysis enabled
+    spectrum_enabled: bool,
+    /// Number of frequency bands for spectrum analysis
+    spectrum_bands: usize,
+    /// Threshold in dB for spectrum analysis
+    spectrum_threshold: i32,
+    /// Spectrum data from the most recent analysis
+    spectrum_data: Arc<Mutex<SpectrumData>>,
 }
+
 impl VideoTextureManager {
     pub fn new(
         device: &wgpu::Device,
@@ -138,6 +172,118 @@ impl VideoTextureManager {
         // now audio elements reference holders
         let audioconvert_weak = Arc::new(Mutex::new(None));
         
+        // Default spectrum configuration
+        let spectrum_bands = 128;
+        let spectrum_threshold = -60;
+        let spectrum_enabled = true;
+        let spectrum_data = Arc::new(Mutex::new(SpectrumData::default()));
+        
+        // bus watch for spectrum messages with debug
+        let bus = pipeline.bus().expect("Pipeline has no bus");
+        let spectrum_data_clone2 = spectrum_data.clone();
+        
+        // message handler for spectrum messages (these are my sanity checks)
+        let _ = bus.add_watch(move |_, message| {
+            // Log ALL message types
+            info!("Bus message received: type={:?}", message.type_());
+            
+            // Print source information
+            if let Some(src) = message.src() {
+                info!("Message source: {}", src.name());
+            }
+            
+            match message.view() {
+                gst::MessageView::Element(element) => {
+                    if let Some(structure) = element.structure() {
+                        info!("Element message structure name: '{}'", structure.name());
+                        
+                        // Explicitly check for spectrum messages
+                        if structure.name() == "spectrum" {
+                            info!("SPECTRUM MESSAGE DETECTED ");
+                            info!("Full structure: {}", structure.to_string());
+                            
+                            // Try ALL possible ways to extract spectrum data
+                            let mut magnitude_values = Vec::new();
+                            
+                            // Method 1: Direct indexing
+                            for i in 0..5 {  // Just try first 5 bands initially
+                                let field_name = format!("magnitude[{}]", i);
+                                match structure.get::<f32>(&field_name) {
+                                    Ok(value) => {
+                                        info!("✅ Method 1 - Band {}: {} dB", i, value);
+                                        magnitude_values.push(value);
+                                    },
+                                    Err(e) => {
+                                        info!("❌ Method 1 failed: {:?}", e);
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            // Method 2: Try to access magnitude as array field
+                            if structure.has_field("magnitude") {
+                                info!("✅ Structure has 'magnitude' field");
+                            } else {
+                                info!("❌ Structure does NOT have 'magnitude' field");
+                            }
+                            
+                            // Method 3: Parse from structure string
+                            let struct_str = structure.to_string();
+                            info!("Structure string: {}", struct_str);
+                            
+                            // If we found magnitude values through any method, process them
+                            if !magnitude_values.is_empty() {
+                                // Continue extracting all magnitude values
+                                let mut i = magnitude_values.len();
+                                loop {
+                                    let field_name = format!("magnitude[{}]", i);
+                                    if let Ok(value) = structure.get::<f32>(&field_name) {
+                                        magnitude_values.push(value);
+                                        i += 1;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                
+                                // Log summary of extracted data
+                                info!("Extracted {} magnitude values", magnitude_values.len());
+                                
+                                // Calculate average magnitude
+                                let avg_magnitude = magnitude_values.iter().sum::<f32>() / magnitude_values.len() as f32;
+                                info!("Average magnitude: {:.2} dB", avg_magnitude);
+                                
+                                // Find peak frequency
+                                if let Some((peak_idx, &peak_val)) = magnitude_values.iter()
+                                    .enumerate()
+                                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)) 
+                                {
+                                    info!("Peak frequency: band {} at {:.2} dB", peak_idx, peak_val);
+                                }
+                                
+                                // Update spectrum data
+                                if let Ok(mut data) = spectrum_data_clone2.lock() {
+                                    *data = SpectrumData {
+                                        bands: magnitude_values.len(),
+                                        magnitudes: magnitude_values,
+                                        phases: None,
+                                        timestamp: structure.get("timestamp").ok(),
+                                    };
+                                }
+                            } else {
+                                warn!("⚠️ Failed to extract any magnitude values from spectrum message");
+                            }
+                        }
+                    }
+                },
+                gst::MessageView::Error(err) => {
+                    error!("Pipeline error: {} ({})", err.error(), err.debug().unwrap_or_default());
+                },
+                _ => (),
+            }
+            
+            ControlFlow::Continue
+        }).map_err(|_| anyhow!("Failed to add bus watch"));
+        
         decodebin.connect_pad_added(move |_, pad| {
             let caps = match pad.current_caps() {
                 Some(caps) => caps,
@@ -193,7 +339,26 @@ impl VideoTextureManager {
                                     return;
                                 }
                             };
-                            
+
+                        let spectrum = match gst::ElementFactory::make("spectrum")
+                            .name("spectrum")
+                            .property("bands", spectrum_bands as u32)
+                            .property("threshold", spectrum_threshold)
+                            .property("post-messages", true)
+                            .property("message-magnitude", true)
+                            .property("message-phase", false)
+                            .property("interval", 50000000u64) 
+                            .build() {
+                                Ok(e) => {
+                                    info!("Created spectrum analyzer with {} bands and threshold {}dB", 
+                                         spectrum_bands, spectrum_threshold);
+                                    e
+                                },
+                                Err(_) => {
+                                    warn!("Failed to create spectrum analyzer");
+                                    return;
+                                }
+                            };
                         let volume = match gst::ElementFactory::make("volume")
                             .name("volume")
                             .property("volume", 1.0)
@@ -219,13 +384,13 @@ impl VideoTextureManager {
                         // Add elements to pipeline
                         if let Err(e) = pad.parent_element().unwrap().parent().unwrap()
                                          .downcast_ref::<gst::Pipeline>().unwrap()
-                                         .add_many(&[&audioconvert, &audioresample, &volume, &audio_sink]) {
+                                         .add_many(&[&audioconvert, &audioresample, &spectrum, &volume, &audio_sink]) {
                             warn!("Failed to add audio elements: {:?}", e);
                             return;
                         }
                         
                         // Link audio elements
-                        if let Err(e) = gst::Element::link_many(&[&audioconvert, &audioresample, &volume, &audio_sink]) {
+                        if let Err(e) = gst::Element::link_many(&[&audioconvert, &audioresample, &spectrum, &volume, &audio_sink]) {
                             warn!("Failed to link audio elements: {:?}", e);
                             return;
                         }
@@ -233,6 +398,7 @@ impl VideoTextureManager {
                         // Set elements to PAUSED state
                         let _ = audioconvert.sync_state_with_parent();
                         let _ = audioresample.sync_state_with_parent();
+                        let _ = spectrum.sync_state_with_parent();
                         let _ = volume.sync_state_with_parent();
                         let _ = audio_sink.sync_state_with_parent();
                         
@@ -353,6 +519,10 @@ impl VideoTextureManager {
             video_path: path_str,
             texture_initialized: false,
             frame_count: 0,
+            spectrum_enabled,
+            spectrum_bands,
+            spectrum_threshold,
+            spectrum_data,
         };
         // Start pipeline in paused state to get video info
         if video_texture.pipeline.set_state(gst::State::Paused).is_err() {
@@ -454,7 +624,124 @@ impl VideoTextureManager {
                 debug!("Processing video frame #{} (dimensions: {}x{})", 
                      self.frame_count, width, height);
             }
-            
+            if self.has_audio && self.spectrum_enabled {
+                if let Some(bus) = self.pipeline.bus() {
+                    // Poll for pending messages
+                    while let Some(message) = bus.pop() {
+                        if let gst::MessageView::Element(element) = message.view() {
+                            if let Some(structure) = element.structure() {
+                                if structure.name() == "spectrum" {
+                                    info!("🎵 Spectrum data received");
+                                    
+                                    // Extract magnitude values - two possible approaches
+                                    let mut magnitude_values = Vec::with_capacity(128);
+                                    
+                                    // APPROACH 1: Parse from structure string
+                                    let struct_str = structure.to_string();
+                                    if struct_str.contains("magnitude=(float){") {
+                                        // Extract magnitude values from string
+                                        if let Some(start_idx) = struct_str.find("magnitude=(float){") {
+                                            if let Some(end_idx) = struct_str[start_idx..].find("}") {
+                                                let magnitude_str = &struct_str[start_idx + "magnitude=(float){".len()..start_idx + end_idx];
+                                                let values: Vec<&str> = magnitude_str.split(',').collect();
+                                                
+                                                for value_str in values {
+                                                    if let Ok(value) = value_str.trim().parse::<f32>() {
+                                                        magnitude_values.push(value);
+                                                    }
+                                                }
+                                                
+                                                info!("Extracted {} magnitude values from string", magnitude_values.len());
+                                            }
+                                        }
+                                    }
+                                    
+                                    // APPROACH 2: Try to access directly by index if approach 1 fails
+                                    if magnitude_values.is_empty() {
+                                        for i in 0..128 {
+                                            let field_name = format!("magnitude[{}]", i);
+                                            if let Ok(value) = structure.get::<f32>(&field_name) {
+                                                magnitude_values.push(value);
+                                            } else {
+                                                break;
+                                            }
+                                        }
+                                        
+                                        if !magnitude_values.is_empty() {
+                                            info!("Extracted {} magnitude values by field access", magnitude_values.len());
+                                        }
+                                    }
+                                    
+                                    // Process spectrum data if we have it
+                                    if !magnitude_values.is_empty() {
+                                        // Calculate audio metrics
+                                        let bands = magnitude_values.len();
+                                        
+                                        // Calculate average and normalize values
+                                        // Values are in dB (typically negative, with higher/less negative being louder)
+                                        let threshold = self.spectrum_threshold as f32;
+                                        
+                                        // Create normalized values from -60dB (silence) to 0dB (loudest)
+                                        let normalized_values: Vec<f32> = magnitude_values.iter()
+                                            .map(|&v| ((v - threshold) / -threshold).max(0.0).min(1.0))
+                                            .collect();
+                                        
+                                        // Calculate frequency band energy averages (useful for visualization)
+                                        let bass_range = (bands as f32 * 0.1) as usize; // First 10% of frequencies
+                                        let mid_range_start = bass_range;
+                                        let mid_range_end = (bands as f32 * 0.5) as usize; // 10-50% of frequencies
+                                        let high_range_start = mid_range_end;
+                                        
+                                        let bass_energy = if bass_range > 0 {
+                                            normalized_values[0..bass_range].iter().sum::<f32>() / bass_range as f32
+                                        } else {
+                                            0.0
+                                        };
+                                        
+                                        let mid_energy = if mid_range_end > mid_range_start {
+                                            normalized_values[mid_range_start..mid_range_end].iter().sum::<f32>() 
+                                            / (mid_range_end - mid_range_start) as f32
+                                        } else {
+                                            0.0
+                                        };
+                                        
+                                        let high_energy = if bands > high_range_start {
+                                            normalized_values[high_range_start..].iter().sum::<f32>() 
+                                            / (bands - high_range_start) as f32
+                                        } else {
+                                            0.0
+                                        };
+                                        
+                                        // Find peak frequency band
+                                        let peak_info = normalized_values.iter()
+                                            .enumerate()
+                                            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                                        
+                                        if let Some((peak_idx, &peak_val)) = peak_info {
+                                            let peak_freq = (peak_idx as f32 / bands as f32) * 20000.0; // Rough estimate of frequency
+                                            info!("Peak freq: ~{:.0} Hz (band {}, val: {:.2})", peak_freq, peak_idx, peak_val);
+                                        }
+                                        
+                                        // Log energy metrics
+                                        info!("Audio energy - Bass: {:.2}, Mid: {:.2}, High: {:.2}", 
+                                             bass_energy, mid_energy, high_energy);
+                                        
+                                        // Update spectrum data
+                                        if let Ok(mut data) = self.spectrum_data.lock() {
+                                            *data = SpectrumData {
+                                                bands,
+                                                magnitudes: magnitude_values,
+                                                phases: None,
+                                                timestamp: structure.get("timestamp").ok(),
+                                            };
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             // ALWAYS recreate the texture for the first frame or if dimensions don't match
             let should_recreate = !self.texture_initialized || 
                                  self.dimensions != (width, height) ||
@@ -651,6 +938,73 @@ impl VideoTextureManager {
     
     pub fn path(&self) -> &str {
         &self.video_path
+    }
+    
+    /// Configure spectrum analysis parameters
+    pub fn configure_spectrum(&mut self, bands: usize, threshold: i32) -> Result<()> {
+        if !self.has_audio {
+            debug!("Ignoring spectrum configuration - video has no audio");
+            return Ok(());
+        }
+        
+        self.spectrum_bands = bands;
+        self.spectrum_threshold = threshold;
+        
+        if let Some(spectrum_elem) = self.pipeline.by_name("spectrum") {
+            spectrum_elem.set_property("bands", bands as u32);
+            spectrum_elem.set_property("threshold", threshold);
+            info!("Configured spectrum: {} bands, {}dB threshold", bands, threshold);
+            Ok(())
+        } else {
+            warn!("Spectrum element not found in pipeline");
+            Ok(()) // Don't fail if element not found
+        }
+    }
+    
+    /// Enable or disable spectrum analysis
+    pub fn enable_spectrum(&mut self, enabled: bool) -> Result<()> {
+        if !self.has_audio {
+            debug!("Ignoring spectrum enable request - video has no audio");
+            return Ok(());
+        }
+        
+        self.spectrum_enabled = enabled;
+        
+        if let Some(spectrum_elem) = self.pipeline.by_name("spectrum") {
+            spectrum_elem.set_property("post-messages", enabled);
+            info!("Spectrum analysis {} ", if enabled { "enabled" } else { "disabled" });
+            Ok(())
+        } else {
+            warn!("Spectrum element not found in pipeline");
+            Ok(()) // Don't fail if element not found
+        }
+    }
+    
+    /// Get current spectrum data
+    pub fn spectrum_data(&self) -> SpectrumData {
+        match self.spectrum_data.lock() {
+            Ok(data) => data.clone(),
+            Err(_) => SpectrumData::default(),
+        }
+    }
+    
+    /// Set interval between spectrum updates in milliseconds
+    pub fn set_spectrum_interval(&mut self, interval_ms: u64) -> Result<()> {
+        if !self.has_audio {
+            debug!("Ignoring spectrum interval request - video has no audio");
+            return Ok(());
+        }
+        
+        if let Some(spectrum_elem) = self.pipeline.by_name("spectrum") {
+            // Convert milliseconds to nanoseconds for GStreamer
+            let interval_ns = interval_ms * 1_000_000;
+            spectrum_elem.set_property("interval", interval_ns as u64);
+            info!("Set spectrum interval to {}ms", interval_ms);
+            Ok(())
+        } else {
+            warn!("Spectrum element not found in pipeline");
+            Ok(()) // Don't fail if element not found
+        }
     }
 }
 

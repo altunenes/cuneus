@@ -7,6 +7,7 @@ pub trait UniformProvider {
 pub struct ResolutionUniform {
     pub dimensions: [f32; 2],
     pub _padding: [f32; 2],
+    pub audio_data: [[f32; 4]; 8],
 }
 
 impl UniformProvider for ResolutionUniform {
