@@ -16,11 +16,13 @@ pub struct TimeUniform {
     pub time: f32,
     pub frame: u32,
 }
+
 impl UniformProvider for TimeUniform {
     fn as_bytes(&self) -> &[u8] {
         bytemuck::bytes_of(self)
     }
 }
+
 pub struct BaseShader {
     pub renderer: Renderer,
     pub video_texture_manager: Option<VideoTextureManager>,
@@ -36,8 +38,11 @@ pub struct BaseShader {
     pub key_handler: KeyInputHandler,
     pub export_manager: ExportManager,
     pub controls: ShaderControls,
+    // Global auto animation toggle (disabled by default)
+    pub auto_animation: bool,
     pub spectrum_analyzer: SpectrumAnalyzer,
 }
+
 impl BaseShader {
     pub fn new(
         core: &Core,
@@ -46,6 +51,7 @@ impl BaseShader {
         bind_group_layouts: &[&wgpu::BindGroupLayout],
         fragment_entry: Option<&str>,
     ) -> Self {
+        // Create bind group layouts for the time and resolution uniforms.
         let time_bind_group_layout = core.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -72,6 +78,7 @@ impl BaseShader {
             }],
             label: Some("resolution_bind_group_layout"),
         });
+        // Create the time and resolution uniforms.
         let time_uniform = UniformBinding::new(
             &core.device,
             "Time Uniform",
@@ -95,6 +102,7 @@ impl BaseShader {
             &resolution_bind_group_layout,
             0,
         );
+        // Create shader modules.
         let vs_shader = core.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Vertex Shader"),
             source: wgpu::ShaderSource::Wgsl(vs_source.into()),
@@ -103,6 +111,7 @@ impl BaseShader {
             label: Some("Fragment Shader"),
             source: wgpu::ShaderSource::Wgsl(fs_source.into()),
         });
+        // Create a bind group layout for texture (for images/videos).
         let texture_bind_group_layout = core.device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
                 entries: &[
@@ -126,11 +135,13 @@ impl BaseShader {
                 label: Some("texture_bind_group_layout"),
             },
         );
+        // Create the pipeline layout.
         let pipeline_layout = core.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
             bind_group_layouts,
             push_constant_ranges: &[],
         });
+        // Create the renderer.
         let renderer = Renderer::new(
             &core.device,
             &vs_shader,
@@ -139,6 +150,7 @@ impl BaseShader {
             &pipeline_layout,
             fragment_entry, 
         );
+        // Set up egui.
         let context = egui::Context::default();
         let egui_state = egui_winit::State::new(
             context.clone(),
@@ -156,7 +168,6 @@ impl BaseShader {
             false,
         );
 
-        //  default texture manager
         let texture_manager = Self::create_default_texture_manager(core, &texture_bind_group_layout);
 
         Self {
@@ -175,17 +186,28 @@ impl BaseShader {
             export_manager: ExportManager::new(),
             controls: ShaderControls::new(),
             spectrum_analyzer: SpectrumAnalyzer::new(),
+            auto_animation: false, // Auto animation is off by default.
         }
     }
 
+    // Update the time uniform. If auto animation is enabled, apply a modulation.
     pub fn update_time(&mut self, queue: &wgpu::Queue) {
-        self.time_uniform.data.time = self.start_time.elapsed().as_secs_f32();
+        let elapsed = self.start_time.elapsed().as_secs_f32();
+        let modulated_time = if self.auto_animation {
+            // Example: add a sine-based offset to create a modulation effect.
+            elapsed + (elapsed.sin() * 0.5)
+        } else {
+            elapsed
+        };
+        self.time_uniform.data.time = modulated_time;
         self.time_uniform.update(queue);
     }
+
     pub fn update_resolution(&mut self, queue: &wgpu::Queue, new_size: winit::dpi::PhysicalSize<u32>) {
         self.resolution_uniform.data.dimensions = [new_size.width as f32, new_size.height as f32];
         self.resolution_uniform.update(queue);
     }
+
     fn create_default_texture_manager(
         core: &Core,
         texture_bind_group_layout: &wgpu::BindGroupLayout,
@@ -204,10 +226,8 @@ impl BaseShader {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-
         let default_view = default_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = core.device.create_sampler(&wgpu::SamplerDescriptor::default());
-
         let bind_group = core.device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: texture_bind_group_layout,
             entries: &[
@@ -222,7 +242,6 @@ impl BaseShader {
             ],
             label: Some("Default Texture Bind Group"),
         });
-
         TextureManager {
             texture: default_texture,
             view: default_view,
@@ -231,14 +250,22 @@ impl BaseShader {
         }
     }
 
+    // Render the UI. In addition to custom UI (provided by ui_builder), a "Global Settings" window
+    // is shown with an "Auto Animate" checkbox.
     pub fn render_ui<F>(&mut self, core: &Core, mut ui_builder: F) -> egui::FullOutput 
     where
         F: FnMut(&egui::Context),
     {
         let raw_input = self.egui_state.take_egui_input(core.window());
-        self.context.run(raw_input, |ctx| ui_builder(ctx))
+        self.context.run(raw_input, |ctx| {
+            ui_builder(ctx);
+            egui::Window::new("Global Settings").show(ctx, |ui| {
+                ui.checkbox(&mut self.auto_animation, "Auto Animate");
+            });
+        })
     }
 
+    // Draw the UI output using egui.
     pub fn handle_render_output(
         &mut self,
         core: &Core,
@@ -250,12 +277,11 @@ impl BaseShader {
             size_in_pixels: [core.config.width, core.config.height],
             pixels_per_point: core.window().scale_factor() as f32,
         };
-
         let clipped_primitives = self.context.tessellate(
             full_output.shapes,
             screen_descriptor.pixels_per_point,
         );
-        // Update egui textures
+        // Update egui textures.
         for (id, image_delta) in &full_output.textures_delta.set {
             self.egui_renderer.update_texture(
                 &core.device,
@@ -264,7 +290,6 @@ impl BaseShader {
                 image_delta,
             );
         }
-
         self.egui_renderer.update_buffers(
             &core.device,
             &core.queue,
@@ -272,7 +297,6 @@ impl BaseShader {
             &clipped_primitives,
             &screen_descriptor,
         );
-
         {
             let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Egui Render Pass"),
@@ -288,7 +312,6 @@ impl BaseShader {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-
             let mut render_pass = render_pass.forget_lifetime();
             self.egui_renderer.render(
                 &mut render_pass,
@@ -296,11 +319,13 @@ impl BaseShader {
                 &screen_descriptor,
             );
         }
-        // Cleanup egui textures
+        // Free unused egui textures.
         for id in &full_output.textures_delta.free {
             self.egui_renderer.free_texture(id);
         }
     }
+
+    // Load media (image or video) based on the file extension.
     pub fn load_media<P: AsRef<Path>>(&mut self, core: &Core, path: P) -> anyhow::Result<()> {
         let path_ref = path.as_ref();
         let extension = path_ref.extension()
@@ -308,7 +333,6 @@ impl BaseShader {
             .map(|ext| ext.to_lowercase());
         
         match extension {
-            // Image formats
             Some(ext) if ["png", "jpg", "jpeg", "bmp", "gif", "tiff", "webp"].contains(&ext.as_str()) => {
                 info!("Loading image: {:?}", path_ref);
                 if let Ok(img) = image::open(path_ref) {
@@ -342,7 +366,6 @@ impl BaseShader {
                             warn!("Failed to play video: {}", e);
                         }
                         self.set_video_loop(true);
-                        
                         Ok(())
                     },
                     Err(e) => {
@@ -351,11 +374,11 @@ impl BaseShader {
                     }
                 }
             },
-            _ => {
-                Err(anyhow::anyhow!("Unsupported media format: {:?}", path_ref))
-            }
+            _ => Err(anyhow::anyhow!("Unsupported media format: {:?}", path_ref)),
         }
     }
+
+    // Update the video texture if a video is loaded.
     pub fn update_video_texture(&mut self, core: &Core, queue: &wgpu::Queue) -> bool {
         if self.using_video_texture {
             if let Some(video_manager) = &mut self.video_texture_manager {
@@ -370,18 +393,21 @@ impl BaseShader {
         }
         false
     }
+
     pub fn play_video(&mut self) -> anyhow::Result<()> {
         if let Some(video_manager) = &mut self.video_texture_manager {
             video_manager.play()?;
         }
         Ok(())
     }
+
     pub fn pause_video(&mut self) -> anyhow::Result<()> {
         if let Some(video_manager) = &mut self.video_texture_manager {
             video_manager.pause()?;
         }
         Ok(())
     }
+
     pub fn seek_video(&mut self, position_seconds: f64) -> anyhow::Result<()> {
         if let Some(video_manager) = &mut self.video_texture_manager {
             let position = gstreamer::ClockTime::from_seconds(position_seconds as u64);
@@ -389,11 +415,13 @@ impl BaseShader {
         }
         Ok(())
     }
+
     pub fn set_video_loop(&mut self, should_loop: bool) {
         if let Some(video_manager) = &mut self.video_texture_manager {
             video_manager.set_loop(should_loop);
         }
     }
+
     pub fn load_image(&mut self, core: &Core, path: std::path::PathBuf) {
         if let Ok(img) = image::open(path) {
             let rgba_image = img.into_rgba8();
@@ -406,6 +434,7 @@ impl BaseShader {
             self.texture_manager = Some(new_texture_manager);
         }
     }
+
     pub fn create_capture_texture(
         &self,
         device: &wgpu::Device,
@@ -414,11 +443,7 @@ impl BaseShader {
     ) -> (wgpu::Texture, wgpu::Buffer) {
         let capture_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Capture Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -439,6 +464,7 @@ impl BaseShader {
         });
         (capture_texture, output_buffer)
     }
+
     pub fn apply_control_request(&mut self, request: ControlsRequest) {
         if request.should_reset {
             self.start_time = Instant::now();
@@ -481,7 +507,6 @@ impl BaseShader {
             self.set_video_loop(should_loop);
         }
         
-        // Handle audio control requests
         if let Some(volume) = request.set_volume {
             if let Some(vm) = &mut self.video_texture_manager {
                 let _ = vm.set_volume(volume);
@@ -500,7 +525,7 @@ impl BaseShader {
         }
     }
     
-    /// Get video information if a video texture is loaded
+    /// Retrieve video information if a video texture is loaded.
     pub fn get_video_info(&self) -> Option<(Option<f32>, f32, (u32, u32), Option<f32>, bool, bool, f64, bool)> {
         if self.using_video_texture {
             if let Some(vm) = &self.video_texture_manager {
@@ -512,7 +537,7 @@ impl BaseShader {
                     vm.is_looping(),
                     vm.has_audio(),
                     vm.volume(),
-                    vm.is_muted()
+                    vm.is_muted(),
                 ))
             } else {
                 None
@@ -522,3 +547,4 @@ impl BaseShader {
         }
     }
 }
+
