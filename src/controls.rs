@@ -168,6 +168,14 @@ impl ShaderControls {
         using_video_texture: bool,
         video_info: Option<VideoInfo>,
     ) {
+        let mut using_default_media = false;
+        if let Ok(media_dir) = std::env::var("CUNEUS_MEDIA") {
+            if  request.load_media_path.is_none() {
+                request.load_media_path = Some(PathBuf::from(media_dir));
+                using_default_media = true;
+                request.play_video = true;
+            }
+        }
         ui.group(|ui| {
             ui.horizontal(|ui| {
                 ui.heading("Media");
@@ -186,7 +194,7 @@ impl ShaderControls {
             });
             
             // Only show video controls if we're using a video texture
-            if using_video_texture {
+            if using_video_texture || using_default_media {
                 ui.collapsing("Controls", |ui| {
                     // Main video controls
                     ui.horizontal(|ui| {
