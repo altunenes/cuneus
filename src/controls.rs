@@ -30,6 +30,18 @@ pub struct ControlsRequest {
 }
 impl Default for ControlsRequest {
     fn default() -> Self {
+        let mut default_media = None;
+        let mut should_play_video=false;
+        if let Ok(media_dir) = std::env::var("CUNEUS_MEDIA") {
+            println!("CUNEUS_MEDIA: {}", media_dir);
+            if media_dir.starts_with('"') && media_dir.ends_with('"') {
+                let unquoted = &media_dir[1..media_dir.len() - 1];
+                default_media = Some(PathBuf::from(unquoted));
+            } else {
+                default_media = Some(PathBuf::from(media_dir));
+            }
+            should_play_video = true;
+        }
         Self {
             is_paused: false,
             should_reset: false,
@@ -40,8 +52,8 @@ impl Default for ControlsRequest {
             current_fps: None,
             
             // Video-related stuff
-            load_media_path: None,
-            play_video: false,
+            load_media_path: default_media,
+            play_video: should_play_video,
             pause_video: false,
             restart_video: false,
             seek_position: None,
@@ -68,6 +80,7 @@ pub struct ShaderControls {
     pause_start: Option<std::time::Instant>,
     total_pause_duration: f32,
     current_frame: u32,
+    media_loaded_once: bool,
 }
 
 impl Default for ShaderControls {
@@ -77,6 +90,7 @@ impl Default for ShaderControls {
             pause_start: None,
             total_pause_duration: 0.0,
             current_frame: 0,
+            media_loaded_once: false,
         }
     }
 }
@@ -106,7 +120,22 @@ impl ShaderControls {
         }
     }
     
-    pub fn get_ui_request(&self, start_time: &std::time::Instant, size: &winit::dpi::PhysicalSize<u32>) -> ControlsRequest {
+    pub fn get_ui_request(&mut self, start_time: &std::time::Instant, size: &winit::dpi::PhysicalSize<u32>) -> ControlsRequest {
+        let mut load_media_path = None;
+        let mut play_video = false;
+        if !self.media_loaded_once {
+            if let Ok(media_dir) = std::env::var("CUNEUS_MEDIA") {
+                println!("CUNEUS_MEDIA: {}", media_dir);
+                if media_dir.starts_with('"') && media_dir.ends_with('"') {
+                    let unquoted = &media_dir[1..media_dir.len() - 1];
+                    load_media_path = Some(PathBuf::from(unquoted));
+                } else {
+                    load_media_path = Some(PathBuf::from(media_dir));
+                }
+                play_video = true;
+                self.media_loaded_once = true; // Mark as loaded
+            }
+        }
         ControlsRequest {
             is_paused: self.is_paused,
             should_reset: false,
@@ -115,13 +144,12 @@ impl ShaderControls {
             window_size: Some((size.width, size.height)),
             current_fps: None,
 
-            load_media_path: None,
-            play_video: false,
+            load_media_path,
+            play_video,
             pause_video: false,
             restart_video: false,
             seek_position: None,
             set_loop: None,
-            
             set_volume: None,
             mute_audio: None,
             toggle_mute: false,
@@ -137,6 +165,7 @@ impl ShaderControls {
             self.pause_start = None;
             self.total_pause_duration = 0.0;
             self.current_frame = 0;
+            self.media_loaded_once = false; // Reset media flag on reset
         } else if request.is_paused && !self.is_paused {
             self.pause_start = Some(std::time::Instant::now());
         } else if !request.is_paused && self.is_paused {
@@ -181,6 +210,7 @@ impl ShaderControls {
         using_hdri_texture: bool, 
        hdri_info: Option<HdriMetadata>,
     ) {
+
         ui.group(|ui| {
             ui.horizontal(|ui| {
                 ui.heading("Media");
@@ -200,7 +230,7 @@ impl ShaderControls {
             });
             
             // Only show video controls if we're using a video texture
-            if using_video_texture {
+            if using_video_texture{
                 ui.collapsing("Controls", |ui| {
                     // Main video controls
                     ui.horizontal(|ui| {
