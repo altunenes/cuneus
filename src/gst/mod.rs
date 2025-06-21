@@ -2,6 +2,8 @@
 pub mod video;
 #[cfg(feature = "media")]
 pub mod webcam;
+#[cfg(feature = "media")]
+pub mod synthesis;
 
 use log::info;
 
