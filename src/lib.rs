@@ -112,21 +112,15 @@ impl Core {
         let window_ptr = Box::into_raw(window_box);
         // SAFETY: window_ptr is valid as we just created it
         let surface = unsafe { instance.create_surface(&*window_ptr) }.unwrap();
-        // for discrete gpus, we prefer high performance for wgpu applications.
-        let prefer_power_preference = if instance
+        // for discrete gpus, we most possibly prefer high performance for wgpu applications.
+        let prefer_power_preference = instance
             .enumerate_adapters(wgpu::Backends::all())
             .iter()
-            .filter(|p| {
-                log::info!("adapter info: {:?}", p.get_info());
-                p.get_info().device_type == wgpu::DeviceType::DiscreteGpu
-            })
+            .filter(|p| p.get_info().device_type == wgpu::DeviceType::DiscreteGpu)
             .next()
-            .is_some()
-        {
-            wgpu::PowerPreference::HighPerformance
-        } else {
-            wgpu::PowerPreference::default()
-        };
+            .map(|_| wgpu::PowerPreference::HighPerformance)
+            .unwrap_or(wgpu::PowerPreference::default());
+        log::info!("perferred power preference: {:?}", prefer_power_preference);
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: prefer_power_preference,
@@ -148,7 +142,8 @@ impl Core {
             .unwrap();
         let device = Arc::new(device);
         let surface_caps = surface.get_capabilities(&adapter);
-        // on nix, nvidia gpu's first look up srgb is Bgra8UnormSrgb, this will cause unmatched surface format when exporting.
+        // on nix, nvidia gpu's first look up srgb format is Bgra8UnormSrgb, this will
+        // cause mismatched surface format when exporting media.
         let surface_format = surface_caps
             .formats
             .iter()
