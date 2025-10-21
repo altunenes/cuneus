@@ -112,9 +112,24 @@ impl Core {
         let window_ptr = Box::into_raw(window_box);
         // SAFETY: window_ptr is valid as we just created it
         let surface = unsafe { instance.create_surface(&*window_ptr) }.unwrap();
+        // for discrete gpus, we prefer high performance for wgpu applications.
+        let prefer_power_preference = if instance
+            .enumerate_adapters(wgpu::Backends::all())
+            .iter()
+            .filter(|p| {
+                log::info!("adapter info: {:?}", p.get_info());
+                p.get_info().device_type == wgpu::DeviceType::DiscreteGpu
+            })
+            .next()
+            .is_some()
+        {
+            wgpu::PowerPreference::HighPerformance
+        } else {
+            wgpu::PowerPreference::default()
+        };
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
+                power_preference: prefer_power_preference,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
@@ -133,11 +148,12 @@ impl Core {
             .unwrap();
         let device = Arc::new(device);
         let surface_caps = surface.get_capabilities(&adapter);
+        // on nix, nvidia gpu's first look up srgb is Bgra8UnormSrgb, this will cause unmatched surface format when exporting.
         let surface_format = surface_caps
             .formats
             .iter()
             .copied()
-            .find(|f| f.is_srgb())
+            .find(|f| f.is_srgb() && *f == CAPTURE_FORMAT)
             .unwrap_or(surface_caps.formats[0]);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
