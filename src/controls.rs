@@ -256,17 +256,33 @@ impl ShaderControls {
                     }
 
                     if ui.button("Load").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter(
-                                "Media Files",
-                                &["png", "jpg", "jpeg", "mp4", "avi", "mkv", "webm", "mov"],
-                            )
-                            .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "tiff"])
-                            .add_filter("Videos", &["mp4", "avi", "mkv", "webm", "mov"])
-                            .add_filter("HDRI", &["hdr", "exr"])
-                            .pick_file()
-                        {
-                            request.load_media_path = Some(path);
+                        // use threaded loading is much more stable for rfd.
+                        let (tx, rx): (
+                            std::sync::mpsc::Sender<PathBuf>,
+                            std::sync::mpsc::Receiver<PathBuf>,
+                        ) = std::sync::mpsc::channel();
+                        std::thread::spawn(move || {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter(
+                                    "Media Files",
+                                    &["png", "jpg", "jpeg", "mp4", "avi", "mkv", "webm", "mov"],
+                                )
+                                .add_filter(
+                                    "Images",
+                                    &["png", "jpg", "jpeg", "webp", "bmp", "tiff"],
+                                )
+                                .add_filter("Videos", &["mp4", "avi", "mkv", "webm", "mov"])
+                                .add_filter("HDRI", &["hdr", "exr"])
+                                .pick_file()
+                            {
+                                tx.send(path).unwrap();
+                            }
+                        })
+                        .join()
+                        .unwrap();
+                        match rx.recv() {
+                            Ok(path) => request.load_media_path = Some(path),
+                            Err(_) => {}
                         }
                     }
                 });
