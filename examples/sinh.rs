@@ -52,8 +52,7 @@ impl SinhShader {
 impl ShaderManager for SinhShader {
     fn init(core: &Core) -> Self {
         // Create texture bind group layout for displaying compute shader output
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core, None);
 
         let initial_params = SinhParams {
             aa: 2,

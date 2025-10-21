@@ -96,14 +96,13 @@ impl RenderKit {
         })
     }
 
-    /// Create RenderKit with standard texture layout
-    pub fn new_with_standard_layout(core: &Core) -> Self {
-        let layout = Self::create_standard_texture_layout(&core.device);
-        Self::new(core, &layout, None)
-    }
+    // /// Create RenderKit with standard texture layout
+    // pub fn new_with_standard_layout(core: &Core) -> Self {
+    //     let layout = Self::create_standard_texture_layout(&core.device);
+    //     Self::new(core, &layout, None)
+    // }
 
-    pub fn new(core: &Core, layout: &wgpu::BindGroupLayout, fragment_entry: Option<&str>) -> Self {
-        let bind_group_layouts = &[layout];
+    pub fn new(core: &Core, fragment_entry: Option<&str>) -> Self {
         let time_bind_group_layout =
             core.device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -169,6 +168,8 @@ impl RenderKit {
                 label: Some("Fragment Shader"),
                 source: wgpu::ShaderSource::Wgsl(Self::BLIT_SHADER.into()),
             });
+        // this texture group layout is for output texture manager bind group layout
+        // can share the same with default render pipeline bind group layout
         let texture_bind_group_layout =
             core.device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -196,7 +197,7 @@ impl RenderKit {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts,
+                bind_group_layouts: &[&texture_bind_group_layout],
                 push_constant_ranges: &[],
             });
         let renderer = Renderer::new(

@@ -56,10 +56,7 @@ impl ShaderManager for KuwaharaShader {
             show_tensors: 0,
             _padding: [0; 3],
         };
-
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
-
+        let base = RenderKit::new(core, None);
         let passes = vec![
             PassDescription::new("structure_tensor", &[]),
             PassDescription::new("tensor_field", &["structure_tensor"]),

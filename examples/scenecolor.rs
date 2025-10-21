@@ -36,7 +36,7 @@ impl SceneColorShader {
 
 impl ShaderManager for SceneColorShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
+        let base = RenderKit::new(core, None);
 
         let initial_params = SceneColorParams {
             num_segments: 16.0,
@@ -48,8 +48,6 @@ impl ShaderManager for SceneColorShader {
             _pad3: 0.0,
             _pad4: 0.0,
         };
-
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
 
         let config = ComputeShader::builder()
             .with_entry_point("main")

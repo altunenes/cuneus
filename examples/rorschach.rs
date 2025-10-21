@@ -64,8 +64,8 @@ impl RorschachShader {
 impl ShaderManager for RorschachShader {
     fn init(core: &Core) -> Self {
         // Create texture bind group layout for displaying compute shader output
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let mut base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let mut base = RenderKit::new(core, None);
+
         base.setup_mouse_uniform(core);
 
         let initial_params = RorschachParams {

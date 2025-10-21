@@ -46,9 +46,7 @@ impl CNNDigitRecognizer {}
 
 impl ShaderManager for CNNDigitRecognizer {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
-
+        let base = RenderKit::new(core, None);
         // Configure multi-pass CNN with 5 stages: canvas_update -> conv_layer1 -> conv_layer2 -> fully_connected -> main_image
         let passes = vec![
             PassDescription::new("canvas_update", &[]).with_workgroup_size([28, 28, 1]), // 28x28 canvas pixels

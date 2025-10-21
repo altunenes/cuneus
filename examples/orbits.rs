@@ -51,9 +51,7 @@ impl ShaderManager for Shader {
         let initial_y = 2.14278;
 
         // Create texture display layout
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
-
+        let base = RenderKit::new(core, None);
         let config = ComputeShader::builder()
             .with_entry_point("main")
             .with_custom_uniforms::<ShaderParams>()

@@ -31,8 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 impl ShaderManager for GalaxyShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-
+        let base = RenderKit::new(core, None);
         let initial_params = ShaderParams {
             max_iterations: 150,
             max_sub_iterations: 11,
@@ -42,8 +41,6 @@ impl ShaderManager for GalaxyShader {
             dist_offset: 0.07,
             _pad1: [0.0; 2],
         };
-
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
 
         let config = ComputeShader::builder()
             .with_entry_point("main")

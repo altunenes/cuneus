@@ -45,9 +45,7 @@ impl CliffordShader {
 
 impl ShaderManager for CliffordShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
-
+        let base = RenderKit::new(core, None);
         let initial_params = CliffordParams {
             a: 1.7,
             b: 1.7,

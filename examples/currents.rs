@@ -113,9 +113,7 @@ impl CurrentsShader {
 
 impl ShaderManager for CurrentsShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
-
+        let base = RenderKit::new(core, None);
         // Define the 5 passes
         let passes = vec![
             PassDescription::new("buffer_a", &["buffer_a"]), // self-feedback

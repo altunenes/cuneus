@@ -35,10 +35,7 @@ impl ShaderManager for FluidShader {
             particle_size: 1.0,
             _padding: [0.0; 7],
         };
-
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
-
+        let base = RenderKit::new(core, None);
         // Create multipass system: buffer_a (simulation) -> main_image (display)
         let passes = vec![
             PassDescription::new("buffer_a", &[]),

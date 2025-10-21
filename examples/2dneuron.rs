@@ -39,10 +39,7 @@ impl ShaderManager for NeuronShader {
             col2: 1.0,
             decay: 1.0,
         };
-
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
-
+        let base = RenderKit::new(core, None);
         // Create multipass system: buffer_a -> buffer_b -> buffer_c -> main_image
         let passes = vec![
             PassDescription::new("buffer_a", &[]), // no dependencies, generates pattern

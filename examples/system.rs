@@ -40,7 +40,7 @@ impl SystemShader {
 
 impl ShaderManager for SystemShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
+        let base = RenderKit::new(core, None);
 
         let initial_params = SystemParams {
             a: 0.0,
@@ -57,8 +57,6 @@ impl ShaderManager for SystemShader {
             color2_b: 0.1,
             zoom: 1.0,
         };
-
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
 
         let mut config = ComputeShader::builder()
             .with_entry_point("Splat")

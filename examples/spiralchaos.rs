@@ -43,7 +43,7 @@ impl SpiralShader {
 
 impl ShaderManager for SpiralShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
+        let base = RenderKit::new(core, None);
 
         let initial_params = SpiralParams {
             a: 1.0,
@@ -63,8 +63,6 @@ impl ShaderManager for SpiralShader {
             color2_b: 0.5,
             _padding: 0,
         };
-
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
 
         let mut config = ComputeShader::builder()
             .with_entry_point("Splat")

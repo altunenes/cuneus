@@ -37,9 +37,7 @@ impl LichShader {
 
 impl ShaderManager for LichShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
-
+        let base = RenderKit::new(core, None);
         let passes = vec![
             PassDescription::new("buffer_a", &[]),
             PassDescription::new("buffer_b", &["buffer_a", "buffer_b"]), // Self-feedback!

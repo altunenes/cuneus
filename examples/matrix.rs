@@ -36,9 +36,7 @@ struct MatrixShader {
 }
 impl ShaderManager for MatrixShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
-
+        let base = RenderKit::new(core, None);
         let initial_params = ShaderParams {
             red_power: 0.98,
             green_power: 0.85,

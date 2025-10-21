@@ -45,9 +45,7 @@ impl ParticleShader {
 
 impl ShaderManager for ParticleShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
-
+        let base = RenderKit::new(core, None);
         let initial_params = ParticleParams {
             a: -1.8,
             b: -2.0,

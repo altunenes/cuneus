@@ -47,10 +47,7 @@ struct AudioVisCompute {
 impl ShaderManager for AudioVisCompute {
     fn init(core: &Core) -> Self {
         let initial_params = AudioVisParams::default();
-
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
-
+        let base = RenderKit::new(core, None);
         let config = ComputeShader::builder()
             .with_entry_point("main")
             .with_custom_uniforms::<AudioVisParams>()

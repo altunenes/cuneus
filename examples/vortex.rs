@@ -44,7 +44,7 @@ impl VortexShader {
 
 impl ShaderManager for VortexShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
+        let base = RenderKit::new(core, None);
 
         let initial_params = VortexParams {
             a: 1.0, // Tunnel speed
@@ -65,8 +65,6 @@ impl ShaderManager for VortexShader {
             camera_auto_rotate: 0.0, // Disable auto rotation by default
             _padding: 0.0,
         };
-
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
 
         let mut config = ComputeShader::builder()
             .with_entry_point("Splat")

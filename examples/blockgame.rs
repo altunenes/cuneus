@@ -83,9 +83,7 @@ struct BlockTowerGame {
 
 impl ShaderManager for BlockTowerGame {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
-
+        let base = RenderKit::new(core, None);
         // Create single-pass compute shader with mouse, fonts, and game storage
         let config = ComputeShader::builder()
             .with_entry_point("main")

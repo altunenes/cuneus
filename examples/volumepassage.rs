@@ -43,7 +43,7 @@ impl VolumeShader {
 
 impl ShaderManager for VolumeShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
+        let base = RenderKit::new(core, None);
 
         let initial_params = VolumeParams {
             speed: 1.0,
@@ -63,8 +63,6 @@ impl ShaderManager for VolumeShader {
             _padding2: 0.0,
             _padding3: 0.0,
         };
-
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
 
         let config = ComputeShader::builder()
             .with_entry_point("main")

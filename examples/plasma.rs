@@ -47,7 +47,7 @@ impl Neural2Shader {
 
 impl ShaderManager for Neural2Shader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
+        let base = RenderKit::new(core, None);
 
         let initial_params = NeuralParams {
             detail: 15.0,
@@ -70,8 +70,6 @@ impl ShaderManager for Neural2Shader {
             dof_amount: 0.95,
             dof_focal_dist: 2.0,
         };
-
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
 
         let mut config = ComputeShader::builder()
             .with_entry_point("Splat")

@@ -14,9 +14,7 @@ impl ShaderManager for DebugScreen {
     fn init(core: &Core) -> Self {
         // Create texture display layout - needed to show compute shader output on screen
         // This layout defines how to bind the texture (binding 0) and sampler (binding 1) for rendering
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
-
+        let base = RenderKit::new(core, None);
         // Entry point configuration
         let config = ComputeShader::builder()
             .with_entry_point("main")

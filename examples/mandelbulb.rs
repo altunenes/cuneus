@@ -120,9 +120,7 @@ impl ShaderManager for MandelbulbShader {
             glow_color_g: 0.7,
             glow_color_b: 1.0,
         };
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
-
+        let base = RenderKit::new(core, None);
         let config = ComputeShader::builder()
             .with_entry_point("main")
             .with_custom_uniforms::<MandelbulbParams>()

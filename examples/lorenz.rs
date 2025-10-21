@@ -51,7 +51,7 @@ impl LorenzShader {
 
 impl ShaderManager for LorenzShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
+        let base = RenderKit::new(core, None);
         let initial_params = LorenzParams {
             sigma: 40.0,
             rho: 33.0,
@@ -77,8 +77,6 @@ impl ShaderManager for LorenzShader {
             particle_count: 1000.0,
             decay_speed: 8.0,
         };
-
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
 
         let mut config = ComputeShader::builder()
             .with_entry_point("Splat")
