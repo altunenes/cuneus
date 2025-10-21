@@ -222,10 +222,23 @@ impl ExportManager {
                     ui.horizontal(|ui| {
                         ui.label("Export Path:");
                         if ui.button("Browse").clicked() {
-                            if let Some(path) = rfd::FileDialog::new()
-                                .set_directory(&request.path)
-                                .pick_folder()
-                            {
+                            let (tx, rx): (
+                                std::sync::mpsc::Sender<PathBuf>,
+                                std::sync::mpsc::Receiver<PathBuf>,
+                            ) = std::sync::mpsc::channel();
+                            std::thread::spawn(move || {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    // use a default directory is to avoid thread variant sharing
+                                    // this may change some code
+                                    .set_directory("Pictures")
+                                    .pick_folder()
+                                {
+                                    tx.send(path).unwrap();
+                                }
+                            })
+                            .join()
+                            .unwrap();
+                            if let Ok(path) = rx.recv() {
                                 request.path = path;
                             }
                         }
