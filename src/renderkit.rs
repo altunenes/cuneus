@@ -71,37 +71,6 @@ impl RenderKit {
     const VERTEX_SHADER: &'static str = include_str!("../shaders/vertex.wgsl");
     const BLIT_SHADER: &'static str = include_str!("../shaders/blit.wgsl");
 
-    /// Creates a bind group layout with texture (binding 0) and sampler (binding 1) for displaying compute shader output
-    pub fn create_standard_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-            label: Some("Standard Texture Layout"),
-        })
-    }
-
-    // /// Create RenderKit with standard texture layout
-    // pub fn new_with_standard_layout(core: &Core) -> Self {
-    //     let layout = Self::create_standard_texture_layout(&core.device);
-    //     Self::new(core, &layout, None)
-    // }
-
     pub fn new(core: &Core, fragment_entry: Option<&str>) -> Self {
         let time_bind_group_layout =
             core.device
