@@ -1,5 +1,5 @@
-use wgpu;
 use crate::UniformProvider;
+use wgpu;
 
 /// Pass description for multi-pass shaders
 #[derive(Debug, Clone)]
@@ -17,7 +17,7 @@ impl PassDescription {
             workgroup_size: None,
         }
     }
-    
+
     pub fn with_workgroup_size(mut self, size: [u32; 3]) -> Self {
         self.workgroup_size = Some(size);
         self
@@ -40,7 +40,7 @@ impl StorageBufferSpec {
             read_only: false,
         }
     }
-    
+
     pub fn read_only(mut self) -> Self {
         self.read_only = true;
         self
@@ -99,109 +99,109 @@ impl ComputeShaderBuilder {
                 texture_format: wgpu::TextureFormat::Rgba16Float,
                 label: "Compute Shader".to_string(),
                 num_channels: None,
-            }
+            },
         }
     }
-    
+
     /// Set the entry point for single-pass shaders
     pub fn with_entry_point(mut self, entry_point: &str) -> Self {
         self.config.entry_points = vec![entry_point.to_string()];
         self
     }
-    
+
     /// Configure multi-pass execution with ping-pong buffers
     pub fn with_multi_pass(mut self, passes: &[PassDescription]) -> Self {
         self.config.passes = Some(passes.to_vec());
         self.config.entry_points = passes.iter().map(|p| p.name.clone()).collect();
         self
     }
-    
+
     /// Add custom uniform parameters (goes to @group(1))
     pub fn with_custom_uniforms<T: UniformProvider>(mut self) -> Self {
         self.config.custom_uniform_size = Some(std::mem::size_of::<T>() as u64);
         self
     }
-    
+
     /// Enable input texture support (goes to @group(1))
     pub fn with_input_texture(mut self) -> Self {
         self.config.has_input_texture = true;
         self
     }
-    
+
     /// Enable channel textures for external media (goes to @group(2))
     pub fn with_channels(mut self, num_channels: u32) -> Self {
         self.config.num_channels = Some(num_channels);
         self
     }
-    
+
     /// Enable mouse input (goes to @group(2))
     pub fn with_mouse(mut self) -> Self {
         self.config.has_mouse = true;
         self
     }
-    
+
     /// Enable font rendering (goes to @group(2))
     pub fn with_fonts(mut self) -> Self {
         self.config.has_fonts = true;
         self
     }
-    
+
     /// Enable audio buffer (goes to @group(2))
     pub fn with_audio(mut self, buffer_size: usize) -> Self {
         self.config.has_audio = true;
         self.config.audio_buffer_size = buffer_size;
         self
     }
-    
+
     /// Enable audio spectrum data buffer for visualizers (goes to @group(2))
     pub fn with_audio_spectrum(mut self, spectrum_size: usize) -> Self {
         self.config.has_audio_spectrum = true;
         self.config.audio_spectrum_size = spectrum_size;
         self
     }
-    
+
     /// Enable atomic buffer for particle systems (goes to @group(2))
     pub fn with_atomic_buffer(mut self) -> Self {
         self.config.has_atomic_buffer = true;
         self
     }
-    
+
     /// Add user-defined storage buffers (goes to @group(3))
     pub fn with_storage_buffer(mut self, buffer: StorageBufferSpec) -> Self {
         self.config.storage_buffers.push(buffer);
         self
     }
-    
+
     /// Add multiple storage buffers
     pub fn with_storage_buffers(mut self, buffers: &[StorageBufferSpec]) -> Self {
         self.config.storage_buffers.extend_from_slice(buffers);
         self
     }
-    
+
     /// Set workgroup size
     pub fn with_workgroup_size(mut self, size: [u32; 3]) -> Self {
         self.config.workgroup_size = size;
         self
     }
-    
+
     /// Run only once (for initialization shaders)
     pub fn dispatch_once(mut self) -> Self {
         self.config.dispatch_once = true;
         self
     }
-    
+
     /// Set output texture format
     pub fn with_texture_format(mut self, format: wgpu::TextureFormat) -> Self {
         self.config.texture_format = format;
         self
     }
-    
+
     /// Set debug label
     pub fn with_label(mut self, label: &str) -> Self {
         self.config.label = label.to_string();
         self
     }
-    
+
     /// Build the configuration (will be used by ComputeShader::from_builder)
     pub fn build(self) -> ComputeConfiguration {
         self.config

@@ -1,5 +1,5 @@
 use crate::{Core, TextureManager};
-#[derive(Clone)] 
+#[derive(Clone)]
 pub struct FeedbackTextureConfig {
     pub width: u32,
     pub height: u32,
@@ -38,8 +38,8 @@ pub fn create_feedback_texture(
         sample_count: config.sample_count,
         dimension: config.dimension,
         format: config.format,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING 
-            | wgpu::TextureUsages::RENDER_ATTACHMENT 
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });

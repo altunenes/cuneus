@@ -1,5 +1,5 @@
-use cuneus::prelude::*;
 use cuneus::compute::*;
+use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
 #[repr(C)]
@@ -29,7 +29,6 @@ struct JfaParams {
     _padding1: f32,
     _padding2: f32,
 }
-
 
 impl UniformProvider for JfaParams {
     fn as_bytes(&self) -> &[u8] {
@@ -76,9 +75,9 @@ impl ShaderManager for JfaShader {
 
         // Create multipass system: buffer_a -> buffer_b -> buffer_c -> main_image
         let passes = vec![
-            PassDescription::new("buffer_a", &["buffer_a"]),  // self-feedback
-            PassDescription::new("buffer_b", &["buffer_a", "buffer_b"]),  // reads buffer_a + self-feedback
-            PassDescription::new("buffer_c", &["buffer_a", "buffer_b", "buffer_c"]),  // reads ALL 3 buffers
+            PassDescription::new("buffer_a", &["buffer_a"]), // self-feedback
+            PassDescription::new("buffer_b", &["buffer_a", "buffer_b"]), // reads buffer_a + self-feedback
+            PassDescription::new("buffer_c", &["buffer_a", "buffer_b", "buffer_c"]), // reads ALL 3 buffers
             PassDescription::new("main_image", &["buffer_c"]),
         ];
 
@@ -91,20 +90,18 @@ impl ShaderManager for JfaShader {
             .with_label("JFA Unified")
             .build();
 
-        let mut compute_shader = ComputeShader::from_builder(
-            core,
-            include_str!("shaders/jfa.wgsl"),
-            config,
-        );
+        let mut compute_shader =
+            ComputeShader::from_builder(core, include_str!("shaders/jfa.wgsl"), config);
 
         // Enable hot reload
         if let Err(e) = compute_shader.enable_hot_reload(
             core.device.clone(),
             std::path::PathBuf::from("examples/shaders/jfa.wgsl"),
-            core.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("JFA Hot Reload"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/jfa.wgsl").into()),
-            }),
+            core.device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("JFA Hot Reload"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/jfa.wgsl").into()),
+                }),
         ) {
             eprintln!("Failed to enable hot reload for JFA shader: {}", e);
         }
@@ -121,32 +118,37 @@ impl ShaderManager for JfaShader {
     fn update(&mut self, core: &Core) {
         // Check for hot reload updates
         self.compute_shader.check_hot_reload(&core.device);
-        // Handle export        
+        // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
-        
+
         let current_time = self.base.controls.get_time(&self.base.start_time);
         let delta = 1.0 / 60.0;
-        self.compute_shader.set_time(current_time, delta, &core.queue);
-        
+        self.compute_shader
+            .set_time(current_time, delta, &core.queue);
+
         self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {
         self.base.update_resolution(&core.queue, core.size);
-        self.compute_shader.resize(core, core.size.width, core.size.height);
+        self.compute_shader
+            .resize(core, core.size.width, core.size.height);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
         let output = core.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = core.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("JFA Render Encoder"),
-        });
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = core
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("JFA Render Encoder"),
+            });
 
-
-        // Execute multi-pass compute shader: buffer_a -> buffer_b -> buffer_c -> main_image 
+        // Execute multi-pass compute shader: buffer_a -> buffer_b -> buffer_c -> main_image
         self.compute_shader.dispatch(&mut encoder, core);
-        
+
         // Render compute output to screen
         {
             let compute_texture = self.compute_shader.get_output_texture();
@@ -168,15 +170,27 @@ impl ShaderManager for JfaShader {
         let mut changed = false;
         let mut should_start_export = false;
         let mut export_request = self.base.export_manager.get_ui_request();
-        let mut controls_request = self.base.controls.get_ui_request(&self.base.start_time, &core.size);
+        let mut controls_request = self
+            .base
+            .controls
+            .get_ui_request(&self.base.start_time, &core.size);
         controls_request.current_fps = Some(self.base.fps_tracker.fps());
 
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
                 ctx.style_mut(|style| {
-                    style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
-                    style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;
-                    style.text_styles.get_mut(&egui::TextStyle::Button).unwrap().size = 10.0;
+                    style.visuals.window_fill =
+                        egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
+                    style
+                        .text_styles
+                        .get_mut(&egui::TextStyle::Body)
+                        .unwrap()
+                        .size = 11.0;
+                    style
+                        .text_styles
+                        .get_mut(&egui::TextStyle::Button)
+                        .unwrap()
+                        .size = 10.0;
                 });
 
                 egui::Window::new("JFA - Simplified")
@@ -187,21 +201,52 @@ impl ShaderManager for JfaShader {
                         egui::CollapsingHeader::new("JFA Parameters")
                             .default_open(true)
                             .show(ui, |ui| {
-                                changed |= ui.add(egui::Slider::new(&mut params.n, 1.0..=50.0).text("N (Frame Cycle)")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.n, 1.0..=50.0)
+                                            .text("N (Frame Cycle)"),
+                                    )
+                                    .changed();
                                 ui.separator();
-                                changed |= ui.add(egui::Slider::new(&mut params.accumulation_speed, 0.0..=3.0).text("Accumulation Speed")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.fade_speed, 0.9..=1.0).text("Fade Speed")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut params.accumulation_speed,
+                                            0.0..=3.0,
+                                        )
+                                        .text("Accumulation Speed"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.fade_speed, 0.9..=1.0)
+                                            .text("Fade Speed"),
+                                    )
+                                    .changed();
                             });
 
                         egui::CollapsingHeader::new("Clifford Attractor")
                             .default_open(false)
                             .show(ui, |ui| {
-                                changed |= ui.add(egui::Slider::new(&mut params.a, -5.0..=5.0).text("a")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.b, -5.0..=5.0).text("b")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.c, -5.0..=5.0).text("c")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.d, -5.0..=5.0).text("d")).changed();
+                                changed |= ui
+                                    .add(egui::Slider::new(&mut params.a, -5.0..=5.0).text("a"))
+                                    .changed();
+                                changed |= ui
+                                    .add(egui::Slider::new(&mut params.b, -5.0..=5.0).text("b"))
+                                    .changed();
+                                changed |= ui
+                                    .add(egui::Slider::new(&mut params.c, -5.0..=5.0).text("c"))
+                                    .changed();
+                                changed |= ui
+                                    .add(egui::Slider::new(&mut params.d, -5.0..=5.0).text("d"))
+                                    .changed();
                                 ui.separator();
-                                changed |= ui.add(egui::Slider::new(&mut params.scale, 0.1..=1.0).text("Scale")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.scale, 0.1..=1.0)
+                                            .text("Scale"),
+                                    )
+                                    .changed();
                             });
 
                         egui::CollapsingHeader::new("Colors")
@@ -209,7 +254,8 @@ impl ShaderManager for JfaShader {
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label("Color Pattern:");
-                                    let mut color = [params.color_r, params.color_g, params.color_b];
+                                    let mut color =
+                                        [params.color_r, params.color_g, params.color_b];
                                     if ui.color_edit_button_rgb(&mut color).changed() {
                                         params.color_r = color[0];
                                         params.color_g = color[1];
@@ -217,18 +263,34 @@ impl ShaderManager for JfaShader {
                                         changed = true;
                                     }
                                 });
-                                changed |= ui.add(egui::Slider::new(&mut params.color_w, 0.0..=10.0).text("Color W")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.color_intensity, 0.1..=3.0).text("Color Intensity")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.color_w, 0.0..=10.0)
+                                            .text("Color W"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.color_intensity, 0.1..=3.0)
+                                            .text("Color Intensity"),
+                                    )
+                                    .changed();
                                 ui.separator();
-                                changed |= ui.add(egui::Slider::new(&mut params.gamma, 0.1..=4.0).text("Gamma")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.gamma, 0.1..=4.0)
+                                            .text("Gamma"),
+                                    )
+                                    .changed();
                             });
 
                         ui.separator();
                         ShaderControls::render_controls_widget(ui, &mut controls_request);
-                        
+
                         ui.separator();
-                        should_start_export = ExportManager::render_export_ui_widget(ui, &mut export_request);
-                        
+                        should_start_export =
+                            ExportManager::render_export_ui_widget(ui, &mut export_request);
+
                         ui.separator();
                         ui.label(format!("Frame: {}", self.compute_shader.current_frame));
                         ui.label("JFA with Clifford Attractor (Simplified)");
@@ -260,20 +322,28 @@ impl ShaderManager for JfaShader {
             self.base.export_manager.start_export();
         }
 
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
+        self.base
+            .handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(std::iter::once(encoder.finish()));
         output.present();
-
 
         Ok(())
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self.base.egui_state.on_window_event(core.window(), event).consumed {
+        if self
+            .base
+            .egui_state
+            .on_window_event(core.window(), event)
+            .consumed
+        {
             return true;
         }
         if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self.base.key_handler.handle_keyboard_input(core.window(), event);
+            return self
+                .base
+                .key_handler
+                .handle_keyboard_input(core.window(), event);
         }
         false
     }
@@ -283,7 +353,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let (app, event_loop) = ShaderApp::new("JFA", 800, 600);
 
-    app.run(event_loop, |core| {
-        JfaShader::init(core)
-    })
+    app.run(event_loop, |core| JfaShader::init(core))
 }

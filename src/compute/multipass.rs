@@ -1,6 +1,6 @@
+use crate::Core;
 use std::collections::HashMap;
 use wgpu;
-use crate::Core;
 
 /// Manages ping-pong buffers for multi-pass compute shaders
 pub struct MultiPassManager {
@@ -28,22 +28,22 @@ impl MultiPassManager {
         let height = core.size.height;
 
         // Create dedicated storage layout (only storage texture, no custom uniform)
-        let storage_layout = core.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Multi-Pass Storage Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: texture_format,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        
+        let storage_layout =
+            core.device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("Multi-Pass Storage Layout"),
+                    entries: &[wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: texture_format,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    }],
+                });
+
         // Create input texture layout for multi-buffer reading
         let input_layout = Self::create_input_layout(&core.device);
 
@@ -52,19 +52,52 @@ impl MultiPassManager {
 
         // Create ping-pong texture pairs for each buffer
         for name in buffer_names {
-            let texture0 = Self::create_storage_texture(&core.device, width, height, texture_format, &format!("{}_0", name));
-            let texture1 = Self::create_storage_texture(&core.device, width, height, texture_format, &format!("{}_1", name));
-            
-            let bind_group0 = Self::create_storage_bind_group(&core.device, &storage_layout, &texture0, &format!("{}_0_bind", name));
-            let bind_group1 = Self::create_storage_bind_group(&core.device, &storage_layout, &texture1, &format!("{}_1_bind", name));
+            let texture0 = Self::create_storage_texture(
+                &core.device,
+                width,
+                height,
+                texture_format,
+                &format!("{}_0", name),
+            );
+            let texture1 = Self::create_storage_texture(
+                &core.device,
+                width,
+                height,
+                texture_format,
+                &format!("{}_1", name),
+            );
+
+            let bind_group0 = Self::create_storage_bind_group(
+                &core.device,
+                &storage_layout,
+                &texture0,
+                &format!("{}_0_bind", name),
+            );
+            let bind_group1 = Self::create_storage_bind_group(
+                &core.device,
+                &storage_layout,
+                &texture1,
+                &format!("{}_1_bind", name),
+            );
 
             buffers.insert(name.clone(), (texture0, texture1));
             bind_groups.insert(name.clone(), (bind_group0, bind_group1));
         }
 
         // Create output texture
-        let output_texture = Self::create_storage_texture(&core.device, width, height, texture_format, "multipass_output");
-        let output_bind_group = Self::create_storage_bind_group(&core.device, &storage_layout, &output_texture, "output_bind");
+        let output_texture = Self::create_storage_texture(
+            &core.device,
+            width,
+            height,
+            texture_format,
+            "multipass_output",
+        );
+        let output_bind_group = Self::create_storage_bind_group(
+            &core.device,
+            &storage_layout,
+            &output_texture,
+            "output_bind",
+        );
 
         Self {
             buffers,
@@ -80,15 +113,28 @@ impl MultiPassManager {
         }
     }
 
-    fn create_storage_texture(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat, label: &str) -> wgpu::Texture {
+    fn create_storage_texture(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        label: &str,
+    ) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         })
     }
@@ -197,14 +243,23 @@ impl MultiPassManager {
     }
 
     /// Create input bind group for a pass with its dependencies
-    pub fn create_input_bind_group(&self, device: &wgpu::Device, sampler: &wgpu::Sampler, input_buffers: &[String]) -> wgpu::BindGroup {
+    pub fn create_input_bind_group(
+        &self,
+        device: &wgpu::Device,
+        sampler: &wgpu::Sampler,
+        input_buffers: &[String],
+    ) -> wgpu::BindGroup {
         let mut views = Vec::new();
-        
+
         // Create views for up to 3 input textures
         for i in 0..3 {
             let buffer_name = if input_buffers.is_empty() {
                 // For first pass with no dependencies, use the first buffer or create a dummy
-                self.buffers.keys().next().cloned().unwrap_or_else(|| "buffer_a".to_string())
+                self.buffers
+                    .keys()
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| "buffer_a".to_string())
             } else {
                 input_buffers.get(i).unwrap_or(&input_buffers[0]).clone()
             };
@@ -212,7 +267,7 @@ impl MultiPassManager {
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             views.push(view);
         }
-        
+
         let entries = [
             wgpu::BindGroupEntry {
                 binding: 0,
@@ -247,7 +302,6 @@ impl MultiPassManager {
         })
     }
 
-
     /// Get output bind group
     pub fn get_output_bind_group(&self) -> &wgpu::BindGroup {
         &self.output_bind_group
@@ -267,20 +321,53 @@ impl MultiPassManager {
     pub fn clear_all(&mut self, core: &Core) {
         // Recreate all buffer textures
         for (name, textures) in &mut self.buffers {
-            textures.0 = Self::create_storage_texture(&core.device, self.width, self.height, self.texture_format, &format!("{}_0", name));
-            textures.1 = Self::create_storage_texture(&core.device, self.width, self.height, self.texture_format, &format!("{}_1", name));
+            textures.0 = Self::create_storage_texture(
+                &core.device,
+                self.width,
+                self.height,
+                self.texture_format,
+                &format!("{}_0", name),
+            );
+            textures.1 = Self::create_storage_texture(
+                &core.device,
+                self.width,
+                self.height,
+                self.texture_format,
+                &format!("{}_1", name),
+            );
         }
 
         // Recreate all bind groups
         for (name, bind_groups) in &mut self.bind_groups {
             let textures = self.buffers.get(name).unwrap();
-            bind_groups.0 = Self::create_storage_bind_group(&core.device, &self.storage_layout, &textures.0, &format!("{}_0_bind", name));
-            bind_groups.1 = Self::create_storage_bind_group(&core.device, &self.storage_layout, &textures.1, &format!("{}_1_bind", name));
+            bind_groups.0 = Self::create_storage_bind_group(
+                &core.device,
+                &self.storage_layout,
+                &textures.0,
+                &format!("{}_0_bind", name),
+            );
+            bind_groups.1 = Self::create_storage_bind_group(
+                &core.device,
+                &self.storage_layout,
+                &textures.1,
+                &format!("{}_1_bind", name),
+            );
         }
 
         // Recreate output texture and bind group
-        self.output_texture = Self::create_storage_texture(&core.device, self.width, self.height, self.texture_format, "multipass_output");
-        self.output_bind_group = Self::create_storage_bind_group(&core.device, &self.storage_layout, &self.output_texture, "output_bind");
+        self.output_texture = Self::create_storage_texture(
+            &core.device,
+            self.width,
+            self.height,
+            self.texture_format,
+            "multipass_output",
+        );
+        self.output_bind_group = Self::create_storage_bind_group(
+            &core.device,
+            &self.storage_layout,
+            &self.output_texture,
+            "output_bind",
+        );
 
         self.frame_flip = false;
     }

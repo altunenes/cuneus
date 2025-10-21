@@ -1,14 +1,14 @@
-use notify::{Watcher, RecursiveMode, Event, EventKind};
-use std::sync::Arc;
-use std::path::{PathBuf, Path};
-use std::fs;
-use std::sync::mpsc::{channel, Receiver};
-use std::time::{Duration, Instant};
+use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub enum ShaderType {
     RenderPair, // Vertex + Fragment
-    Compute     // Compute
+    Compute,    // Compute
 }
 
 pub struct ShaderHotReload {
@@ -43,19 +43,17 @@ impl ShaderHotReload {
         let mut watcher = notify::recommended_watcher(move |res: Result<Event, _>| {
             if let Ok(event) = res {
                 match event.kind {
-                    EventKind::Modify(_) |
-                    EventKind::Create(_) |
-                    EventKind::Remove(_)
-                    => {
+                    EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {
                         tx.send(event).unwrap_or_default();
-                    },
+                    }
                     _ => {}
                 }
             }
         })?;
 
         //normalize for Windows
-        let normalized_paths: Vec<PathBuf> = shader_paths.iter()
+        let normalized_paths: Vec<PathBuf> = shader_paths
+            .iter()
             .map(|path| Self::normalize_path(path))
             .collect();
 
@@ -66,9 +64,13 @@ impl ShaderHotReload {
                         println!("Failed to create shader directory: {}", e);
                     });
                 }
-                
+
                 if let Err(e) = watcher.watch(parent, RecursiveMode::Recursive) {
-                    println!("Warning: Could not watch shader directory {}: {}", parent.display(), e);
+                    println!(
+                        "Warning: Could not watch shader directory {}: {}",
+                        parent.display(),
+                        e
+                    );
                     if cfg!(windows) {
                         if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
                             println!("Fallback watch failed: {}", e);
@@ -111,12 +113,9 @@ impl ShaderHotReload {
         let mut watcher = notify::recommended_watcher(move |res: Result<Event, _>| {
             if let Ok(event) = res {
                 match event.kind {
-                    EventKind::Modify(_) |
-                    EventKind::Create(_) |
-                    EventKind::Remove(_)
-                    => {
+                    EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {
                         tx.send(event).unwrap_or_default();
-                    },
+                    }
                     _ => {}
                 }
             }
@@ -131,9 +130,13 @@ impl ShaderHotReload {
                     println!("Failed to create shader directory: {}", e);
                 });
             }
-            
+
             if let Err(e) = watcher.watch(parent, RecursiveMode::Recursive) {
-                println!("Warning: Could not watch shader directory {}: {}", parent.display(), e);
+                println!(
+                    "Warning: Could not watch shader directory {}: {}",
+                    parent.display(),
+                    e
+                );
                 if cfg!(windows) {
                     if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
                         println!("Fallback watch failed: {}", e);
@@ -190,18 +193,18 @@ impl ShaderHotReload {
 
     fn reload_render_shaders(&mut self) -> Option<(&wgpu::ShaderModule, &wgpu::ShaderModule)> {
         let mut should_reload = false;
-        
+
         // Process all pending events
         while let Ok(event) = self.rx.try_recv() {
             for path in event.paths {
                 let now = Instant::now();
-                
+
                 if let Some(last_update) = self.last_update_times.get(&path) {
                     if now.duration_since(*last_update) < self.debounce_duration {
                         continue;
                     }
                 }
-                
+
                 self.last_update_times.insert(path.clone(), now);
                 should_reload = true;
             }
@@ -252,13 +255,13 @@ impl ShaderHotReload {
         while let Ok(event) = self.rx.try_recv() {
             for path in event.paths {
                 let now = Instant::now();
-                
+
                 if let Some(last_update) = self.last_update_times.get(&path) {
                     if now.duration_since(*last_update) < self.debounce_duration {
                         continue;
                     }
                 }
-                
+
                 self.last_update_times.insert(path.clone(), now);
                 should_reload = true;
             }
@@ -275,7 +278,7 @@ impl ShaderHotReload {
                 return None;
             }
         };
-        
+
         if let Some(ref last_content) = self.last_compute_content {
             if compute_content == *last_content {
                 return None;
@@ -286,7 +289,7 @@ impl ShaderHotReload {
             Some(module) => module,
             None => return None,
         };
-        
+
         self.last_compute_content = Some(compute_content);
         self.compute_module = Some(new_compute);
 
@@ -315,11 +318,11 @@ impl ShaderHotReload {
             }
         }
     }
-    
+
     pub fn entry_point(&self) -> Option<&str> {
         self.entry_point.as_deref()
     }
-    
+
     pub fn get_compute_module(&self) -> Option<&wgpu::ShaderModule> {
         self.compute_module.as_ref()
     }

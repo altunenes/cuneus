@@ -18,8 +18,8 @@
 // https://doc.rust-lang.org/cargo/reference/build-scripts.html
 //
 // Note that, installation of Gstreamer is not a hard task (please open issue if you have a trouble), I hope these explanations are not making you feel like it is a hard task. In
-// windows for instance, just download the installer and click next, next, next, finish. That's all, it should automatically set the environment variables for you. 
-// And you will able to use Gstreamer in this project. Bellow is my own configuration for Gstreamer in my mac machine which I used via PKG_CONFIG_PATH. 
+// windows for instance, just download the installer and click next, next, next, finish. That's all, it should automatically set the environment variables for you.
+// And you will able to use Gstreamer in this project. Bellow is my own configuration for Gstreamer in my mac machine which I used via PKG_CONFIG_PATH.
 // You can also use the same configuration in your mac machine. And I strongly recommend you to install it with PKG_CONFIG_PATH.
 // Please see how I build the project in github actions, you can use it as a reference:
 // github.com/altunenes/cuneus/blob/main/.github/workflows/release.yaml

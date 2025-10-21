@@ -1,10 +1,10 @@
 // Photon tracing: currents
 // Very complex example demonstrating multi-buffer ping-pong computation
 // I hope this example is useful for those who came from the Shadertoy, I tried to use same terminology (bufferA, ichannels etc)
-// I used the all buffers (buffera,b,c,d,mainimage) and complex ping-pong logic 
-use cuneus::{Core, ShaderApp, ShaderManager, RenderKit, ShaderControls};
-use cuneus::compute::{ComputeShader, COMPUTE_TEXTURE_FORMAT_RGBA16, PassDescription};
-use cuneus::{UniformProvider, ExportManager};
+// I used the all buffers (buffera,b,c,d,mainimage) and complex ping-pong logic
+use cuneus::compute::{ComputeShader, PassDescription, COMPUTE_TEXTURE_FORMAT_RGBA16};
+use cuneus::{Core, RenderKit, ShaderApp, ShaderControls, ShaderManager};
+use cuneus::{ExportManager, UniformProvider};
 use winit::event::*;
 
 #[repr(C)]
@@ -134,64 +134,71 @@ impl ShaderManager for CurrentsShader {
             .with_label("Currents Multi-Pass")
             .build();
 
-        let mut compute_shader = ComputeShader::from_builder(
-            core,
-            include_str!("shaders/currents.wgsl"),
-            config,
-        );
+        let mut compute_shader =
+            ComputeShader::from_builder(core, include_str!("shaders/currents.wgsl"), config);
 
         // Enable hot reload
         if let Err(e) = compute_shader.enable_hot_reload(
             core.device.clone(),
             std::path::PathBuf::from("examples/shaders/currents.wgsl"),
-            core.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Currents Hot Reload"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/currents.wgsl").into()),
-            }),
+            core.device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Currents Hot Reload"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/currents.wgsl").into()),
+                }),
         ) {
             eprintln!("Failed to enable hot reload for currents shader: {}", e);
         }
 
         let initial_params = CurrentsParams::default();
-        let shader = Self { 
+        let shader = Self {
             base,
             compute_shader,
             current_params: initial_params,
         };
-        
+
         // Initialize custom uniform with default parameters
-        shader.compute_shader.set_custom_params(initial_params, &core.queue);
-        
+        shader
+            .compute_shader
+            .set_custom_params(initial_params, &core.queue);
+
         shader
     }
 
     fn update(&mut self, core: &Core) {
         // Update time
         let current_time = self.base.controls.get_time(&self.base.start_time);
-        let delta = 1.0/60.0;
-        self.compute_shader.set_time(current_time, delta, &core.queue);
-        
+        let delta = 1.0 / 60.0;
+        self.compute_shader
+            .set_time(current_time, delta, &core.queue);
+
         self.base.fps_tracker.update();
-        
+
         // Check for hot reload updates
         self.compute_shader.check_hot_reload(&core.device);
-        // Handle export        
+        // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
     }
 
     fn resize(&mut self, core: &Core) {
         self.base.update_resolution(&core.queue, core.size);
-        self.compute_shader.resize(core, core.size.width, core.size.height);
+        self.compute_shader
+            .resize(core, core.size.width, core.size.height);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
         let output = core.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        
-        let mut controls_request = self.base.controls.get_ui_request(&self.base.start_time, &core.size);
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut controls_request = self
+            .base
+            .controls
+            .get_ui_request(&self.base.start_time, &core.size);
         controls_request.current_fps = Some(self.base.fps_tracker.fps());
 
-        // Handle UI and controls  
+        // Handle UI and controls
         let mut params = self.current_params;
         let mut changed = false;
         let mut should_start_export = false;
@@ -200,11 +207,20 @@ impl ShaderManager for CurrentsShader {
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
                 ctx.style_mut(|style| {
-                    style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
-                    style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;
-                    style.text_styles.get_mut(&egui::TextStyle::Button).unwrap().size = 10.0;
+                    style.visuals.window_fill =
+                        egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
+                    style
+                        .text_styles
+                        .get_mut(&egui::TextStyle::Body)
+                        .unwrap()
+                        .size = 11.0;
+                    style
+                        .text_styles
+                        .get_mut(&egui::TextStyle::Button)
+                        .unwrap()
+                        .size = 10.0;
                 });
-                
+
                 egui::Window::new("Multi-Buffer Ping-Pong Example")
                     .collapsible(true)
                     .resizable(true)
@@ -215,11 +231,17 @@ impl ShaderManager for CurrentsShader {
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label("Mode:");
-                                    if ui.selectable_label(params.pattern_mode < 0.5, "Currents").clicked() {
+                                    if ui
+                                        .selectable_label(params.pattern_mode < 0.5, "Currents")
+                                        .clicked()
+                                    {
                                         params.pattern_mode = 0.0;
                                         changed = true;
                                     }
-                                    if ui.selectable_label(params.pattern_mode >= 0.5, "Mandelbrot").clicked() {
+                                    if ui
+                                        .selectable_label(params.pattern_mode >= 0.5, "Mandelbrot")
+                                        .clicked()
+                                    {
                                         params.pattern_mode = 1.0;
                                         changed = true;
                                     }
@@ -231,38 +253,134 @@ impl ShaderManager for CurrentsShader {
                             egui::CollapsingHeader::new("Sphere Settings")
                                 .default_open(false)
                                 .show(ui, |ui| {
-                                    changed |= ui.add(egui::Slider::new(&mut params.sphere_radius, 0.05..=0.5).text("Sphere Radius")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.sphere_pos_x, -1.0..=1.0).text("Sphere X")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.sphere_pos_y, -1.0..=1.0).text("Sphere Y")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.metallic_reflection, 0.5..=3.0).text("Metallic Reflection")).changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut params.sphere_radius,
+                                                0.05..=0.5,
+                                            )
+                                            .text("Sphere Radius"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(&mut params.sphere_pos_x, -1.0..=1.0)
+                                                .text("Sphere X"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(&mut params.sphere_pos_y, -1.0..=1.0)
+                                                .text("Sphere Y"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut params.metallic_reflection,
+                                                0.5..=3.0,
+                                            )
+                                            .text("Metallic Reflection"),
+                                        )
+                                        .changed();
                                 });
 
                             egui::CollapsingHeader::new("Pattern Control")
                                 .default_open(false)
                                 .show(ui, |ui| {
-                                    changed |= ui.add(egui::Slider::new(&mut params.pattern_scale, 50.0..=300.0).text("Pattern Scale")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.critic2_interval, 5.0..=20.0).text("Flow Interval")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.critic2_pause, 1.0..=10.0).text("Flow Pause")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.critic3_interval, 5.0..=20.0).text("Scale Interval")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.noise_strength, 0.5..=5.0).text("Noise Strength")).changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut params.pattern_scale,
+                                                50.0..=300.0,
+                                            )
+                                            .text("Pattern Scale"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut params.critic2_interval,
+                                                5.0..=20.0,
+                                            )
+                                            .text("Flow Interval"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut params.critic2_pause,
+                                                1.0..=10.0,
+                                            )
+                                            .text("Flow Pause"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut params.critic3_interval,
+                                                5.0..=20.0,
+                                            )
+                                            .text("Scale Interval"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut params.noise_strength,
+                                                0.5..=5.0,
+                                            )
+                                            .text("Noise Strength"),
+                                        )
+                                        .changed();
                                 });
 
                             egui::CollapsingHeader::new("Noise")
                                 .default_open(false)
                                 .show(ui, |ui| {
                                     ui.label("Oscillator 2 (c2):");
-                                    changed |= ui.add(egui::Slider::new(&mut params.c2_min, 1.0..=500.0).text("C2 Min")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.c2_max, 0.1..=10.0).text("C2 Max")).changed();
-                                    
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(&mut params.c2_min, 1.0..=500.0)
+                                                .text("C2 Min"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(&mut params.c2_max, 0.1..=10.0)
+                                                .text("C2 Max"),
+                                        )
+                                        .changed();
+
                                     ui.separator();
                                     ui.label("Oscillator 3 (c3):");
-                                    changed |= ui.add(egui::Slider::new(&mut params.c3_min, 0.1..=10.0).text("C3 Min")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.c3_max, 0.5..=10.0).text("C3 Max")).changed();
-                                    
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(&mut params.c3_min, 0.1..=10.0)
+                                                .text("C3 Min"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(&mut params.c3_max, 0.5..=10.0)
+                                                .text("C3 Max"),
+                                        )
+                                        .changed();
+
                                     ui.separator();
                                     ui.label("FBM Noise:");
-                                    changed |= ui.add(egui::Slider::new(&mut params.fbm_scale, 1.0..=10.0).text("FBM Scale")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.fbm_offset, 0.1..=5.0).text("FBM Offset")).changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(&mut params.fbm_scale, 1.0..=10.0)
+                                                .text("FBM Scale"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(&mut params.fbm_offset, 0.1..=5.0)
+                                                .text("FBM Offset"),
+                                        )
+                                        .changed();
                                 });
                         } else {
                             // MANDELBROT MODE UI
@@ -270,26 +388,86 @@ impl ShaderManager for CurrentsShader {
                                 .default_open(false)
                                 .show(ui, |ui| {
                                     ui.label("Zoom Animation:");
-                                    changed |= ui.add(egui::Slider::new(&mut params.mandel_zoom_min, 0.0001..=0.01).logarithmic(true).text("Zoom Min")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.mandel_zoom_max, 0.0001..=0.01).logarithmic(true).text("Zoom Max")).changed();
-                                    
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut params.mandel_zoom_min,
+                                                0.0001..=0.01,
+                                            )
+                                            .logarithmic(true)
+                                            .text("Zoom Min"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut params.mandel_zoom_max,
+                                                0.0001..=0.01,
+                                            )
+                                            .logarithmic(true)
+                                            .text("Zoom Max"),
+                                        )
+                                        .changed();
+
                                     ui.separator();
                                     ui.label("View Position:");
-                                    changed |= ui.add(egui::Slider::new(&mut params.mandel_pan_x, -2.0..=2.0).text("Pan X")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.mandel_pan_y, -2.0..=2.0).text("Pan Y")).changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(&mut params.mandel_pan_x, -2.0..=2.0)
+                                                .text("Pan X"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(&mut params.mandel_pan_y, -2.0..=2.0)
+                                                .text("Pan Y"),
+                                        )
+                                        .changed();
                                 });
 
                             egui::CollapsingHeader::new("Orbit Traps")
                                 .default_open(false)
                                 .show(ui, |ui| {
                                     ui.label("Trap 1 Position:");
-                                    changed |= ui.add(egui::Slider::new(&mut params.mandel_trap1_x, -2.0..=2.0).text("Trap1 X")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.mandel_trap1_y, -2.0..=2.0).text("Trap1 Y")).changed();
-                                    
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut params.mandel_trap1_x,
+                                                -2.0..=2.0,
+                                            )
+                                            .text("Trap1 X"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut params.mandel_trap1_y,
+                                                -2.0..=2.0,
+                                            )
+                                            .text("Trap1 Y"),
+                                        )
+                                        .changed();
+
                                     ui.separator();
                                     ui.label("Trap 2 Position:");
-                                    changed |= ui.add(egui::Slider::new(&mut params.mandel_trap2_x, -2.0..=2.0).text("Trap2 X")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.mandel_trap2_y, -2.0..=2.0).text("Trap2 Y")).changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut params.mandel_trap2_x,
+                                                -2.0..=2.0,
+                                            )
+                                            .text("Trap2 X"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut params.mandel_trap2_y,
+                                                -2.0..=2.0,
+                                            )
+                                            .text("Trap2 Y"),
+                                        )
+                                        .changed();
                                 });
                         }
 
@@ -298,7 +476,8 @@ impl ShaderManager for CurrentsShader {
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label("Gradient:");
-                                    let mut color = [params.gradient_r, params.gradient_g, params.gradient_b];
+                                    let mut color =
+                                        [params.gradient_r, params.gradient_g, params.gradient_b];
                                     if ui.color_edit_button_rgb(&mut color).changed() {
                                         params.gradient_r = color[0];
                                         params.gradient_g = color[1];
@@ -306,10 +485,14 @@ impl ShaderManager for CurrentsShader {
                                         changed = true;
                                     }
                                 });
-                                
+
                                 ui.horizontal(|ui| {
                                     ui.label("Lines:");
-                                    let mut color = [params.line_color_r, params.line_color_g, params.line_color_b];
+                                    let mut color = [
+                                        params.line_color_r,
+                                        params.line_color_g,
+                                        params.line_color_b,
+                                    ];
                                     if ui.color_edit_button_rgb(&mut color).changed() {
                                         params.line_color_r = color[0];
                                         params.line_color_g = color[1];
@@ -317,24 +500,51 @@ impl ShaderManager for CurrentsShader {
                                         changed = true;
                                     }
                                 });
-                                
+
                                 ui.separator();
-                                changed |= ui.add(egui::Slider::new(&mut params.gradient_intensity, 0.1..=2.0).text("Gradient Intensity")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.line_intensity_final, 0.1..=2.0).text("Line Final Intensity")).changed();
-                                
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut params.gradient_intensity,
+                                            0.1..=2.0,
+                                        )
+                                        .text("Gradient Intensity"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut params.line_intensity_final,
+                                            0.1..=2.0,
+                                        )
+                                        .text("Line Final Intensity"),
+                                    )
+                                    .changed();
+
                                 ui.separator();
-                                changed |= ui.add(egui::Slider::new(&mut params.line_intensity, 0.1..=3.0).text("Line Intensity")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.gamma, 0.1..=4.0).text("Gamma Correction")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.line_intensity, 0.1..=3.0)
+                                            .text("Line Intensity"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.gamma, 0.1..=4.0)
+                                            .text("Gamma Correction"),
+                                    )
+                                    .changed();
                             });
-                        
+
                         ui.separator();
-                        
+
                         ShaderControls::render_controls_widget(ui, &mut controls_request);
-                        
+
                         ui.separator();
-                        
-                        should_start_export = ExportManager::render_export_ui_widget(ui, &mut export_request);
-                        
+
+                        should_start_export =
+                            ExportManager::render_export_ui_widget(ui, &mut export_request);
+
                         ui.separator();
                         ui.label(format!("Frame: {}", self.compute_shader.current_frame));
                     });
@@ -361,9 +571,11 @@ impl ShaderManager for CurrentsShader {
         }
 
         // Create command encoder
-        let mut encoder = core.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Currents Render Encoder"),
-        });
+        let mut encoder = core
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Currents Render Encoder"),
+            });
 
         self.compute_shader.dispatch(&mut encoder, core);
 
@@ -383,22 +595,31 @@ impl ShaderManager for CurrentsShader {
             render_pass.draw(0..4, 0..1);
         }
 
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
+        self.base
+            .handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(Some(encoder.finish()));
         output.present();
-        
+
         // Flip ping-pong buffers for next frame
         self.compute_shader.flip_buffers();
-        
+
         Ok(())
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self.base.egui_state.on_window_event(core.window(), event).consumed {
+        if self
+            .base
+            .egui_state
+            .on_window_event(core.window(), event)
+            .consumed
+        {
             return true;
         }
         if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self.base.key_handler.handle_keyboard_input(core.window(), event);
+            return self
+                .base
+                .key_handler
+                .handle_keyboard_input(core.window(), event);
         }
         false
     }
@@ -407,8 +628,6 @@ impl ShaderManager for CurrentsShader {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let (app, event_loop) = ShaderApp::new("Photon Tracing", 800, 600);
-    
-    app.run(event_loop, |core| {
-        CurrentsShader::init(core)
-    })
+
+    app.run(event_loop, |core| CurrentsShader::init(core))
 }

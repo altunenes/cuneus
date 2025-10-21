@@ -1,5 +1,5 @@
-use cuneus::prelude::*;
 use cuneus::compute::*;
+use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
 #[repr(C)]
@@ -101,7 +101,7 @@ impl ShaderManager for RorschachShader {
             color2_g: 0.5,
             color2_b: 1.0,
         };
-        
+
         let mut config = ComputeShader::builder()
             .with_entry_point("Splat")
             .with_custom_uniforms::<RorschachParams>()
@@ -110,30 +110,28 @@ impl ShaderManager for RorschachShader {
             .with_texture_format(COMPUTE_TEXTURE_FORMAT_RGBA16)
             .with_label("Rorschach IFS Unified")
             .build();
-            
+
         // Add second entry point manually (no ping-pong needed)
         config.entry_points.push("main_image".to_string());
 
-        let mut compute_shader = ComputeShader::from_builder(
-            core,
-            include_str!("shaders/rorschach.wgsl"),
-            config,
-        );
+        let mut compute_shader =
+            ComputeShader::from_builder(core, include_str!("shaders/rorschach.wgsl"), config);
 
         // Enable hot reload
         if let Err(e) = compute_shader.enable_hot_reload(
             core.device.clone(),
             std::path::PathBuf::from("examples/shaders/rorschach.wgsl"),
-            core.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Rorschach Hot Reload"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/rorschach.wgsl").into()),
-            }),
+            core.device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Rorschach Hot Reload"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/rorschach.wgsl").into()),
+                }),
         ) {
             eprintln!("Failed to enable hot reload for Rorschach shader: {}", e);
         }
 
         compute_shader.set_custom_params(initial_params, &core.queue);
-        
+
         Self {
             base,
             compute_shader,
@@ -144,23 +142,25 @@ impl ShaderManager for RorschachShader {
     fn update(&mut self, core: &Core) {
         // Check for hot reload updates
         self.compute_shader.check_hot_reload(&core.device);
-        // Handle export        
+        // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
-        
+
         self.base.update_mouse_uniform(&core.queue);
         self.base.fps_tracker.update();
     }
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
         let output = core.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let mut params = self.current_params;
         let mut changed = false;
         let mut should_start_export = false;
         let mut export_request = self.base.export_manager.get_ui_request();
-        let mut controls_request = self.base.controls.get_ui_request(
-            &self.base.start_time,
-            &core.size
-        );
+        let mut controls_request = self
+            .base
+            .controls
+            .get_ui_request(&self.base.start_time, &core.size);
         controls_request.current_fps = Some(self.base.fps_tracker.fps());
         if self.base.mouse_tracker.uniform.buttons[0] & 1 != 0 {
             params.rotation_x = self.base.mouse_tracker.uniform.position[0];
@@ -176,42 +176,110 @@ impl ShaderManager for RorschachShader {
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
                 ctx.style_mut(|style| {
-                    style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
-                    style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;
-                    style.text_styles.get_mut(&egui::TextStyle::Button).unwrap().size = 10.0;
+                    style.visuals.window_fill =
+                        egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
+                    style
+                        .text_styles
+                        .get_mut(&egui::TextStyle::Body)
+                        .unwrap()
+                        .size = 11.0;
+                    style
+                        .text_styles
+                        .get_mut(&egui::TextStyle::Button)
+                        .unwrap()
+                        .size = 10.0;
                 });
-                
+
                 egui::Window::new("Rorschach IFS")
                     .collapsible(true)
                     .resizable(true)
                     .default_width(280.0)
                     .show(ctx, |ui| {
-                        
                         egui::CollapsingHeader::new("IFS Matrices")
                             .default_open(false)
                             .show(ui, |ui| {
                                 ui.label("Matrix 1:");
-                                changed |= ui.add(egui::Slider::new(&mut params.m1_scale, 0.1..=1.2).text("Scale")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.m1_y_scale, 0.1..=1.2).text("Y Scale")).changed();
-                                
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.m1_scale, 0.1..=1.2)
+                                            .text("Scale"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.m1_y_scale, 0.1..=1.2)
+                                            .text("Y Scale"),
+                                    )
+                                    .changed();
+
                                 ui.separator();
                                 ui.label("Matrix 2:");
-                                changed |= ui.add(egui::Slider::new(&mut params.m2_scale, 0.1..=1.0).text("Scale")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.m2_shear, -0.5..=0.5).text("Shear")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.m2_shift, -0.5..=0.5).text("Shift")).changed();
-                                
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.m2_scale, 0.1..=1.0)
+                                            .text("Scale"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.m2_shear, -0.5..=0.5)
+                                            .text("Shear"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.m2_shift, -0.5..=0.5)
+                                            .text("Shift"),
+                                    )
+                                    .changed();
+
                                 ui.separator();
                                 ui.label("Matrix 3:");
-                                changed |= ui.add(egui::Slider::new(&mut params.m3_scale, 0.1..=1.0).text("Scale")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.m3_shear, -0.5..=0.5).text("Shear")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.m3_shift, -0.5..=0.5).text("Shift")).changed();
-                                
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.m3_scale, 0.1..=1.0)
+                                            .text("Scale"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.m3_shear, -0.5..=0.5)
+                                            .text("Shear"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.m3_shift, -0.5..=0.5)
+                                            .text("Shift"),
+                                    )
+                                    .changed();
+
                                 ui.separator();
                                 ui.label("Matrix 4 & 5:");
-                                changed |= ui.add(egui::Slider::new(&mut params.m4_scale, 0.1..=1.0).text("M4 Scale")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.m4_shift, -0.5..=0.5).text("M4 Shift")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.m5_scale, 0.1..=1.0).text("M5 Scale")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.m5_shift, -0.5..=0.5).text("M5 Shift")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.m4_scale, 0.1..=1.0)
+                                            .text("M4 Scale"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.m4_shift, -0.5..=0.5)
+                                            .text("M4 Shift"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.m5_scale, 0.1..=1.0)
+                                            .text("M5 Scale"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.m5_shift, -0.5..=0.5)
+                                            .text("M5 Shift"),
+                                    )
+                                    .changed();
                             });
 
                         egui::CollapsingHeader::new("Colors")
@@ -219,7 +287,8 @@ impl ShaderManager for RorschachShader {
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label("Primary:");
-                                    let mut color1 = [params.color1_r, params.color1_g, params.color1_b];
+                                    let mut color1 =
+                                        [params.color1_r, params.color1_g, params.color1_b];
                                     if ui.color_edit_button_rgb(&mut color1).changed() {
                                         params.color1_r = color1[0];
                                         params.color1_g = color1[1];
@@ -229,7 +298,8 @@ impl ShaderManager for RorschachShader {
                                 });
                                 ui.horizontal(|ui| {
                                     ui.label("Secondary:");
-                                    let mut color2 = [params.color2_r, params.color2_g, params.color2_b];
+                                    let mut color2 =
+                                        [params.color2_r, params.color2_g, params.color2_b];
                                     if ui.color_edit_button_rgb(&mut color2).changed() {
                                         params.color2_r = color2[0];
                                         params.color2_g = color2[1];
@@ -242,30 +312,74 @@ impl ShaderManager for RorschachShader {
                         egui::CollapsingHeader::new("Rendering")
                             .default_open(false)
                             .show(ui, |ui| {
-                                changed |= ui.add(egui::Slider::new(&mut params.particle_count, 10000.0..=200000.0).text("Particles")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.scale, 0.1..=3.0).text("Scale")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.brightness, 0.001..=0.01).text("Brightness")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.exposure, 0.5..=3.0).text("Exposure")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.gamma, 0.1..=2.0).text("Gamma")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut params.particle_count,
+                                            10000.0..=200000.0,
+                                        )
+                                        .text("Particles"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.scale, 0.1..=3.0)
+                                            .text("Scale"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.brightness, 0.001..=0.01)
+                                            .text("Brightness"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.exposure, 0.5..=3.0)
+                                            .text("Exposure"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.gamma, 0.1..=2.0)
+                                            .text("Gamma"),
+                                    )
+                                    .changed();
                             });
 
                         egui::CollapsingHeader::new("Depth of Field")
                             .default_open(false)
                             .show(ui, |ui| {
-                                changed |= ui.add(egui::Slider::new(&mut params.dof_amount, 0.0..=2.0).text("DOF Amount")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.dof_focal_dist, 0.0..=1.0).text("Focal Distance")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.dof_amount, 0.0..=2.0)
+                                            .text("DOF Amount"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.dof_focal_dist, 0.0..=1.0)
+                                            .text("Focal Distance"),
+                                    )
+                                    .changed();
                             });
 
                         egui::CollapsingHeader::new("Animation")
                             .default_open(false)
                             .show(ui, |ui| {
-                                changed |= ui.add(egui::Slider::new(&mut params.time_scale, 0.0..=2.0).text("Animation Speed")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.time_scale, 0.0..=2.0)
+                                            .text("Animation Speed"),
+                                    )
+                                    .changed();
                             });
 
                         ui.separator();
                         ShaderControls::render_controls_widget(ui, &mut controls_request);
                         ui.separator();
-                        should_start_export = ExportManager::render_export_ui_widget(ui, &mut export_request);
+                        should_start_export =
+                            ExportManager::render_export_ui_widget(ui, &mut export_request);
                     });
             })
         } else {
@@ -277,16 +391,19 @@ impl ShaderManager for RorschachShader {
             self.clear_buffers(core);
         }
         self.base.apply_control_request(controls_request);
-        
+
         let current_time = self.base.controls.get_time(&self.base.start_time);
-        
-        let mut encoder = core.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
+
+        let mut encoder = core
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
 
         let delta = 1.0 / 60.0;
-        self.compute_shader.set_time(current_time, delta, &core.queue);
-        
+        self.compute_shader
+            .set_time(current_time, delta, &core.queue);
+
         if changed {
             self.current_params = params;
             self.compute_shader.set_custom_params(params, &core.queue);
@@ -298,9 +415,10 @@ impl ShaderManager for RorschachShader {
 
         // Stage 0: Generate and splat particles (workgroup size [256, 1, 1])
         let workgroups = (self.current_params.particle_count as u32 / 256).max(1);
-        self.compute_shader.dispatch_stage_with_workgroups(&mut encoder, 0, [workgroups, 1, 1]);
+        self.compute_shader
+            .dispatch_stage_with_workgroups(&mut encoder, 0, [workgroups, 1, 1]);
 
-        // Stage 1: Render to screen (workgroup size [16, 16, 1])  
+        // Stage 1: Render to screen (workgroup size [16, 16, 1])
         self.compute_shader.dispatch_stage(&mut encoder, core, 1);
 
         {
@@ -310,14 +428,15 @@ impl ShaderManager for RorschachShader {
                 wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                 Some("Display Pass"),
             );
-            
+
             render_pass.set_pipeline(&self.base.renderer.render_pipeline);
             render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
             render_pass.set_bind_group(0, &self.compute_shader.output_texture.bind_group, &[]);
             render_pass.draw(0..4, 0..1);
         }
-        
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
+
+        self.base
+            .handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(Some(encoder.finish()));
         output.present();
 
@@ -325,8 +444,12 @@ impl ShaderManager for RorschachShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        let ui_handled = self.base.egui_state.on_window_event(core.window(), event).consumed;
-        
+        let ui_handled = self
+            .base
+            .egui_state
+            .on_window_event(core.window(), event)
+            .consumed;
+
         if ui_handled {
             return true;
         }
@@ -336,7 +459,10 @@ impl ShaderManager for RorschachShader {
         }
 
         if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self.base.key_handler.handle_keyboard_input(core.window(), event);
+            return self
+                .base
+                .key_handler
+                .handle_keyboard_input(core.window(), event);
         }
 
         false
@@ -344,15 +470,13 @@ impl ShaderManager for RorschachShader {
 
     fn resize(&mut self, core: &Core) {
         self.base.update_resolution(&core.queue, core.size);
-        self.compute_shader.resize(core, core.size.width, core.size.height);
+        self.compute_shader
+            .resize(core, core.size.width, core.size.height);
     }
 }
-
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let (app, event_loop) = cuneus::ShaderApp::new("Rorschach IFS", 800, 600);
-    app.run(event_loop, |core| {
-        RorschachShader::init(core)
-    })
+    app.run(event_loop, |core| RorschachShader::init(core))
 }

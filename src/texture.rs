@@ -12,7 +12,7 @@ impl TextureManager {
         layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let dimensions = image.dimensions();
-        
+
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Shader Texture"),
             size: wgpu::Extent3d {
@@ -29,7 +29,7 @@ impl TextureManager {
         });
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        
+
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,

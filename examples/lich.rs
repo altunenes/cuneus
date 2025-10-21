@@ -1,5 +1,5 @@
-use cuneus::prelude::*;
 use cuneus::compute::*;
+use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
 #[repr(C)]
@@ -42,7 +42,7 @@ impl ShaderManager for LichShader {
 
         let passes = vec![
             PassDescription::new("buffer_a", &[]),
-            PassDescription::new("buffer_b", &["buffer_a", "buffer_b"]), // Self-feedback! 
+            PassDescription::new("buffer_b", &["buffer_a", "buffer_b"]), // Self-feedback!
             PassDescription::new("main_image", &["buffer_b"]),
         ];
 
@@ -53,21 +53,19 @@ impl ShaderManager for LichShader {
             .with_texture_format(cuneus::compute::COMPUTE_TEXTURE_FORMAT_RGBA16)
             .with_label("Lich Lightning")
             .build();
-            
-        let mut compute_shader = ComputeShader::from_builder(
-            core,
-            include_str!("shaders/lich.wgsl"),
-            config,
-        );
+
+        let mut compute_shader =
+            ComputeShader::from_builder(core, include_str!("shaders/lich.wgsl"), config);
 
         // Enable hot reload
         if let Err(e) = compute_shader.enable_hot_reload(
             core.device.clone(),
             std::path::PathBuf::from("examples/shaders/lich.wgsl"),
-            core.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Lich Hot Reload"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/lich.wgsl").into()),
-            }),
+            core.device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Lich Hot Reload"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/lich.wgsl").into()),
+                }),
         ) {
             eprintln!("Failed to enable hot reload for Lich shader: {}", e);
         }
@@ -87,8 +85,8 @@ impl ShaderManager for LichShader {
         // Initialize custom uniform with initial parameters
         compute_shader.set_custom_params(initial_params, &core.queue);
 
-        Self { 
-            base, 
+        Self {
+            base,
             compute_shader,
             current_params: initial_params,
         }
@@ -97,41 +95,59 @@ impl ShaderManager for LichShader {
     fn update(&mut self, core: &Core) {
         // Check for hot reload updates
         self.compute_shader.check_hot_reload(&core.device);
-        // Handle export        
+        // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
-        
+
         // Update time
         let current_time = self.base.controls.get_time(&self.base.start_time);
-        let delta = 1.0/60.0;
-        self.compute_shader.set_time(current_time, delta, &core.queue);
-        
+        let delta = 1.0 / 60.0;
+        self.compute_shader
+            .set_time(current_time, delta, &core.queue);
+
         self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {
-        self.compute_shader.resize(core, core.size.width, core.size.height);
+        self.compute_shader
+            .resize(core, core.size.width, core.size.height);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
         let output = core.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = core.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Lich Render Encoder"),
-        });
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = core
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Lich Render Encoder"),
+            });
 
         let mut params = self.current_params;
         let mut changed = false;
         let mut should_start_export = false;
         let mut export_request = self.base.export_manager.get_ui_request();
-        let mut controls_request = self.base.controls.get_ui_request(&self.base.start_time, &core.size);
+        let mut controls_request = self
+            .base
+            .controls
+            .get_ui_request(&self.base.start_time, &core.size);
         controls_request.current_fps = Some(self.base.fps_tracker.fps());
 
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
                 ctx.style_mut(|style| {
-                    style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
-                    style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;
-                    style.text_styles.get_mut(&egui::TextStyle::Button).unwrap().size = 10.0;
+                    style.visuals.window_fill =
+                        egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
+                    style
+                        .text_styles
+                        .get_mut(&egui::TextStyle::Body)
+                        .unwrap()
+                        .size = 11.0;
+                    style
+                        .text_styles
+                        .get_mut(&egui::TextStyle::Button)
+                        .unwrap()
+                        .size = 10.0;
                 });
 
                 egui::Window::new("Lich Lightning")
@@ -142,10 +158,33 @@ impl ShaderManager for LichShader {
                         egui::CollapsingHeader::new("Lightning Parameters")
                             .default_open(true)
                             .show(ui, |ui| {
-                                changed |= ui.add(egui::Slider::new(&mut params.cloud_density, 0.0..=24.0).text("Seed")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.lightning_intensity, 0.1..=6.0).text("Lightning")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.branch_count, 0.0..=2.0).text("Branch")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.feedback_decay, 0.1..=1.5).text("Decay")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.cloud_density, 0.0..=24.0)
+                                            .text("Seed"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut params.lightning_intensity,
+                                            0.1..=6.0,
+                                        )
+                                        .text("Lightning"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.branch_count, 0.0..=2.0)
+                                            .text("Branch"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.feedback_decay, 0.1..=1.5)
+                                            .text("Decay"),
+                                    )
+                                    .changed();
                             });
 
                         egui::CollapsingHeader::new("Color Settings")
@@ -156,16 +195,27 @@ impl ShaderManager for LichShader {
                                     params.base_color = color;
                                     changed = true;
                                 }
-                                changed |= ui.add(egui::Slider::new(&mut params.color_shift, 0.1..=20.0).text("Temperature")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.spectrum_mix, 0.0..=1.0).text("Spectral")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.color_shift, 0.1..=20.0)
+                                            .text("Temperature"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.spectrum_mix, 0.0..=1.0)
+                                            .text("Spectral"),
+                                    )
+                                    .changed();
                             });
 
                         ui.separator();
                         ShaderControls::render_controls_widget(ui, &mut controls_request);
-                        
+
                         ui.separator();
-                        should_start_export = ExportManager::render_export_ui_widget(ui, &mut export_request);
-                        
+                        should_start_export =
+                            ExportManager::render_export_ui_widget(ui, &mut export_request);
+
                         ui.separator();
                         ui.label("Electric lightning with atomic buffer accumulation");
                     });
@@ -197,7 +247,7 @@ impl ShaderManager for LichShader {
             self.clear_buffers(core);
         }
         self.base.apply_control_request(controls_request.clone());
-        
+
         self.base.export_manager.apply_ui_request(export_request);
         if should_start_export {
             self.base.export_manager.start_export();
@@ -208,7 +258,8 @@ impl ShaderManager for LichShader {
             self.compute_shader.set_custom_params(params, &core.queue);
         }
 
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
+        self.base
+            .handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
@@ -219,11 +270,19 @@ impl ShaderManager for LichShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self.base.egui_state.on_window_event(core.window(), event).consumed {
+        if self
+            .base
+            .egui_state
+            .on_window_event(core.window(), event)
+            .consumed
+        {
             return true;
         }
         if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self.base.key_handler.handle_keyboard_input(core.window(), event);
+            return self
+                .base
+                .key_handler
+                .handle_keyboard_input(core.window(), event);
         }
         false
     }
@@ -232,7 +291,5 @@ impl ShaderManager for LichShader {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let (app, event_loop) = ShaderApp::new("Lich Lightning", 800, 600);
-    app.run(event_loop, |core| {
-        LichShader::init(core)
-    })
+    app.run(event_loop, |core| LichShader::init(core))
 }

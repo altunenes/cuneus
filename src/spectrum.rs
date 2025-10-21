@@ -8,9 +8,9 @@ use wgpu;
 #[cfg(feature = "media")]
 use crate::gst::video::VideoTextureManager;
 #[cfg(feature = "media")]
-use crate::UniformBinding;
-#[cfg(feature = "media")]
 use crate::ResolutionUniform;
+#[cfg(feature = "media")]
+use crate::UniformBinding;
 
 pub struct SpectrumAnalyzer {
     #[cfg(feature = "media")]
@@ -38,19 +38,19 @@ impl SpectrumAnalyzer {
                 resolution_uniform.data.audio_data[i][j] = 0.0;
             }
         }
-        
+
         if using_video_texture {
             if let Some(video_manager) = video_texture_manager {
                 if video_manager.has_audio() {
                     let spectrum_data = video_manager.spectrum_data();
                     resolution_uniform.data.bpm = video_manager.get_bpm();
                     info!("BPM: {}", resolution_uniform.data.bpm);
-                    
+
                     if !spectrum_data.magnitudes.is_empty() {
                         let bands = spectrum_data.bands;
                         // Highly sensitive threshold for detecting subtle high frequencies
                         let threshold: f32 = -60.0;
-                        
+
                         // Process only first 64 bands (note that, we actually have 128 but its expensiive)
                         for i in 0..64 {
                             let band_percent = i as f32 / 64.0;
@@ -59,7 +59,7 @@ impl SpectrumAnalyzer {
                             // Use narrow width for all frequencies for accuracy
                             let width = 1;
                             let end_idx = (source_idx + width).min(bands);
-                            
+
                             if source_idx < bands {
                                 // Get peak value in this range
                                 let mut peak: f32 = -120.0;
@@ -70,7 +70,8 @@ impl SpectrumAnalyzer {
                                     }
                                 }
                                 // Map from dB scale to 0-1
-                                let normalized = ((peak - threshold) / -threshold).max(0.0).min(1.0);
+                                let normalized =
+                                    ((peak - threshold) / -threshold).max(0.0).min(1.0);
                                 // Apply frequency-specific processing that's balanced
                                 // Lower boost for bass, higher boost for treble
                                 let enhanced = if band_percent < 0.2 {
@@ -90,7 +91,7 @@ impl SpectrumAnalyzer {
                                     // The critical adjustment for high frequency sensitivity
                                     (normalized.powf(0.4) * 3.0).min(1.0)
                                 };
-                                
+
                                 // No minimum thresholds - let silent frequencies be silent
                                 // Temporal smoothing with frequency-specific parameters
                                 let vec_idx = i / 4;
@@ -98,34 +99,27 @@ impl SpectrumAnalyzer {
                                 if vec_idx < 32 {
                                     let prev_value = self.prev_audio_data[vec_idx][vec_component];
                                     // Fast attack for all frequencies - slightly faster for highs
-                                    let attack = if band_percent < 0.6 {
-                                        0.6 
-                                    } else {
-                                        0.7 
-                                    };
-                                    let decay = if band_percent < 0.6 {
-                                        0.3 
-                                    } else {
-                                        0.25 
-                                    };
-                                    
+                                    let attack = if band_percent < 0.6 { 0.6 } else { 0.7 };
+                                    let decay = if band_percent < 0.6 { 0.3 } else { 0.25 };
+
                                     // Apply smoothing
                                     let smoothing_factor = if enhanced > prev_value {
-                                        attack  // Rising
+                                        attack // Rising
                                     } else {
-                                        decay   // Falling
+                                        decay // Falling
                                     };
                                     // Calculate smoothed value
-                                    let smoothed = prev_value * (1.0 - smoothing_factor) + 
-                                                  enhanced * smoothing_factor;
+                                    let smoothed = prev_value * (1.0 - smoothing_factor)
+                                        + enhanced * smoothing_factor;
                                     // Store the result
-                                    resolution_uniform.data.audio_data[vec_idx][vec_component] = smoothed;
+                                    resolution_uniform.data.audio_data[vec_idx][vec_component] =
+                                        smoothed;
                                     // Store for next frame
                                     self.prev_audio_data[vec_idx][vec_component] = smoothed;
                                 }
                             }
                         }
-                        
+
                         // Beat detection with balanced boost across frequency spectrum
                         let mut bass_energy: f32 = 0.0;
                         let bass_bands = 64 / 16;
@@ -135,16 +129,16 @@ impl SpectrumAnalyzer {
                             }
                         }
                         bass_energy /= bass_bands as f32;
-                        
+
                         // If we detect a beat, provide progressive boost to mid/high frequencies
                         if bass_energy > 0.5 {
-                            // First quarter - bass 
+                            // First quarter - bass
                             let q1 = 16 / 4;
                             // Second quarter - low-mids
                             let q2 = 16 / 2;
                             // Third quarter - upper-mids
                             let q3 = 3 * 16 / 4;
-                            
+
                             for i in 0..16 {
                                 for j in 0..4 {
                                     if i < q1 {
@@ -167,7 +161,7 @@ impl SpectrumAnalyzer {
                     }
                 }
             }
-            
+
             resolution_uniform.update(queue);
         }
     }

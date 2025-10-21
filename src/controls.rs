@@ -1,17 +1,17 @@
-use std::path::PathBuf;
 #[cfg(feature = "media")]
 use crate::gst::video::VideoTextureManager;
 use crate::hdri::HdriMetadata;
+use std::path::PathBuf;
 #[derive(Clone)]
 pub struct ControlsRequest {
     pub is_paused: bool,
     pub should_reset: bool,
-    pub should_clear_buffers: bool,  
-    pub current_time: Option<f32>, 
+    pub should_clear_buffers: bool,
+    pub current_time: Option<f32>,
     pub window_size: Option<(u32, u32)>,
-    
+
     pub current_fps: Option<f32>,
-    
+
     // Video reqs
     pub load_media_path: Option<PathBuf>,
     pub play_video: bool,
@@ -19,7 +19,7 @@ pub struct ControlsRequest {
     pub restart_video: bool,
     pub seek_position: Option<f64>,
     pub set_loop: Option<bool>,
-    
+
     // Audio reqs
     pub set_volume: Option<f64>,
     pub mute_audio: Option<bool>,
@@ -37,7 +37,7 @@ pub struct ControlsRequest {
 impl Default for ControlsRequest {
     fn default() -> Self {
         let mut default_media = None;
-        let mut should_play_video=false;
+        let mut should_play_video = false;
         if let Ok(media_dir) = std::env::var("CUNEUS_MEDIA") {
             println!("CUNEUS_MEDIA: {}", media_dir);
             if media_dir.starts_with('"') && media_dir.ends_with('"') {
@@ -54,9 +54,9 @@ impl Default for ControlsRequest {
             should_clear_buffers: false,
             current_time: None,
             window_size: None,
-            
+
             current_fps: None,
-            
+
             // Video-related stuff
             load_media_path: default_media,
             play_video: should_play_video,
@@ -64,7 +64,7 @@ impl Default for ControlsRequest {
             restart_video: false,
             seek_position: None,
             set_loop: None,
-            
+
             // Audio-related stuff
             set_volume: None,
             mute_audio: None,
@@ -84,7 +84,16 @@ impl Default for ControlsRequest {
 
 /// VideoInfo type alias
 /// (duration, position, dimensions, framerate, is_looping, has_audio, volume, is_muted)
-pub type VideoInfo = (Option<f32>, f32, (u32, u32), Option<f32>, bool, bool, f64, bool);
+pub type VideoInfo = (
+    Option<f32>,
+    f32,
+    (u32, u32),
+    Option<f32>,
+    bool,
+    bool,
+    f64,
+    bool,
+);
 
 pub struct ShaderControls {
     is_paused: bool,
@@ -110,7 +119,7 @@ impl ShaderControls {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     pub fn get_frame(&mut self) -> u32 {
         if !self.is_paused {
             self.current_frame = self.current_frame.wrapping_add(1);
@@ -130,8 +139,12 @@ impl ShaderControls {
             raw_time - self.total_pause_duration
         }
     }
-    
-    pub fn get_ui_request(&mut self, start_time: &std::time::Instant, size: &winit::dpi::PhysicalSize<u32>) -> ControlsRequest {
+
+    pub fn get_ui_request(
+        &mut self,
+        start_time: &std::time::Instant,
+        size: &winit::dpi::PhysicalSize<u32>,
+    ) -> ControlsRequest {
         let mut load_media_path = None;
         let mut play_video = false;
         if !self.media_loaded_once {
@@ -173,7 +186,7 @@ impl ShaderControls {
             webcam_device_index: None,
         }
     }
-    
+
     pub fn apply_ui_request(&mut self, request: ControlsRequest) {
         if request.should_reset {
             self.is_paused = false;
@@ -208,7 +221,7 @@ impl ShaderControls {
                     vm.is_looping(),
                     vm.has_audio(),
                     vm.volume(),
-                    vm.is_muted()
+                    vm.is_muted(),
                 ))
             } else {
                 None
@@ -219,16 +232,15 @@ impl ShaderControls {
     }
     ///media control panel (image, video, hdri)
     pub fn render_media_panel(
-        ui: &mut egui::Ui, 
+        ui: &mut egui::Ui,
         request: &mut ControlsRequest,
         using_video_texture: bool,
         video_info: Option<VideoInfo>,
-        using_hdri_texture: bool, 
-       hdri_info: Option<HdriMetadata>,
+        using_hdri_texture: bool,
+        hdri_info: Option<HdriMetadata>,
         using_webcam_texture: bool,
         webcam_info: Option<(u32, u32)>,
     ) {
-
         ui.group(|ui| {
             ui.horizontal(|ui| {
                 ui.heading("Media");
@@ -242,68 +254,90 @@ impl ShaderControls {
                             request.start_webcam = true;
                         }
                     }
-                    
+
                     if ui.button("Load").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Media Files", &["png", "jpg", "jpeg", "mp4", "avi", "mkv", "webm", "mov"])
+                            .add_filter(
+                                "Media Files",
+                                &["png", "jpg", "jpeg", "mp4", "avi", "mkv", "webm", "mov"],
+                            )
                             .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "tiff"])
                             .add_filter("Videos", &["mp4", "avi", "mkv", "webm", "mov"])
-                            .add_filter("HDRI", &["hdr","exr"])
-                            .pick_file() 
+                            .add_filter("HDRI", &["hdr", "exr"])
+                            .pick_file()
                         {
                             request.load_media_path = Some(path);
                         }
                     }
                 });
             });
-            
+
             // Only show video controls if we're using a video texture
-            if using_video_texture{
+            if using_video_texture {
                 ui.collapsing("Controls", |ui| {
                     // Main video controls
                     ui.horizontal(|ui| {
                         if ui.button("⏵").clicked() {
                             request.play_video = true;
                         }
-                        
+
                         if ui.button("⏸").clicked() {
                             request.pause_video = true;
                         }
-                        
+
                         if ui.button("⏮").clicked() {
                             request.restart_video = true;
                         }
                     });
-                    
-                    if let Some((duration_opt, position_secs, dimensions, framerate_opt, is_looping, has_audio, volume, is_muted)) = video_info {
+
+                    if let Some((
+                        duration_opt,
+                        position_secs,
+                        dimensions,
+                        framerate_opt,
+                        is_looping,
+                        has_audio,
+                        volume,
+                        is_muted,
+                    )) = video_info
+                    {
                         ui.separator();
-                        
+
                         if let Some(duration_secs) = duration_opt {
-                            ui.label(format!("Position: {:.1}s / {:.1}s", position_secs, duration_secs));
-                            
+                            ui.label(format!(
+                                "Position: {:.1}s / {:.1}s",
+                                position_secs, duration_secs
+                            ));
+
                             let mut pos = position_secs;
-                            if ui.add(egui::Slider::new(&mut pos, 0.0..=duration_secs)
-                                .text("Timeline"))
-                                .changed() 
+                            if ui
+                                .add(
+                                    egui::Slider::new(&mut pos, 0.0..=duration_secs)
+                                        .text("Timeline"),
+                                )
+                                .changed()
                             {
                                 request.seek_position = Some(pos as f64);
                             }
                         }
-                        
+
                         // only show if video has audio
                         if has_audio {
                             ui.separator();
                             ui.heading("Audio");
-                            
+
                             let mut vol = volume;
-                            if ui.add(egui::Slider::new(&mut vol, 0.0..=1.0)
-                                .text("Volume")
-                                .show_value(true))
+                            if ui
+                                .add(
+                                    egui::Slider::new(&mut vol, 0.0..=1.0)
+                                        .text("Volume")
+                                        .show_value(true),
+                                )
                                 .changed()
                             {
                                 request.set_volume = Some(vol);
                             }
-                            
+
                             ui.horizontal(|ui| {
                                 let mut muted = is_muted;
                                 if ui.checkbox(&mut muted, "Mute").changed() {
@@ -311,16 +345,16 @@ impl ShaderControls {
                                 }
                             });
                         }
-                        
+
                         ui.separator();
-                        
+
                         ui.collapsing("Properties", |ui| {
                             ui.label(format!("Dimensions: {}x{}", dimensions.0, dimensions.1));
-                            
+
                             if let Some(fps) = framerate_opt {
                                 ui.label(format!("Framerate: {:.2} fps", fps));
                             }
-                            
+
                             let mut looping = is_looping;
                             if ui.checkbox(&mut looping, "Loop").changed() {
                                 request.set_loop = Some(looping);
@@ -334,22 +368,28 @@ impl ShaderControls {
                     }
                 });
             }
-        if using_hdri_texture {
-            ui.collapsing("HDRI Settings", |ui| {
-                if let Some(hdri_metadata) = &hdri_info { 
-                        ui.label(format!("Dimensions: {}x{}", hdri_metadata.width, hdri_metadata.height));
+            if using_hdri_texture {
+                ui.collapsing("HDRI Settings", |ui| {
+                    if let Some(hdri_metadata) = &hdri_info {
+                        ui.label(format!(
+                            "Dimensions: {}x{}",
+                            hdri_metadata.width, hdri_metadata.height
+                        ));
                         ui.label("Type: High Dynamic Range Image");
                         let mut exposure = hdri_metadata.exposure;
-                        if ui.add(egui::Slider::new(&mut exposure, 0.1..=6.28)
-                            .text("Exposure")
-                            .logarithmic(true))
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut exposure, 0.1..=6.28)
+                                    .text("Exposure")
+                                    .logarithmic(true),
+                            )
                             .changed()
                         {
                             request.hdri_exposure = Some(exposure);
                         }
                         let mut gamma = hdri_metadata.gamma;
-                        if ui.add(egui::Slider::new(&mut gamma, 0.1..=6.28)
-                            .text("Gamma"))
+                        if ui
+                            .add(egui::Slider::new(&mut gamma, 0.1..=6.28).text("Gamma"))
                             .changed()
                         {
                             request.hdri_gamma = Some(gamma);
@@ -359,31 +399,38 @@ impl ShaderControls {
                     }
                 });
             }
-        if using_webcam_texture {
-            ui.collapsing("Webcam Settings", |ui| {
-                if let Some((width, height)) = webcam_info {
-                    ui.label(format!("Resolution: {}x{}", width, height));
-                    ui.label("Type: Live Camera Feed");
-                    ui.label("Status: Active");
-                } else {
-                    ui.label("Webcam information not available");
-                }
-            });
-        }
+            if using_webcam_texture {
+                ui.collapsing("Webcam Settings", |ui| {
+                    if let Some((width, height)) = webcam_info {
+                        ui.label(format!("Resolution: {}x{}", width, height));
+                        ui.label("Type: Live Camera Feed");
+                        ui.label("Status: Active");
+                    } else {
+                        ui.label("Webcam information not available");
+                    }
+                });
+            }
         });
     }
 
     pub fn render_controls_widget(ui: &mut egui::Ui, request: &mut ControlsRequest) {
-        ui.vertical(|ui| { 
+        ui.vertical(|ui| {
             ui.horizontal(|ui| {
-                if ui.button(if request.is_paused { "▶ Resume" } else { "⏸ Pause" }).clicked() {
+                if ui
+                    .button(if request.is_paused {
+                        "▶ Resume"
+                    } else {
+                        "⏸ Pause"
+                    })
+                    .clicked()
+                {
                     request.is_paused = !request.is_paused;
                 }
                 if ui.button("↺ Reset").clicked() {
                     request.should_reset = true;
                     request.should_clear_buffers = true;
                 }
-                if let Some(time) = request.current_time { 
+                if let Some(time) = request.current_time {
                     ui.label(format!("Time: {:.2}s", time));
                 }
                 if let Some(fps) = request.current_fps {

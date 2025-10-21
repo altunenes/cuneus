@@ -1,6 +1,6 @@
-use winit::window::Window;
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::Key;
+use winit::window::Window;
 
 pub struct KeyInputHandler {
     is_fullscreen: bool,

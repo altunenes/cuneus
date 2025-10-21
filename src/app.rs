@@ -1,10 +1,10 @@
 use crate::{Core, ShaderManager};
 use winit::{
-    event::*,
-    event_loop::{EventLoop, ActiveEventLoop},
-    window::WindowAttributes,
-    dpi::LogicalSize,
     application::ApplicationHandler,
+    dpi::LogicalSize,
+    event::*,
+    event_loop::{ActiveEventLoop, EventLoop},
+    window::WindowAttributes,
 };
 
 pub struct ShaderApp {
@@ -25,7 +25,7 @@ impl ShaderApp {
             window_size: (width, height),
             core: None,
         };
-        
+
         (app, event_loop)
     }
 
@@ -40,7 +40,7 @@ impl ShaderApp {
             shader: None,
             first_render: true,
         };
-        
+
         Ok(event_loop.run_app(&mut handler)?)
     }
 
@@ -60,7 +60,10 @@ struct ShaderAppHandler<S: ShaderManager> {
 impl<S: ShaderManager> ApplicationHandler for ShaderAppHandler<S> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window_attributes = WindowAttributes::default()
-            .with_inner_size(LogicalSize::new(self.app.window_size.0, self.app.window_size.1))
+            .with_inner_size(LogicalSize::new(
+                self.app.window_size.0,
+                self.app.window_size.1,
+            ))
             .with_title(&self.app.window_title)
             .with_resizable(true);
         let window = event_loop
@@ -73,7 +76,7 @@ impl<S: ShaderManager> ApplicationHandler for ShaderAppHandler<S> {
             let shader = shader_creator(&core);
             self.shader = Some(shader);
         }
-        
+
         self.app.core = Some(core);
     }
 
@@ -126,7 +129,7 @@ impl<S: ShaderManager> ApplicationHandler for ShaderAppHandler<S> {
             core.window().request_redraw();
         }
     }
-    
+
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: StartCause) {
         // No special handling needed for new events
     }

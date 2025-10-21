@@ -5,8 +5,7 @@ pub struct Vertex {
     pub position: [f32; 2],
 }
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 1] =
-        wgpu::vertex_attr_array![0 => Float32x2];
+    const ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32x2];
 
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -44,10 +43,18 @@ impl Renderer {
         fragment_entry: Option<&str>,
     ) -> Self {
         const VERTICES: &[Vertex] = &[
-            Vertex { position: [-1.0, -1.0] },
-            Vertex { position: [1.0, -1.0] },
-            Vertex { position: [-1.0, 1.0] },
-            Vertex { position: [1.0, 1.0] },
+            Vertex {
+                position: [-1.0, -1.0],
+            },
+            Vertex {
+                position: [1.0, -1.0],
+            },
+            Vertex {
+                position: [-1.0, 1.0],
+            },
+            Vertex {
+                position: [1.0, 1.0],
+            },
         ];
         println!("Creating vertex buffer");
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -63,7 +70,7 @@ impl Renderer {
             }),
             write_mask: wgpu::ColorWrites::ALL,
         })];
-        println!("Creating render pipeline"); 
+        println!("Creating render pipeline");
         let pipeline_desc = wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(layout),

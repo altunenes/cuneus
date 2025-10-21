@@ -1,12 +1,12 @@
-use cuneus::prelude::*;
 use cuneus::compute::*;
+use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct VortexParams {
     a: f32,
-    b: f32, 
+    b: f32,
     c: f32,
     dof_amount: f32,
     dof_focal_dist: f32,
@@ -47,22 +47,22 @@ impl ShaderManager for VortexShader {
         let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
 
         let initial_params = VortexParams {
-            a: 1.0,                   // Tunnel speed
-            b: 1.1,                   // Rotation speed
-            c: 0.3,                   // Noise strength
+            a: 1.0, // Tunnel speed
+            b: 1.1, // Rotation speed
+            c: 0.3, // Noise strength
             dof_amount: 0.0,
             dof_focal_dist: 0.96,
             brightness: 0.02,
-            color1_r: 0.1,            // Blue base
+            color1_r: 0.1, // Blue base
             color1_g: 0.3,
             color1_b: 0.7,
-            color2_r: 0.8,            // Orange/red energy
+            color2_r: 0.8, // Orange/red energy
             color2_g: 0.4,
             color2_b: 0.2,
             zoom: 1.0,
-            camera_rotation_x: 0.0,   // Manual camera X rotation
-            camera_rotation_y: 0.5,   // Manual camera Y rotation
-            camera_auto_rotate: 0.0,  // Disable auto rotation by default
+            camera_rotation_x: 0.0,  // Manual camera X rotation
+            camera_rotation_y: 0.5,  // Manual camera Y rotation
+            camera_auto_rotate: 0.0, // Disable auto rotation by default
             _padding: 0.0,
         };
 
@@ -80,20 +80,18 @@ impl ShaderManager for VortexShader {
         // Add second entry point manually
         config.entry_points.push("main_image".to_string());
 
-        let mut compute_shader = ComputeShader::from_builder(
-            core,
-            include_str!("shaders/vortex.wgsl"),
-            config,
-        );
+        let mut compute_shader =
+            ComputeShader::from_builder(core, include_str!("shaders/vortex.wgsl"), config);
 
         // Enable hot reload
         if let Err(e) = compute_shader.enable_hot_reload(
             core.device.clone(),
             std::path::PathBuf::from("examples/shaders/vortex.wgsl"),
-            core.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Vortex Hot Reload"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/vortex.wgsl").into()),
-            }),
+            core.device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Vortex Hot Reload"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/vortex.wgsl").into()),
+                }),
         ) {
             eprintln!("Failed to enable hot reload for vortex shader: {}", e);
         }
@@ -111,42 +109,60 @@ impl ShaderManager for VortexShader {
         // Check for hot reload updates
         self.compute_shader.check_hot_reload(&core.device);
         // Handle export with custom dispatch pattern for vortex
-        self.compute_shader.handle_export_dispatch(core, &mut self.base, |shader, encoder, core| {
-            shader.dispatch_stage_with_workgroups(encoder, 0, [4096, 1, 1]);
-            shader.dispatch_stage(encoder, core, 1);
-        });
+        self.compute_shader.handle_export_dispatch(
+            core,
+            &mut self.base,
+            |shader, encoder, core| {
+                shader.dispatch_stage_with_workgroups(encoder, 0, [4096, 1, 1]);
+                shader.dispatch_stage(encoder, core, 1);
+            },
+        );
 
         self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {
         self.base.update_resolution(&core.queue, core.size);
-        self.compute_shader.resize(core, core.size.width, core.size.height);
+        self.compute_shader
+            .resize(core, core.size.width, core.size.height);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
         let output = core.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = core.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = core
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
 
         let mut params = self.current_params;
         let mut changed = false;
         let mut should_start_export = false;
         let mut export_request = self.base.export_manager.get_ui_request();
-        let mut controls_request = self.base.controls.get_ui_request(
-            &self.base.start_time,
-            &core.size
-        );
+        let mut controls_request = self
+            .base
+            .controls
+            .get_ui_request(&self.base.start_time, &core.size);
 
         controls_request.current_fps = Some(self.base.fps_tracker.fps());
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
                 ctx.style_mut(|style| {
-                    style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
-                    style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;
-                    style.text_styles.get_mut(&egui::TextStyle::Button).unwrap().size = 10.0;
+                    style.visuals.window_fill =
+                        egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
+                    style
+                        .text_styles
+                        .get_mut(&egui::TextStyle::Body)
+                        .unwrap()
+                        .size = 11.0;
+                    style
+                        .text_styles
+                        .get_mut(&egui::TextStyle::Button)
+                        .unwrap()
+                        .size = 10.0;
                 });
 
                 egui::Window::new("Vortex")
@@ -157,31 +173,73 @@ impl ShaderManager for VortexShader {
                         egui::CollapsingHeader::new("Tunnel Parameters")
                             .default_open(true)
                             .show(ui, |ui| {
-                                changed |= ui.add(egui::Slider::new(&mut params.a, 0.0..=3.0).text("Tunnel Speed")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.b, 0.0..=3.0).text("Rotation Speed")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.c, 0.0..=1.0).text("Noise Strength")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.a, 0.0..=3.0)
+                                            .text("Tunnel Speed"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.b, 0.0..=3.0)
+                                            .text("Rotation Speed"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.c, 0.0..=1.0)
+                                            .text("Noise Strength"),
+                                    )
+                                    .changed();
                                 ui.separator();
                             });
 
                         egui::CollapsingHeader::new("Visuals")
                             .default_open(false)
                             .show(ui, |ui| {
-                                changed |= ui.add(egui::Slider::new(&mut params.brightness, 0.001..=0.1).logarithmic(true).text("Brightness")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.brightness, 0.001..=0.1)
+                                            .logarithmic(true)
+                                            .text("Brightness"),
+                                    )
+                                    .changed();
                                 ui.separator();
                             });
 
                         egui::CollapsingHeader::new("Camera")
                             .default_open(false)
                             .show(ui, |ui| {
-                                changed |= ui.add(egui::Slider::new(&mut params.camera_rotation_x, -2.0..=2.0).text("Camera X Rotation")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.camera_rotation_y, -2.0..=2.0).text("Camera Y Rotation")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.zoom, 0.1..=5.0).text("Zoom")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut params.camera_rotation_x,
+                                            -2.0..=2.0,
+                                        )
+                                        .text("Camera X Rotation"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut params.camera_rotation_y,
+                                            -2.0..=2.0,
+                                        )
+                                        .text("Camera Y Rotation"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.zoom, 0.1..=5.0).text("Zoom"),
+                                    )
+                                    .changed();
 
                                 ui.horizontal(|ui| {
                                     ui.label("Auto Rotate:");
                                     let mut auto_rotate = params.camera_auto_rotate > 0.5;
                                     if ui.checkbox(&mut auto_rotate, "").changed() {
-                                        params.camera_auto_rotate = if auto_rotate { 1.0 } else { 0.0 };
+                                        params.camera_auto_rotate =
+                                            if auto_rotate { 1.0 } else { 0.0 };
                                         changed = true;
                                     }
                                 });
@@ -197,8 +255,18 @@ impl ShaderManager for VortexShader {
                         egui::CollapsingHeader::new("Depth of Field")
                             .default_open(false)
                             .show(ui, |ui| {
-                                changed |= ui.add(egui::Slider::new(&mut params.dof_amount, 0.0..=3.0).text("DOF")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.dof_focal_dist, 0.0..=2.0).text("Focal Distance")).changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.dof_amount, 0.0..=3.0)
+                                            .text("DOF"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.dof_focal_dist, 0.0..=2.0)
+                                            .text("Focal Distance"),
+                                    )
+                                    .changed();
                             });
 
                         egui::CollapsingHeader::new("Colors")
@@ -206,7 +274,8 @@ impl ShaderManager for VortexShader {
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label("Tunnel Color:");
-                                    let mut color = [params.color1_r, params.color1_g, params.color1_b];
+                                    let mut color =
+                                        [params.color1_r, params.color1_g, params.color1_b];
                                     if ui.color_edit_button_rgb(&mut color).changed() {
                                         params.color1_r = color[0];
                                         params.color1_g = color[1];
@@ -217,7 +286,8 @@ impl ShaderManager for VortexShader {
 
                                 ui.horizontal(|ui| {
                                     ui.label("Energy Color:");
-                                    let mut color = [params.color2_r, params.color2_g, params.color2_b];
+                                    let mut color =
+                                        [params.color2_r, params.color2_g, params.color2_b];
                                     if ui.color_edit_button_rgb(&mut color).changed() {
                                         params.color2_r = color[0];
                                         params.color2_g = color[1];
@@ -233,7 +303,8 @@ impl ShaderManager for VortexShader {
 
                         ui.separator();
 
-                        should_start_export = ExportManager::render_export_ui_widget(ui, &mut export_request);
+                        should_start_export =
+                            ExportManager::render_export_ui_widget(ui, &mut export_request);
                     });
             })
         } else {
@@ -249,7 +320,8 @@ impl ShaderManager for VortexShader {
         let current_time = self.base.controls.get_time(&self.base.start_time);
 
         let delta = 1.0 / 60.0;
-        self.compute_shader.set_time(current_time, delta, &core.queue);
+        self.compute_shader
+            .set_time(current_time, delta, &core.queue);
 
         if changed {
             self.current_params = params;
@@ -261,7 +333,8 @@ impl ShaderManager for VortexShader {
         }
 
         // Stage 0: Splat tunnel particles (workgroup size [256, 1, 1])
-        self.compute_shader.dispatch_stage_with_workgroups(&mut encoder, 0, [4096, 1, 1]);
+        self.compute_shader
+            .dispatch_stage_with_workgroups(&mut encoder, 0, [4096, 1, 1]);
 
         // Stage 1: Render to screen (workgroup size [16, 16, 1])
         self.compute_shader.dispatch_stage(&mut encoder, core, 1);
@@ -281,19 +354,28 @@ impl ShaderManager for VortexShader {
             render_pass.draw(0..4, 0..1);
         }
 
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
+        self.base
+            .handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(Some(encoder.finish()));
         output.present();
         Ok(())
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self.base.egui_state.on_window_event(core.window(), event).consumed {
+        if self
+            .base
+            .egui_state
+            .on_window_event(core.window(), event)
+            .consumed
+        {
             return true;
         }
 
         if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self.base.key_handler.handle_keyboard_input(core.window(), event);
+            return self
+                .base
+                .key_handler
+                .handle_keyboard_input(core.window(), event);
         }
 
         false
@@ -304,7 +386,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let (app, event_loop) = cuneus::ShaderApp::new("Plasma Vortex", 800, 600);
 
-    app.run(event_loop, |core| {
-        VortexShader::init(core)
-    })
+    app.run(event_loop, |core| VortexShader::init(core))
 }

@@ -1,10 +1,10 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use gst::glib::ControlFlow;
+use gst::prelude::*;
 use gstreamer as gst;
 use log::{debug, info, warn};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use gst::prelude::*;
-use gst::glib::ControlFlow;
 
 /// Individual audio voice for polyphonic synthesis
 /// Based: https://gstreamer.freedesktop.org/documentation/audiotestsrc/index.html?gi-language=c
@@ -50,7 +50,10 @@ impl AudioSynthManager {
         // Support up to 8 simultaneous notes
         let max_voices = 8;
 
-        info!("Creating polyphonic audio synthesis manager with {} voices at {} Hz", max_voices, sample_rate);
+        info!(
+            "Creating polyphonic audio synthesis manager with {} voices at {} Hz",
+            max_voices, sample_rate
+        );
 
         let pipeline = gst::Pipeline::new();
 
@@ -83,14 +86,15 @@ impl AudioSynthManager {
             .map_err(|_| anyhow!("Failed to create autoaudiosink element"))?;
 
         // A mixer and output chain to pipeline
-        pipeline.add_many(&[
-            &audiomixer,
-            &final_convert,
-            &final_resample,
-            &master_volume,
-            &audiosink,
-        ])
-        .map_err(|_| anyhow!("Failed to add output elements to pipeline"))?;
+        pipeline
+            .add_many(&[
+                &audiomixer,
+                &final_convert,
+                &final_resample,
+                &master_volume,
+                &audiosink,
+            ])
+            .map_err(|_| anyhow!("Failed to add output elements to pipeline"))?;
 
         gst::Element::link_many(&[
             &audiomixer,
@@ -113,14 +117,18 @@ impl AudioSynthManager {
         let _ = bus.add_watch(move |_, message| {
             match message.view() {
                 gst::MessageView::Error(err) => {
-                    warn!("Audio pipeline error: {} ({})", err.error(), err.debug().unwrap_or_default());
-                },
+                    warn!(
+                        "Audio pipeline error: {} ({})",
+                        err.error(),
+                        err.debug().unwrap_or_default()
+                    );
+                }
                 gst::MessageView::Warning(warning) => {
                     debug!("Audio pipeline warning: {}", warning.error());
-                },
+                }
                 gst::MessageView::Eos(_) => {
                     info!("Audio pipeline reached end of stream");
-                },
+                }
                 _ => (),
             }
             ControlFlow::Continue
@@ -141,12 +149,17 @@ impl AudioSynthManager {
         Ok(audio_synth)
     }
 
-    fn create_voice(pipeline: &gst::Pipeline, mixer: &gst::Element, voice_id: usize, _sample_rate: u32) -> Result<AudioVoice> {
+    fn create_voice(
+        pipeline: &gst::Pipeline,
+        mixer: &gst::Element,
+        voice_id: usize,
+        _sample_rate: u32,
+    ) -> Result<AudioVoice> {
         // Create audiotestsrc for this voice
         let audiotestsrc = gst::ElementFactory::make("audiotestsrc")
             .name(&format!("voice_{}_source", voice_id))
             .property("freq", 440.0f64)
-            .property("volume", 0.0f64)  // Start silent
+            .property("volume", 0.0f64) // Start silent
             .property("samplesperbuffer", 512i32)
             .property("is-live", true)
             .build()
@@ -173,25 +186,17 @@ impl AudioSynthManager {
             .map_err(|_| anyhow!("Failed to create volume for voice {}", voice_id))?;
 
         //voice elements to our pipeline...
-        pipeline.add_many(&[
-            &audiotestsrc,
-            &audioconvert,
-            &audioresample,
-            &volume,
-        ])
-        .map_err(|_| anyhow!("Failed to add voice {} elements to pipeline", voice_id))?;
+        pipeline
+            .add_many(&[&audiotestsrc, &audioconvert, &audioresample, &volume])
+            .map_err(|_| anyhow!("Failed to add voice {} elements to pipeline", voice_id))?;
 
         // link:
-        gst::Element::link_many(&[
-            &audiotestsrc,
-            &audioconvert,
-            &audioresample,
-            &volume,
-        ])
-        .map_err(|_| anyhow!("Failed to link voice {} elements", voice_id))?;
+        gst::Element::link_many(&[&audiotestsrc, &audioconvert, &audioresample, &volume])
+            .map_err(|_| anyhow!("Failed to link voice {} elements", voice_id))?;
 
         // Connect to mixer
-        volume.link(mixer)
+        volume
+            .link(mixer)
             .map_err(|_| anyhow!("Failed to link voice {} to mixer", voice_id))?;
 
         Ok(AudioVoice {
@@ -211,8 +216,8 @@ impl AudioSynthManager {
             Ok(_) => {
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 Ok(())
-            },
-            Err(e) => Err(anyhow!("Failed to start audio synthesis: {:?}", e))
+            }
+            Err(e) => Err(anyhow!("Failed to start audio synthesis: {:?}", e)),
         }
     }
 
@@ -228,7 +233,7 @@ impl AudioSynthManager {
 
         match self.pipeline.set_state(gst::State::Null) {
             Ok(_) => Ok(()),
-            Err(e) => Err(anyhow!("Failed to stop audio synthesis: {:?}", e))
+            Err(e) => Err(anyhow!("Failed to stop audio synthesis: {:?}", e)),
         }
     }
 
@@ -282,10 +287,13 @@ impl AudioSynthManager {
         voice.frequency = frequency;
         voice.volume_level = volume_level;
         voice.is_active = true;
-         // Not tied to a specific musical note
+        // Not tied to a specific musical note
         voice.note = None;
 
-        info!("Playing frequency {:.2} Hz on voice {}", frequency, voice_id);
+        info!(
+            "Playing frequency {:.2} Hz on voice {}",
+            frequency, voice_id
+        );
         Ok(())
     }
 
@@ -306,7 +314,12 @@ impl AudioSynthManager {
     }
 
     /// Update frequency and amplitude for an already active voice
-    pub fn update_voice_frequency(&mut self, voice_id: usize, frequency: f64, amplitude: f64) -> Result<()> {
+    pub fn update_voice_frequency(
+        &mut self,
+        voice_id: usize,
+        frequency: f64,
+        amplitude: f64,
+    ) -> Result<()> {
         if voice_id >= self.voices.len() {
             return Err(anyhow!("Voice ID {} out of range", voice_id));
         }
@@ -323,7 +336,7 @@ impl AudioSynthManager {
     }
 
     /// Play a note (polyphonic - can play multiple notes simultaneously)
-    /// Little bit tricky, I tried to up to 8 notes at once 
+    /// Little bit tricky, I tried to up to 8 notes at once
     pub fn play_note(&mut self, note: MusicalNote) -> Result<()> {
         // Check if note is already playing
         let mut active_notes = self.active_notes.lock().unwrap();
@@ -436,19 +449,19 @@ pub enum AudioWaveform {
 /// https://www.liutaiomottola.com/formulae/freqtab.htm
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MusicalNote {
-    C4,  // 261.63 Hz
-    CSharp4,  // 277.18 Hz
-    D4,  // 293.66 Hz
-    DSharp4,  // 311.13 Hz
-    E4,  // 329.63 Hz
-    F4,  // 349.23 Hz
-    FSharp4,  // 369.99 Hz
-    G4,  // 392.00 Hz
-    GSharp4,  // 415.30 Hz
-    A4,  // 440.00 Hz
-    ASharp4,  // 466.16 Hz
-    B4,  // 493.88 Hz
-    C5,  // 523.25 Hz
+    C4,      // 261.63 Hz
+    CSharp4, // 277.18 Hz
+    D4,      // 293.66 Hz
+    DSharp4, // 311.13 Hz
+    E4,      // 329.63 Hz
+    F4,      // 349.23 Hz
+    FSharp4, // 369.99 Hz
+    G4,      // 392.00 Hz
+    GSharp4, // 415.30 Hz
+    A4,      // 440.00 Hz
+    ASharp4, // 466.16 Hz
+    B4,      // 493.88 Hz
+    C5,      // 523.25 Hz
 }
 
 impl MusicalNote {
@@ -514,9 +527,7 @@ pub struct AudioDataProvider {
 
 impl AudioDataProvider {
     pub fn new() -> Self {
-        Self {
-            sample_count: 0,
-        }
+        Self { sample_count: 0 }
     }
 
     /// Update with current audio synthesis parameters
@@ -526,21 +537,25 @@ impl AudioDataProvider {
 
     /// Generate audio data array for visualization based on active notes
     /// Maps the 9 keyboard notes (1-9) directly to visualization data
-    pub fn generate_audio_data(&self, active_notes: &[MusicalNote], master_volume: f64) -> [[f32; 4]; 32] {
+    pub fn generate_audio_data(
+        &self,
+        active_notes: &[MusicalNote],
+        master_volume: f64,
+    ) -> [[f32; 4]; 32] {
         let mut audio_data = [[0.0f32; 4]; 32];
 
         // Map notes 1-9 to positions across the audio data array
         // We'll use the first 9 positions to represent keys 1-9
         let note_mapping = [
-            MusicalNote::C4,       // Key 1
-            MusicalNote::D4,       // Key 2
-            MusicalNote::E4,       // Key 3
-            MusicalNote::F4,       // Key 4
-            MusicalNote::G4,       // Key 5
-            MusicalNote::A4,       // Key 6
-            MusicalNote::B4,       // Key 7
-            MusicalNote::C5,       // Key 8
-            MusicalNote::CSharp4,  // Key 9
+            MusicalNote::C4,      // Key 1
+            MusicalNote::D4,      // Key 2
+            MusicalNote::E4,      // Key 3
+            MusicalNote::F4,      // Key 4
+            MusicalNote::G4,      // Key 5
+            MusicalNote::A4,      // Key 6
+            MusicalNote::B4,      // Key 7
+            MusicalNote::C5,      // Key 8
+            MusicalNote::CSharp4, // Key 9
         ];
 
         if master_volume > 0.0 {
@@ -563,15 +578,30 @@ impl AudioDataProvider {
 
                             if array_index < 32 {
                                 // Create a peak with falloff from center
-                                let distance_from_center = (i as f32 - positions_per_note as f32 / 2.0).abs();
-                                let falloff = (1.0 - distance_from_center / (positions_per_note as f32 / 2.0)).max(0.0);
+                                let distance_from_center =
+                                    (i as f32 - positions_per_note as f32 / 2.0).abs();
+                                let falloff = (1.0
+                                    - distance_from_center / (positions_per_note as f32 / 2.0))
+                                    .max(0.0);
                                 let final_amplitude = amplitude * falloff;
 
                                 match component_index {
-                                    0 => audio_data[array_index][0] = (audio_data[array_index][0] + final_amplitude).min(1.0),
-                                    1 => audio_data[array_index][1] = (audio_data[array_index][1] + final_amplitude).min(1.0),
-                                    2 => audio_data[array_index][2] = (audio_data[array_index][2] + final_amplitude).min(1.0),
-                                    3 => audio_data[array_index][3] = (audio_data[array_index][3] + final_amplitude).min(1.0),
+                                    0 => {
+                                        audio_data[array_index][0] =
+                                            (audio_data[array_index][0] + final_amplitude).min(1.0)
+                                    }
+                                    1 => {
+                                        audio_data[array_index][1] =
+                                            (audio_data[array_index][1] + final_amplitude).min(1.0)
+                                    }
+                                    2 => {
+                                        audio_data[array_index][2] =
+                                            (audio_data[array_index][2] + final_amplitude).min(1.0)
+                                    }
+                                    3 => {
+                                        audio_data[array_index][3] =
+                                            (audio_data[array_index][3] + final_amplitude).min(1.0)
+                                    }
                                     _ => {}
                                 }
                             }
@@ -592,7 +622,7 @@ pub struct AudioSynthUniform {
     /// Active note frequencies (up to 16 simultaneous notes) - stored as vec4s for alignment
     pub note_frequencies: [[f32; 4]; 4], // 16 frequencies in 4 vec4s
     /// Individual note amplitudes - stored as vec4s for alignment  
-    pub note_amplitudes: [[f32; 4]; 4],  // 16 amplitudes in 4 vec4s
+    pub note_amplitudes: [[f32; 4]; 4], // 16 amplitudes in 4 vec4s
     /// Master volume level
     pub master_volume: f32,
     /// Current waveform type (0=sine, 1=square, 2=saw, 3=triangle)
@@ -626,7 +656,12 @@ impl AudioSynthUniform {
     }
 
     /// Update with current synthesis state
-    pub fn update_from_synthesis(&mut self, active_notes: &[MusicalNote], master_volume: f64, waveform: AudioWaveform) {
+    pub fn update_from_synthesis(
+        &mut self,
+        active_notes: &[MusicalNote],
+        master_volume: f64,
+        waveform: AudioWaveform,
+    ) {
         // Clear previous data
         for vec4 in &mut self.note_frequencies {
             vec4.fill(0.0);
@@ -667,7 +702,7 @@ pub struct SynthesisManager {
     sample_rate: u32,
     last_update: std::time::Instant,
     synthesis_enabled: bool,
-     // Track which voices are active
+    // Track which voices are active
     active_voices: Vec<bool>,
 }
 
@@ -741,11 +776,11 @@ impl SynthesisManager {
                 self.active_voices[voice_id] = false;
             } else if should_be_active && self.active_voices[voice_id] {
                 // Voice is already active, but update frequency and amplitude
-                let _ = manager.update_voice_frequency(voice_id, frequency as f64, amplitude as f64);
+                let _ =
+                    manager.update_voice_frequency(voice_id, frequency as f64, amplitude as f64);
             }
         }
     }
-
 
     pub fn stream_gpu_samples(&mut self, _samples: &[f32]) {
         // This method is kept for compatibility (my impl on CPAL approach) but not used in GStreamer implementation

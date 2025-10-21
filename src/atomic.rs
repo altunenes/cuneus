@@ -42,7 +42,6 @@ impl AtomicBuffer {
             size: actual_size,
         }
     }
-  
 
     pub fn clear(&self, queue: &wgpu::Queue) {
         let clear_data = vec![0u32; (self.size * 4) as usize];

@@ -1,7 +1,7 @@
-use image::codecs::hdr::HdrDecoder;
-use image::{RgbaImage,ImageDecoder};
-use std::io::Cursor;
 use crate::TextureManager;
+use image::codecs::hdr::HdrDecoder;
+use image::{ImageDecoder, RgbaImage};
+use std::io::Cursor;
 
 #[derive(Clone, Debug, Copy)]
 pub struct HdriMetadata {
@@ -96,7 +96,7 @@ pub fn load_hdri_texture(
 
     let metadata = HdriMetadata {
         width: dimensions.0,
-        height: dimensions.1, 
+        height: dimensions.1,
         exposure,
         gamma,
     };
@@ -105,10 +105,10 @@ pub fn load_hdri_texture(
         TextureManager {
             texture,
             view,
-            sampler, 
+            sampler,
             bind_group,
         },
-        metadata
+        metadata,
     ))
 }
 
@@ -154,9 +154,10 @@ fn hdr_to_rgba8(hdr_data: &[u8], exposure: f32, gamma: Option<f32>) -> Result<Rg
 
 fn exr_to_rgba8(exr_data: &[u8], exposure: f32, gamma: Option<f32>) -> Result<RgbaImage, String> {
     use image::codecs::openexr::OpenExrDecoder;
-    
+
     let cursor = Cursor::new(exr_data);
-    let decoder = OpenExrDecoder::new(cursor).map_err(|e| format!("Failed to decode EXR: {}", e))?;
+    let decoder =
+        OpenExrDecoder::new(cursor).map_err(|e| format!("Failed to decode EXR: {}", e))?;
     let (width, height) = decoder.dimensions();
     let dynamic_img = image::DynamicImage::from_decoder(decoder)
         .map_err(|e| format!("Failed to create DynamicImage from EXR: {}", e))?;
@@ -169,15 +170,15 @@ fn exr_to_rgba8(exr_data: &[u8], exposure: f32, gamma: Option<f32>) -> Result<Rg
         let g_linear = pixel[1] * exposure;
         let b_linear = pixel[2] * exposure;
         let a = pixel[3];
-        
+
         let r = ((r_linear.powf(gamma_correction)).min(1.0) * 255.0) as u8;
         let g = ((g_linear.powf(gamma_correction)).min(1.0) * 255.0) as u8;
         let b = ((b_linear.powf(gamma_correction)).min(1.0) * 255.0) as u8;
         let a = (a.min(1.0) * 255.0) as u8;
-        
+
         rgba8_image.put_pixel(x, y, image::Rgba([r, g, b, a]));
     }
-    
+
     Ok(rgba8_image)
 }
 
