@@ -28,11 +28,11 @@ pub struct ResourceBinding {
 }
 
 #[derive(Debug, Default)]
-pub struct ResourceLayout {
+pub struct ResourceManager {
     pub bindings: Vec<ResourceBinding>,
 }
 
-impl ResourceLayout {
+impl ResourceManager {
     pub fn new() -> Self {
         Self {
             bindings: Vec::new(),
@@ -157,7 +157,7 @@ impl DynamicSize {
 /// @group(1): Primary Pass I/O & Parameters (output texture, shader params, input textures)
 /// @group(2): Global Engine Resources (fonts, audio, atomics, mouse)
 /// @group(3): User-Defined Data Buffers (custom storage buffers)
-impl ResourceLayout {
+impl ResourceManager {
     // GROUP 0: Per-Frame Resources
     pub fn add_time_uniform(&mut self) {
         self.add_resource(0, "time", ResourceType::UniformBuffer { 
@@ -268,20 +268,20 @@ impl ResourceLayout {
 }
 
 /// standard layouts for common shader patterns
-pub fn create_basic_layout() -> ResourceLayout {
-    let mut layout = ResourceLayout::new();
+pub fn create_basic_layout() -> ResourceManager {
+    let mut layout = ResourceManager::new();
     layout.add_time_uniform();  // Group 0
     layout.add_output_texture(wgpu::TextureFormat::Rgba16Float);  // Group 1
     layout
 }
 
-pub fn create_layout_with_input() -> ResourceLayout {
+pub fn create_layout_with_input() -> ResourceManager {
     let mut layout = create_basic_layout();
     layout.add_input_texture();  // Group 1
     layout
 }
 
-pub fn create_layout_with_uniform(uniform_size: u64) -> ResourceLayout {
+pub fn create_layout_with_uniform(uniform_size: u64) -> ResourceManager {
     let mut layout = create_basic_layout();
     layout.add_custom_uniform("params", uniform_size);  // Group 1
     layout
@@ -289,7 +289,7 @@ pub fn create_layout_with_uniform(uniform_size: u64) -> ResourceLayout {
 
 /// Create layout for algorithms requiring resolution-dependent storage
 /// Useful for: FFT, convolution, image processing etc
-pub fn create_algorithm_layout(uniform_size: u64, resolution: u32, bytes_per_pixel: u32) -> ResourceLayout {
+pub fn create_algorithm_layout(uniform_size: u64, resolution: u32, bytes_per_pixel: u32) -> ResourceManager {
     let mut layout = create_basic_layout();
     layout.add_input_texture();  // Group 1 (for media input)
     layout.add_custom_uniform("params", uniform_size);  // Group 1
@@ -299,7 +299,7 @@ pub fn create_algorithm_layout(uniform_size: u64, resolution: u32, bytes_per_pix
 }
 
 /// for particle systems
-pub fn create_particle_layout(uniform_size: u64, particle_count: u32) -> ResourceLayout {
+pub fn create_particle_layout(uniform_size: u64, particle_count: u32) -> ResourceManager {
     let mut layout = create_basic_layout();
     layout.add_custom_uniform("params", uniform_size);  // Group 1
     // Particles need fixed count × bytes per particle
@@ -309,7 +309,7 @@ pub fn create_particle_layout(uniform_size: u64, particle_count: u32) -> Resourc
 }
 
 /// Create layout for grid-based simulations (resolution-dependent)
-pub fn create_grid_layout(uniform_size: u64, width: u32, height: u32, bytes_per_cell: u32) -> ResourceLayout {
+pub fn create_grid_layout(uniform_size: u64, width: u32, height: u32, bytes_per_cell: u32) -> ResourceManager {
     let mut layout = create_basic_layout();
     layout.add_custom_uniform("params", uniform_size);  // Group 1
     // Grid needs width × height × bytes per cell

@@ -23,7 +23,7 @@ impl UniformProvider for FFTParams {
 }
 
 struct FFTShader {
-    base: RenderKit,
+    render_kit: RenderKit,
     compute_shader: ComputeShader,
     should_initialize: bool,
     current_params: FFTParams, // Store current parameters
@@ -42,8 +42,7 @@ impl ShaderManager for FFTShader {
             _padding2: 0,
         };
         
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let render_kit = RenderKit::new(core, None);
         
         // Define the FFT multi-pass pipeline
         let passes = vec![
@@ -89,7 +88,7 @@ impl ShaderManager for FFTShader {
         compute_shader.set_custom_params(initial_params, &core.queue);
         
         Self {
-            base,
+            render_kit,
             compute_shader,
             should_initialize: true,
             current_params: initial_params,
@@ -98,20 +97,20 @@ impl ShaderManager for FFTShader {
     
     fn update(&mut self, core: &Core) {
         // Update time
-        let current_time = self.base.controls.get_time(&self.base.start_time);
+        let current_time = self.render_kit.controls.get_time(&self.render_kit.start_time);
         let delta = 1.0/60.0;
         self.compute_shader.set_time(current_time, delta, &core.queue);
         
         // Update input textures for image proc.
-        self.base.update_current_texture(core, &core.queue);
-        if let Some(texture_manager) = self.base.get_current_texture_manager() {
+        self.render_kit.update_current_texture(core, &core.queue);
+        if let Some(texture_manager) = self.render_kit.get_current_texture_manager() {
             // Update input texture in unified ComputeShader
             self.compute_shader.update_input_texture(&texture_manager.view, &texture_manager.sampler, &core.device);
         }
         
-        self.base.fps_tracker.update();
+        self.render_kit.fps_tracker.update();
         // Handle export        
-        self.compute_shader.handle_export(core, &mut self.base);
+        self.compute_shader.handle_export(core, &mut self.render_kit);
     }
     
     fn resize(&mut self, core: &Core) {
@@ -129,22 +128,22 @@ impl ShaderManager for FFTShader {
         let mut params = self.current_params;
         let mut changed = false;
         let mut should_start_export = false;
-        let mut export_request = self.base.export_manager.get_ui_request();
-        let mut controls_request = self.base.controls.get_ui_request(
-            &self.base.start_time,
+        let mut export_request = self.render_kit.export_manager.get_ui_request();
+        let mut controls_request = self.render_kit.controls.get_ui_request(
+            &self.render_kit.start_time,
             &core.size
         );
 
-        let using_video_texture = self.base.using_video_texture;
-        let using_hdri_texture = self.base.using_hdri_texture;
-        let using_webcam_texture = self.base.using_webcam_texture;
-        let video_info = self.base.get_video_info();
-        let hdri_info = self.base.get_hdri_info();
-        let webcam_info = self.base.get_webcam_info();
+        let using_video_texture = self.render_kit.using_video_texture;
+        let using_hdri_texture = self.render_kit.using_hdri_texture;
+        let using_webcam_texture = self.render_kit.using_webcam_texture;
+        let video_info = self.render_kit.get_video_info();
+        let hdri_info = self.render_kit.get_hdri_info();
+        let webcam_info = self.render_kit.get_webcam_info();
         
-        controls_request.current_fps = Some(self.base.fps_tracker.fps());
-        let full_output = if self.base.key_handler.show_ui {
-            self.base.render_ui(core, |ctx| {
+        controls_request.current_fps = Some(self.render_kit.fps_tracker.fps());
+        let full_output = if self.render_kit.key_handler.show_ui {
+            self.render_kit.render_ui(core, |ctx| {
                 ctx.style_mut(|style| {
                     style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
                     style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;
@@ -244,21 +243,21 @@ impl ShaderManager for FFTShader {
                     });
             })
         } else {
-            self.base.render_ui(core, |_ctx| {})
+            self.render_kit.render_ui(core, |_ctx| {})
         };
 
         // Keep current parameters - don't reset to defaults
         // The UI will modify 'params' directly, and we'll apply changes at the end
         
         // Apply controls
-        self.base.apply_control_request(controls_request.clone());
-        self.base.handle_video_requests(core, &controls_request);
-        self.base.handle_webcam_requests(core, &controls_request);
+        self.render_kit.apply_control_request(controls_request.clone());
+        self.render_kit.handle_video_requests(core, &controls_request);
+        self.render_kit.handle_webcam_requests(core, &controls_request);
         
         // Handle export requests
-        self.base.export_manager.apply_ui_request(export_request);
+        self.render_kit.export_manager.apply_ui_request(export_request);
         if should_start_export {
-            self.base.export_manager.start_export();
+            self.render_kit.export_manager.start_export();
         }
         
         if controls_request.load_media_path.is_some() {
@@ -277,12 +276,12 @@ impl ShaderManager for FFTShader {
 
         // FFT dispatch - only run full pipeline when needed, otherwise just display
         let mut should_run_full_fft = self.should_initialize || 
-                                 self.base.using_video_texture || 
-                                 self.base.using_webcam_texture ||
+                                 self.render_kit.using_video_texture || 
+                                 self.render_kit.using_webcam_texture ||
                                  changed; // Also run when parameters change
         
         // FORCE run FFT if there's any texture to debug the issue
-        let has_any_texture = self.base.get_current_texture_manager().is_some();
+        let has_any_texture = self.render_kit.get_current_texture_manager().is_some();
         if has_any_texture && !should_run_full_fft {
             should_run_full_fft = true;
         }
@@ -334,13 +333,13 @@ impl ShaderManager for FFTShader {
             );
             
             let compute_texture = self.compute_shader.get_output_texture();
-            render_pass.set_pipeline(&self.base.renderer.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
+            render_pass.set_pipeline(&self.render_kit.renderer.render_pipeline);
+            render_pass.set_vertex_buffer(0, self.render_kit.renderer.vertex_buffer.slice(..));
             render_pass.set_bind_group(0, &compute_texture.bind_group, &[]);
             render_pass.draw(0..4, 0..1);
         }
         
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
+        self.render_kit.handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(Some(encoder.finish()));
         output.present();
         
@@ -348,16 +347,16 @@ impl ShaderManager for FFTShader {
     }
     
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self.base.egui_state.on_window_event(core.window(), event).consumed {
+        if self.render_kit.egui_state.on_window_event(core.window(), event).consumed {
             return true;
         }
         
         if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self.base.key_handler.handle_keyboard_input(core.window(), event);
+            return self.render_kit.key_handler.handle_keyboard_input(core.window(), event);
         }
         
         if let WindowEvent::DroppedFile(path) = event {
-            if let Err(e) = self.base.load_media(core, path) {
+            if let Err(e) = self.render_kit.load_media(core, path) {
                 eprintln!("Failed to load dropped file: {:?}", e);
             } else {
                 self.should_initialize = true;

@@ -1,102 +1,94 @@
 use std::sync::Arc;
 use winit::window::Window;
 
+pub use anyhow;
+pub use bytemuck;
+pub use egui;
+pub use env_logger;
 pub use wgpu;
 pub use winit;
-pub use egui;
-pub use bytemuck;
-pub use anyhow;
-pub use env_logger;
 
-pub use winit::event::WindowEvent;
-pub use wgpu::SurfaceError;
 pub use bytemuck::{Pod, Zeroable};
+pub use wgpu::SurfaceError;
+pub use winit::event::WindowEvent;
 
-mod renderer;
-mod shader;
-mod texture;
-mod uniforms;
 mod app;
-mod renderkit;
-mod feedback; 
-mod keyinputs;
-mod export;
-mod hot;
-mod controls;
 mod atomic;
+pub mod compute;
+mod controls;
+mod export;
+mod feedback;
+mod font;
+mod fps;
 #[cfg(feature = "media")]
 pub mod gst;
-pub mod compute;
-mod spectrum;
-mod fps;
-mod mouse;
 pub mod hdri;
-mod font;
+mod hot;
+mod keyinputs;
+mod mouse;
+mod renderer;
+mod renderkit;
+mod shader;
+mod spectrum;
+mod texture;
+mod uniforms;
+pub use app::*;
+pub use atomic::AtomicBuffer;
+pub use controls::{ControlsRequest, ShaderControls};
+pub use export::{save_frame, ExportError, ExportManager, ExportSettings, ExportUiState};
+pub use feedback::*;
+pub use font::{CharInfo, FontSystem, FontUniforms};
+pub use hdri::*;
+pub use hot::ShaderHotReload;
+pub use keyinputs::KeyInputHandler;
+pub use mouse::*;
 pub use renderer::*;
+pub use renderkit::*;
 pub use shader::*;
 pub use texture::*;
 pub use uniforms::*;
-pub use app::*;
-pub use renderkit::*;
-pub use feedback::*;
-pub use keyinputs::KeyInputHandler;
-pub use export::{ExportSettings, ExportManager, ExportError, ExportUiState, save_frame};
-pub use hot::ShaderHotReload;
-pub use controls::{ControlsRequest, ShaderControls};
-pub use atomic::AtomicBuffer;
-pub use mouse::*;
-pub use hdri::*;
-pub use font::{FontSystem, FontUniforms, CharInfo};
 
 #[cfg(feature = "media")]
 pub mod audio {
     pub use crate::gst::audio::{
+        AudioDataProvider, AudioSynthManager, AudioSynthUniform, AudioWaveform, MusicalNote,
         SynthesisManager, SynthesisUniform, SynthesisWaveform,
-        AudioSynthManager, AudioWaveform, MusicalNote, AudioDataProvider, AudioSynthUniform
     };
 }
 
-
 pub mod prelude {
     pub use crate::{
-        Core, ShaderApp, ShaderManager,
-        UniformProvider, UniformBinding, 
-        RenderKit, ShaderControls, ExportManager, ShaderHotReload,
-        TextureManager, Renderer, AtomicBuffer,
-        KeyInputHandler, ControlsRequest, FontSystem, FontUniforms, CharInfo,
-        save_frame,
-        compute::MultiPassManager, compute::ComputeShader, compute::ComputeShaderBuilder
+        compute::ComputeShader, compute::ComputeShaderBuilder, compute::MultiPassManager,
+        save_frame, AtomicBuffer, CharInfo, ControlsRequest, Core, ExportManager, FontSystem,
+        FontUniforms, KeyInputHandler, RenderKit, Renderer, ShaderApp, ShaderControls,
+        ShaderHotReload, ShaderManager, TextureManager, UniformBinding, UniformProvider,
     };
-    
+
     #[cfg(feature = "media")]
     pub use crate::{
-        audio::{SynthesisManager, SynthesisUniform, SynthesisWaveform, AudioWaveform, MusicalNote},
-        gst
+        audio::{
+            AudioWaveform, MusicalNote, SynthesisManager, SynthesisUniform, SynthesisWaveform,
+        },
+        gst,
     };
-    
+
+    pub use crate::anyhow;
+    pub use crate::bytemuck;
+    pub use crate::egui;
     pub use crate::wgpu;
     pub use crate::winit;
-    pub use crate::egui;
-    pub use crate::bytemuck;
-    pub use crate::anyhow;
-    
-    pub use env_logger;
-    pub use crate::WindowEvent;
+
     pub use crate::SurfaceError;
-    
-    pub use bytemuck::{Pod, Zeroable, bytes_of, cast_slice};
+    pub use crate::WindowEvent;
+    pub use env_logger;
+
+    pub use bytemuck::{bytes_of, cast_slice, Pod, Zeroable};
     pub use wgpu::{
-        Device, Queue, Surface, SurfaceConfiguration,
-        TextureFormat, RenderPipeline, ComputePipeline,
-        BindGroup, BindGroupLayout, Buffer,
-        ShaderModule, TextureView,
+        BindGroup, BindGroupLayout, Buffer, ComputePipeline, Device, Queue, RenderPipeline,
+        ShaderModule, Surface, SurfaceConfiguration, TextureFormat, TextureView,
     };
-    
-    pub use winit::{
-        event_loop::EventLoop,
-        window::Window,
-        dpi::PhysicalSize,
-    };
+
+    pub use winit::{dpi::PhysicalSize, event_loop::EventLoop, window::Window};
 }
 
 pub struct Core {
@@ -120,9 +112,26 @@ impl Core {
         let window_ptr = Box::into_raw(window_box);
         // SAFETY: window_ptr is valid as we just created it
         let surface = unsafe { instance.create_surface(&*window_ptr) }.unwrap();
+        // for discrete gpus, we prefer high performance for wgpu applications.
+        let power_preference = if instance
+            .enumerate_adapters(wgpu::Backends::all())
+            .iter()
+            .filter(|p| {
+                log::info!("adapter info: {:?}", p.get_info());
+                p.get_info().device_type == wgpu::DeviceType::DiscreteGpu
+            })
+            .next()
+            .is_some()
+        {
+            wgpu::PowerPreference::HighPerformance
+        } else {
+            wgpu::PowerPreference::default()
+        };
+        log::info!("power_perfernece: {:?}", power_preference);
+
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
+                power_preference: power_preference,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
@@ -141,12 +150,15 @@ impl Core {
             .unwrap();
         let device = Arc::new(device);
         let surface_caps = surface.get_capabilities(&adapter);
+
+        // on nix, nvidia gpu's first look up srgb is Bgra8UnormSrgb, this will cause unmatched surface format when exporting.
         let surface_format = surface_caps
             .formats
             .iter()
             .copied()
-            .find(|f| f.is_srgb())
+            .find(|f| f.is_srgb() && *f == CAPTURE_FORMAT)
             .unwrap_or(surface_caps.formats[0]);
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,

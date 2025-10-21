@@ -76,7 +76,7 @@ impl UniformProvider for BlockGameParams {
 }
 
 struct BlockTowerGame {
-    base: RenderKit,
+    render_kit: RenderKit,
     compute_shader: ComputeShader,
     last_mouse_click: bool,
     game_params: BlockGameParams,
@@ -84,8 +84,7 @@ struct BlockTowerGame {
 
 impl ShaderManager for BlockTowerGame {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let render_kit = RenderKit::new(core, None);
 
         // Create single-pass compute shader with mouse, fonts, and game storage
         let config = ComputeShader::builder()
@@ -117,7 +116,7 @@ impl ShaderManager for BlockTowerGame {
         }
         
         Self {
-            base,
+            render_kit,
             compute_shader,
             last_mouse_click: false,
             game_params: BlockGameParams::default(),
@@ -125,37 +124,37 @@ impl ShaderManager for BlockTowerGame {
     }
 
     fn update(&mut self, core: &Core) {
-        let current_time = self.base.controls.get_time(&self.base.start_time);
+        let current_time = self.render_kit.controls.get_time(&self.render_kit.start_time);
         let delta = 1.0 / 60.0;
         self.compute_shader.set_time(current_time, delta, &core.queue);
-        self.compute_shader.update_mouse_uniform(&self.base.mouse_tracker.uniform, &core.queue);
-        self.base.fps_tracker.update();
+        self.compute_shader.update_mouse_uniform(&self.render_kit.mouse_tracker.uniform, &core.queue);
+        self.render_kit.fps_tracker.update();
         
         // Check for hot reload updates
         self.compute_shader.check_hot_reload(&core.device);
         
         self.update_camera_in_shader(&core.queue);
-        let mouse_buttons = self.base.mouse_tracker.uniform.buttons[0];
+        let mouse_buttons = self.render_kit.mouse_tracker.uniform.buttons[0];
         let mouse_pressed = mouse_buttons & 1 != 0;
         self.last_mouse_click = mouse_pressed;
     }
 
     fn resize(&mut self, core: &Core) {
-        self.base.update_resolution(&core.queue, core.size);
+        self.render_kit.update_resolution(&core.queue, core.size);
         self.compute_shader.resize(core, core.size.width, core.size.height);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
         let output = core.surface.get_current_texture()?;
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut controls_request = self.base.controls.get_ui_request(
-            &self.base.start_time,
+        let mut controls_request = self.render_kit.controls.get_ui_request(
+            &self.render_kit.start_time,
             &core.size
         );
-        controls_request.current_fps = Some(self.base.fps_tracker.fps());
+        controls_request.current_fps = Some(self.render_kit.fps_tracker.fps());
         
-        let full_output = if self.base.key_handler.show_ui {
-            self.base.render_ui(core, |ctx| {
+        let full_output = if self.render_kit.key_handler.show_ui {
+            self.render_kit.render_ui(core, |ctx| {
                 ctx.style_mut(|style| {
                     style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
                     style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;
@@ -201,7 +200,7 @@ impl ShaderManager for BlockTowerGame {
                     });
             })
         } else {
-            self.base.render_ui(core, |_ctx| {})
+            self.render_kit.render_ui(core, |_ctx| {})
         };
         
         let mut encoder = core.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -219,22 +218,22 @@ impl ShaderManager for BlockTowerGame {
             );
             
             let compute_texture = self.compute_shader.get_output_texture();
-            render_pass.set_pipeline(&self.base.renderer.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
+            render_pass.set_pipeline(&self.render_kit.renderer.render_pipeline);
+            render_pass.set_vertex_buffer(0, self.render_kit.renderer.vertex_buffer.slice(..));
             render_pass.set_bind_group(0, &compute_texture.bind_group, &[]);
             render_pass.draw(0..4, 0..1);
         }
         
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
+        self.render_kit.handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(Some(encoder.finish()));
         output.present();
         Ok(())
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        let ui_handled = self.base.egui_state.on_window_event(core.window(), event).consumed;
+        let ui_handled = self.render_kit.egui_state.on_window_event(core.window(), event).consumed;
         
-        if self.base.handle_mouse_input(core, event, ui_handled) {
+        if self.render_kit.handle_mouse_input(core, event, ui_handled) {
             return true;
         }
         
@@ -264,7 +263,7 @@ impl ShaderManager for BlockTowerGame {
                     }
                 }
             }
-            return self.base.key_handler.handle_keyboard_input(core.window(), event);
+            return self.render_kit.key_handler.handle_keyboard_input(core.window(), event);
         }
         
         false

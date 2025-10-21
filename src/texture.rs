@@ -12,7 +12,7 @@ impl TextureManager {
         layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let dimensions = image.dimensions();
-        
+
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Shader Texture"),
             size: wgpu::Extent3d {
@@ -29,7 +29,7 @@ impl TextureManager {
         });
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        
+
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
@@ -102,5 +102,58 @@ impl TextureManager {
                 depth_or_array_layers: 1,
             },
         );
+    }
+}
+
+pub struct TextureLayout;
+impl TextureLayout {
+
+    /// Creates a bind group layout with texture (binding 0) and sampler (binding 1) for displaying compute shader output or common texture rendering.
+    pub fn standard_render_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+            label: Some("Standard Texture Layout"),
+        })
+    }
+
+    pub fn standard_compute_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+            label: Some("Standard Texture Layout"),
+        })
     }
 }

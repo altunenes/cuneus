@@ -57,7 +57,7 @@ impl UniformProvider for MandelbulbParams {
 
 
 struct MandelbulbShader {
-    base: RenderKit,
+    render_kit: RenderKit,
     compute_shader: ComputeShader,
     frame_count: u32,
     should_reset_accumulation: bool,
@@ -105,8 +105,7 @@ impl ShaderManager for MandelbulbShader {
             fog_color_r: 0.1, fog_color_g: 0.1, fog_color_b: 0.15,
             glow_color_r: 0.5, glow_color_g: 0.7, glow_color_b: 1.0,
         };
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let render_kit = RenderKit::new(core, None);
         
         let config = ComputeShader::builder()
             .with_entry_point("main")
@@ -140,7 +139,7 @@ impl ShaderManager for MandelbulbShader {
         compute_shader.set_custom_params(initial_params, &core.queue);
 
         Self {
-            base,
+            render_kit,
             compute_shader,
             frame_count: 0,
             should_reset_accumulation: true,
@@ -151,18 +150,18 @@ impl ShaderManager for MandelbulbShader {
     }
     
     fn update(&mut self, core: &Core) {
-        self.base.fps_tracker.update();
+        self.render_kit.fps_tracker.update();
         
         // Check for hot reload updates
         self.compute_shader.check_hot_reload(&core.device);
         
         // Handle export        
-        self.compute_shader.handle_export(core, &mut self.base);
+        self.compute_shader.handle_export(core, &mut self.render_kit);
     }
     
     fn resize(&mut self, core: &Core) {
         println!("Resizing to {:?}", core.size);
-        self.base.update_resolution(&core.queue, core.size);
+        self.render_kit.update_resolution(&core.queue, core.size);
         self.compute_shader.resize(core, core.size.width, core.size.height);
     }
     
@@ -174,7 +173,7 @@ impl ShaderManager for MandelbulbShader {
         });
         
         // Check if mouse moved and reset accumulation if needed
-        let current_mouse_pos = self.base.mouse_tracker.uniform.position;
+        let current_mouse_pos = self.render_kit.mouse_tracker.uniform.position;
         if self.mouse_enabled {
             let moved = (current_mouse_pos[0] - self.previous_mouse_pos[0]).abs() > 0.001 ||
                        (current_mouse_pos[1] - self.previous_mouse_pos[1]).abs() > 0.001;
@@ -186,7 +185,7 @@ impl ShaderManager for MandelbulbShader {
 
         // Update mouse uniform only if mouse is enabled, otherwise use static position
         if self.mouse_enabled {
-            self.compute_shader.update_mouse_uniform(&self.base.mouse_tracker.uniform, &core.queue);
+            self.compute_shader.update_mouse_uniform(&self.render_kit.mouse_tracker.uniform, &core.queue);
         } else {
             // Use a fixed mouse position when disabled
             let static_mouse = MouseUniform {
@@ -201,17 +200,17 @@ impl ShaderManager for MandelbulbShader {
         let mut params = self.current_params;
         let mut changed = false;
         let mut should_start_export = false;
-        let mut export_request = self.base.export_manager.get_ui_request();
-        let mut controls_request = self.base.controls.get_ui_request(
-            &self.base.start_time,
+        let mut export_request = self.render_kit.export_manager.get_ui_request();
+        let mut controls_request = self.render_kit.controls.get_ui_request(
+            &self.render_kit.start_time,
             &core.size
         );
-        controls_request.current_fps = Some(self.base.fps_tracker.fps());
+        controls_request.current_fps = Some(self.render_kit.fps_tracker.fps());
         
-        let current_fps = self.base.fps_tracker.fps();
+        let current_fps = self.render_kit.fps_tracker.fps();
         
-        let full_output = if self.base.key_handler.show_ui {
-            self.base.render_ui(core, |ctx| {
+        let full_output = if self.render_kit.key_handler.show_ui {
+            self.render_kit.render_ui(core, |ctx| {
                 ctx.style_mut(|style| {
                     style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
                     style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;
@@ -420,20 +419,20 @@ impl ShaderManager for MandelbulbShader {
                     });
             })
         } else {
-            self.base.render_ui(core, |_ctx| {})
+            self.render_kit.render_ui(core, |_ctx| {})
         };
         
-        self.base.export_manager.apply_ui_request(export_request);
+        self.render_kit.export_manager.apply_ui_request(export_request);
         if controls_request.should_clear_buffers || self.should_reset_accumulation {
             self.clear_atomic_buffer(core);
         }
-        self.base.apply_control_request(controls_request);
+        self.render_kit.apply_control_request(controls_request);
         
-        let current_time = self.base.controls.get_time(&self.base.start_time);
+        let current_time = self.render_kit.controls.get_time(&self.render_kit.start_time);
         
-        self.base.time_uniform.data.time = current_time;
-        self.base.time_uniform.data.frame = self.frame_count;
-        self.base.time_uniform.update(&core.queue);
+        self.render_kit.time_uniform.data.time = current_time;
+        self.render_kit.time_uniform.data.frame = self.frame_count;
+        self.render_kit.time_uniform.update(&core.queue);
         
         // Update compute shader with the same time data
         self.compute_shader.set_time(current_time, 1.0/60.0, &core.queue);
@@ -448,7 +447,7 @@ impl ShaderManager for MandelbulbShader {
         }
         
         if should_start_export {
-            self.base.export_manager.start_export();
+            self.render_kit.export_manager.start_export();
         }
         
         self.compute_shader.dispatch(&mut encoder, core);
@@ -461,14 +460,14 @@ impl ShaderManager for MandelbulbShader {
                 Some("Display Pass"),
             );
             
-            render_pass.set_pipeline(&self.base.renderer.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
+            render_pass.set_pipeline(&self.render_kit.renderer.render_pipeline);
+            render_pass.set_vertex_buffer(0, self.render_kit.renderer.vertex_buffer.slice(..));
             render_pass.set_bind_group(0, &self.compute_shader.output_texture.bind_group, &[]);
             
             render_pass.draw(0..4, 0..1);
         }
         
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
+        self.render_kit.handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(Some(encoder.finish()));
         output.present();
         
@@ -480,11 +479,11 @@ impl ShaderManager for MandelbulbShader {
     }
     
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self.base.egui_state.on_window_event(core.window(), event).consumed {
+        if self.render_kit.egui_state.on_window_event(core.window(), event).consumed {
             return true;
         }
         
-        if self.base.handle_mouse_input(core, event, false) {
+        if self.render_kit.handle_mouse_input(core, event, false) {
             return true;
         }
         
@@ -514,7 +513,7 @@ impl ShaderManager for MandelbulbShader {
         }
         
         if let WindowEvent::KeyboardInput { event, .. } = event {
-            if self.base.key_handler.handle_keyboard_input(core.window(), event) {
+            if self.render_kit.key_handler.handle_keyboard_input(core.window(), event) {
                 return true;
             }
         }

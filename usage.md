@@ -65,7 +65,7 @@ impl UniformProvider for MyParams {
 
 // 2. Define the main application struct
 struct MyShader {
-    base: RenderKit,
+    render_kit: RenderKit,
     compute_shader: ComputeShader,
     current_params: MyParams,
 }
@@ -74,7 +74,7 @@ struct MyShader {
 impl ShaderManager for MyShader {
     fn init(core: &Core) -> Self {
         // RenderKit handles the final blit to screen and UI (vertex/blit shaders built-in)
-        let base = RenderKit::new(core, &[/* bind group layouts */], None);
+        let render_kit = RenderKit::new(core, &[/* bind group layouts */], None);
         let initial_params = MyParams { /* ... */ };
 
         // --- To convert this to a Multi-Pass shader, make the following changes: ---
@@ -113,12 +113,12 @@ impl ShaderManager for MyShader {
         // Set initial parameters
         compute_shader.set_custom_params(initial_params, &core.queue);
 
-        Self { base, compute_shader, current_params: initial_params }
+        Self { render_kit, compute_shader, current_params: initial_params }
     }
 
     fn update(&mut self, core: &Core) {
         // Update time uniform, check for hot-reloads, etc.
-        let time = self.base.controls.get_time(&self.base.start_time);
+        let time = self.render_kit.controls.get_time(&self.render_kit.start_time);
         self.compute_shader.set_time(time, 1.0/60.0, &core.queue);
         self.compute_shader.check_hot_reload(&core.device);
     }

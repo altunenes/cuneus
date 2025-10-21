@@ -20,7 +20,7 @@ impl UniformProvider for FluidParams {
 }
 
 struct FluidShader {
-    base: RenderKit,
+    render_kit: RenderKit,
     compute_shader: ComputeShader,
     current_params: FluidParams,
 }
@@ -36,8 +36,7 @@ impl ShaderManager for FluidShader {
             _padding: [0.0; 7],
         };
 
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let render_kit = RenderKit::new(core, None);
 
         // Create multipass system: buffer_a (simulation) -> main_image (display)
         let passes = vec![
@@ -77,7 +76,7 @@ impl ShaderManager for FluidShader {
         compute_shader.set_custom_params(initial_params, &core.queue);
 
         Self {
-            base,
+            render_kit,
             compute_shader,
             current_params: initial_params,
         }
@@ -85,28 +84,28 @@ impl ShaderManager for FluidShader {
 
     fn update(&mut self, core: &Core) {
         // Update current texture (video/webcam/static) 
-        self.base.update_current_texture(core, &core.queue);
+        self.render_kit.update_current_texture(core, &core.queue);
         
         // Update channel0 with external texture (accessible from all passes!)
-        if let Some(texture_manager) = self.base.get_current_texture_manager() {
+        if let Some(texture_manager) = self.render_kit.get_current_texture_manager() {
             self.compute_shader.update_channel_texture(0, &texture_manager.view, &texture_manager.sampler, &core.device, &core.queue);
         }
         
 
-        let current_time = self.base.controls.get_time(&self.base.start_time);
+        let current_time = self.render_kit.controls.get_time(&self.render_kit.start_time);
         let delta = 1.0 / 60.0;
         self.compute_shader.set_time(current_time, delta, &core.queue);
         
-        self.base.fps_tracker.update();
+        self.render_kit.fps_tracker.update();
         
         // Check for hot reload updates
         self.compute_shader.check_hot_reload(&core.device);
         // Handle export        
-        self.compute_shader.handle_export(core, &mut self.base);
+        self.compute_shader.handle_export(core, &mut self.render_kit);
     }
 
     fn resize(&mut self, core: &Core) {
-        self.base.update_resolution(&core.queue, core.size);
+        self.render_kit.update_resolution(&core.queue, core.size);
         self.compute_shader.resize(core, core.size.width, core.size.height);
     }
 
@@ -120,19 +119,19 @@ impl ShaderManager for FluidShader {
         let mut params = self.current_params;
         let mut changed = false;
         let mut should_start_export = false;
-        let mut export_request = self.base.export_manager.get_ui_request();
-        let mut controls_request = self.base.controls.get_ui_request(&self.base.start_time, &core.size);
-        controls_request.current_fps = Some(self.base.fps_tracker.fps());
+        let mut export_request = self.render_kit.export_manager.get_ui_request();
+        let mut controls_request = self.render_kit.controls.get_ui_request(&self.render_kit.start_time, &core.size);
+        controls_request.current_fps = Some(self.render_kit.fps_tracker.fps());
 
-        let using_video_texture = self.base.using_video_texture;
-        let using_hdri_texture = self.base.using_hdri_texture;
-        let using_webcam_texture = self.base.using_webcam_texture;
-        let video_info = self.base.get_video_info();
-        let hdri_info = self.base.get_hdri_info();
-        let webcam_info = self.base.get_webcam_info();
+        let using_video_texture = self.render_kit.using_video_texture;
+        let using_hdri_texture = self.render_kit.using_hdri_texture;
+        let using_webcam_texture = self.render_kit.using_webcam_texture;
+        let video_info = self.render_kit.get_video_info();
+        let hdri_info = self.render_kit.get_hdri_info();
+        let webcam_info = self.render_kit.get_webcam_info();
 
-        let full_output = if self.base.key_handler.show_ui {
-            self.base.render_ui(core, |ctx| {
+        let full_output = if self.render_kit.key_handler.show_ui {
+            self.render_kit.render_ui(core, |ctx| {
                 ctx.style_mut(|style| {
                     style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
                     style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;
@@ -178,7 +177,7 @@ impl ShaderManager for FluidShader {
                     });
             })
         } else {
-            self.base.render_ui(core, |_ctx| {})
+            self.render_kit.render_ui(core, |_ctx| {})
         };
 
         // Handle controls and clear buffers if requested  
@@ -200,20 +199,20 @@ impl ShaderManager for FluidShader {
                 Some("Fluid Display Pass"),
             );
 
-            render_pass.set_pipeline(&self.base.renderer.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
+            render_pass.set_pipeline(&self.render_kit.renderer.render_pipeline);
+            render_pass.set_vertex_buffer(0, self.render_kit.renderer.vertex_buffer.slice(..));
             render_pass.set_bind_group(0, &compute_texture.bind_group, &[]);
             render_pass.draw(0..4, 0..1);
         }
 
-        self.base.apply_control_request(controls_request.clone());
-        self.base.handle_video_requests(core, &controls_request);
-        self.base.handle_webcam_requests(core, &controls_request);
-        self.base.handle_hdri_requests(core, &controls_request);
+        self.render_kit.apply_control_request(controls_request.clone());
+        self.render_kit.handle_video_requests(core, &controls_request);
+        self.render_kit.handle_webcam_requests(core, &controls_request);
+        self.render_kit.handle_hdri_requests(core, &controls_request);
         
-        self.base.export_manager.apply_ui_request(export_request);
+        self.render_kit.export_manager.apply_ui_request(export_request);
         if should_start_export {
-            self.base.export_manager.start_export();
+            self.render_kit.export_manager.start_export();
         }
 
         if changed {
@@ -221,7 +220,7 @@ impl ShaderManager for FluidShader {
             self.compute_shader.set_custom_params(params, &core.queue);
         }
 
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
+        self.render_kit.handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
@@ -229,11 +228,11 @@ impl ShaderManager for FluidShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self.base.egui_state.on_window_event(core.window(), event).consumed {
+        if self.render_kit.egui_state.on_window_event(core.window(), event).consumed {
             return true;
         }
         if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self.base.key_handler.handle_keyboard_input(core.window(), event);
+            return self.render_kit.key_handler.handle_keyboard_input(core.window(), event);
         }
         false
     }

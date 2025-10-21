@@ -182,7 +182,7 @@ impl UniformProvider for PathTracingParams {
 }
 
 struct PathTracingShader {
-    base: RenderKit,
+    render_kit: RenderKit,
     compute_shader: ComputeShader,
     current_params: PathTracingParams,
     camera_movement: CameraMovement,
@@ -200,8 +200,7 @@ impl PathTracingShader {
 
 impl ShaderManager for PathTracingShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let render_kit = RenderKit::new(core, None);
 
         let initial_params = PathTracingParams {
             camera_pos_x: 0.0,
@@ -253,7 +252,7 @@ impl ShaderManager for PathTracingShader {
         compute_shader.set_custom_params(initial_params, &core.queue);
 
         Self {
-            base,
+            render_kit,
             compute_shader,
             current_params: initial_params,
             camera_movement: CameraMovement::default(),
@@ -264,13 +263,13 @@ impl ShaderManager for PathTracingShader {
     
     fn update(&mut self, core: &Core) {
         // Update time
-        let current_time = self.base.controls.get_time(&self.base.start_time);
+        let current_time = self.render_kit.controls.get_time(&self.render_kit.start_time);
         let delta = 1.0/60.0;
         self.compute_shader.set_time(current_time, delta, &core.queue);
         
         // Update input textures for background
-        self.base.update_current_texture(core, &core.queue);
-        if let Some(texture_manager) = self.base.get_current_texture_manager() {
+        self.render_kit.update_current_texture(core, &core.queue);
+        if let Some(texture_manager) = self.render_kit.get_current_texture_manager() {
             self.compute_shader.update_input_texture(&texture_manager.view, &texture_manager.sampler, &core.device);
         }
         
@@ -279,13 +278,13 @@ impl ShaderManager for PathTracingShader {
             self.should_reset_accumulation = true;
         }
         
-        self.base.fps_tracker.update();
+        self.render_kit.fps_tracker.update();
         // Handle export        
-        self.compute_shader.handle_export(core, &mut self.base);
+        self.compute_shader.handle_export(core, &mut self.render_kit);
     }
     
     fn resize(&mut self, core: &Core) {
-        self.base.update_resolution(&core.queue, core.size);
+        self.render_kit.update_resolution(&core.queue, core.size);
         self.compute_shader.resize(core, core.size.width, core.size.height);
         self.should_reset_accumulation = true;
     }
@@ -301,23 +300,23 @@ impl ShaderManager for PathTracingShader {
         let mut params = self.current_params;
         let mut changed = false;
         let mut should_start_export = false;
-        let mut export_request = self.base.export_manager.get_ui_request();
-        let mut controls_request = self.base.controls.get_ui_request(
-            &self.base.start_time,
+        let mut export_request = self.render_kit.export_manager.get_ui_request();
+        let mut controls_request = self.render_kit.controls.get_ui_request(
+            &self.render_kit.start_time,
             &core.size
         );
-        controls_request.current_fps = Some(self.base.fps_tracker.fps());
+        controls_request.current_fps = Some(self.render_kit.fps_tracker.fps());
         
-        let current_fps = self.base.fps_tracker.fps();
-        let using_video_texture = self.base.using_video_texture;
-        let using_hdri_texture = self.base.using_hdri_texture;
-        let using_webcam_texture = self.base.using_webcam_texture;
-        let video_info = self.base.get_video_info();
-        let hdri_info = self.base.get_hdri_info();
-        let webcam_info = self.base.get_webcam_info();
+        let current_fps = self.render_kit.fps_tracker.fps();
+        let using_video_texture = self.render_kit.using_video_texture;
+        let using_hdri_texture = self.render_kit.using_hdri_texture;
+        let using_webcam_texture = self.render_kit.using_webcam_texture;
+        let video_info = self.render_kit.get_video_info();
+        let hdri_info = self.render_kit.get_hdri_info();
+        let webcam_info = self.render_kit.get_webcam_info();
         
-        let full_output = if self.base.key_handler.show_ui {
-            self.base.render_ui(core, |ctx| {
+        let full_output = if self.render_kit.key_handler.show_ui {
+            self.render_kit.render_ui(core, |ctx| {
                 ctx.style_mut(|style| {
                     style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
                     style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;
@@ -392,25 +391,25 @@ impl ShaderManager for PathTracingShader {
                     });
             })
         } else {
-            self.base.render_ui(core, |_ctx| {})
+            self.render_kit.render_ui(core, |_ctx| {})
         };
         
         // Apply controls
-        self.base.export_manager.apply_ui_request(export_request);
+        self.render_kit.export_manager.apply_ui_request(export_request);
         if controls_request.should_clear_buffers || self.should_reset_accumulation {
             self.clear_buffers(core);
         }
-        self.base.apply_control_request(controls_request.clone());
-        self.base.handle_video_requests(core, &controls_request);
-        self.base.handle_webcam_requests(core, &controls_request);
+        self.render_kit.apply_control_request(controls_request.clone());
+        self.render_kit.handle_video_requests(core, &controls_request);
+        self.render_kit.handle_webcam_requests(core, &controls_request);
         
         if should_start_export {
-            self.base.export_manager.start_export();
+            self.render_kit.export_manager.start_export();
         }
         
         // Update mouse position in params
-        params.mouse_x = self.base.mouse_tracker.uniform.position[0];
-        params.mouse_y = self.base.mouse_tracker.uniform.position[1];
+        params.mouse_x = self.render_kit.mouse_tracker.uniform.position[0];
+        params.mouse_y = self.render_kit.mouse_tracker.uniform.position[1];
         changed = true;
         
         if changed {
@@ -437,13 +436,13 @@ impl ShaderManager for PathTracingShader {
                 Some("Path Tracing Display Pass"),
             );
             
-            render_pass.set_pipeline(&self.base.renderer.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
+            render_pass.set_pipeline(&self.render_kit.renderer.render_pipeline);
+            render_pass.set_vertex_buffer(0, self.render_kit.renderer.vertex_buffer.slice(..));
             render_pass.set_bind_group(0, &self.compute_shader.output_texture.bind_group, &[]);
             render_pass.draw(0..4, 0..1);
         }
         
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
+        self.render_kit.handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(Some(encoder.finish()));
         output.present();
         
@@ -458,7 +457,7 @@ impl ShaderManager for PathTracingShader {
     }
     
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self.base.egui_state.on_window_event(core.window(), event).consumed {
+        if self.render_kit.egui_state.on_window_event(core.window(), event).consumed {
             return true;
         }
         
@@ -528,14 +527,14 @@ impl ShaderManager for PathTracingShader {
         }
         
         if let WindowEvent::DroppedFile(path) = event {
-            if let Err(e) = self.base.load_media(core, path) {
+            if let Err(e) = self.render_kit.load_media(core, path) {
                 eprintln!("Failed to load dropped file: {:?}", e);
             }
             return true;
         }
         
         if let WindowEvent::KeyboardInput { event, .. } = event {
-            if self.base.key_handler.handle_keyboard_input(core.window(), event) {
+            if self.render_kit.key_handler.handle_keyboard_input(core.window(), event) {
                 return true;
             }
         }

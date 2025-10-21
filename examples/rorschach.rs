@@ -50,7 +50,7 @@ impl UniformProvider for RorschachParams {
 }
 
 struct RorschachShader {
-    base: RenderKit,
+    render_kit: RenderKit,
     compute_shader: ComputeShader,
     current_params: RorschachParams,
 }
@@ -63,10 +63,8 @@ impl RorschachShader {
 
 impl ShaderManager for RorschachShader {
     fn init(core: &Core) -> Self {
-        // Create texture bind group layout for displaying compute shader output
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let mut base = RenderKit::new(core, &texture_bind_group_layout, None);
-        base.setup_mouse_uniform(core);
+        let mut render_kit = RenderKit::new(core, None);
+        render_kit.setup_mouse_uniform(core);
 
         let initial_params = RorschachParams {
             m1_scale: 0.8,
@@ -135,7 +133,7 @@ impl ShaderManager for RorschachShader {
         compute_shader.set_custom_params(initial_params, &core.queue);
         
         Self {
-            base,
+            render_kit,
             compute_shader,
             current_params: initial_params,
         }
@@ -145,10 +143,10 @@ impl ShaderManager for RorschachShader {
         // Check for hot reload updates
         self.compute_shader.check_hot_reload(&core.device);
         // Handle export        
-        self.compute_shader.handle_export(core, &mut self.base);
+        self.compute_shader.handle_export(core, &mut self.render_kit);
         
-        self.base.update_mouse_uniform(&core.queue);
-        self.base.fps_tracker.update();
+        self.render_kit.update_mouse_uniform(&core.queue);
+        self.render_kit.fps_tracker.update();
     }
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
         let output = core.surface.get_current_texture()?;
@@ -156,25 +154,25 @@ impl ShaderManager for RorschachShader {
         let mut params = self.current_params;
         let mut changed = false;
         let mut should_start_export = false;
-        let mut export_request = self.base.export_manager.get_ui_request();
-        let mut controls_request = self.base.controls.get_ui_request(
-            &self.base.start_time,
+        let mut export_request = self.render_kit.export_manager.get_ui_request();
+        let mut controls_request = self.render_kit.controls.get_ui_request(
+            &self.render_kit.start_time,
             &core.size
         );
-        controls_request.current_fps = Some(self.base.fps_tracker.fps());
-        if self.base.mouse_tracker.uniform.buttons[0] & 1 != 0 {
-            params.rotation_x = self.base.mouse_tracker.uniform.position[0];
-            params.rotation_y = self.base.mouse_tracker.uniform.position[1];
+        controls_request.current_fps = Some(self.render_kit.fps_tracker.fps());
+        if self.render_kit.mouse_tracker.uniform.buttons[0] & 1 != 0 {
+            params.rotation_x = self.render_kit.mouse_tracker.uniform.position[0];
+            params.rotation_y = self.render_kit.mouse_tracker.uniform.position[1];
             params.click_state = 1;
             changed = true;
-        } else if self.base.mouse_tracker.uniform.buttons[0] & 2 != 0 {
+        } else if self.render_kit.mouse_tracker.uniform.buttons[0] & 2 != 0 {
             params.click_state = 0;
         } else {
             params.click_state = 0;
         }
 
-        let full_output = if self.base.key_handler.show_ui {
-            self.base.render_ui(core, |ctx| {
+        let full_output = if self.render_kit.key_handler.show_ui {
+            self.render_kit.render_ui(core, |ctx| {
                 ctx.style_mut(|style| {
                     style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
                     style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;
@@ -269,16 +267,16 @@ impl ShaderManager for RorschachShader {
                     });
             })
         } else {
-            self.base.render_ui(core, |_ctx| {})
+            self.render_kit.render_ui(core, |_ctx| {})
         };
 
-        self.base.export_manager.apply_ui_request(export_request);
+        self.render_kit.export_manager.apply_ui_request(export_request);
         if controls_request.should_clear_buffers {
             self.clear_buffers(core);
         }
-        self.base.apply_control_request(controls_request);
+        self.render_kit.apply_control_request(controls_request);
         
-        let current_time = self.base.controls.get_time(&self.base.start_time);
+        let current_time = self.render_kit.controls.get_time(&self.render_kit.start_time);
         
         let mut encoder = core.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
@@ -293,7 +291,7 @@ impl ShaderManager for RorschachShader {
         }
 
         if should_start_export {
-            self.base.export_manager.start_export();
+            self.render_kit.export_manager.start_export();
         }
 
         // Stage 0: Generate and splat particles (workgroup size [256, 1, 1])
@@ -311,13 +309,13 @@ impl ShaderManager for RorschachShader {
                 Some("Display Pass"),
             );
             
-            render_pass.set_pipeline(&self.base.renderer.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
+            render_pass.set_pipeline(&self.render_kit.renderer.render_pipeline);
+            render_pass.set_vertex_buffer(0, self.render_kit.renderer.vertex_buffer.slice(..));
             render_pass.set_bind_group(0, &self.compute_shader.output_texture.bind_group, &[]);
             render_pass.draw(0..4, 0..1);
         }
         
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
+        self.render_kit.handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(Some(encoder.finish()));
         output.present();
 
@@ -325,25 +323,25 @@ impl ShaderManager for RorschachShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        let ui_handled = self.base.egui_state.on_window_event(core.window(), event).consumed;
+        let ui_handled = self.render_kit.egui_state.on_window_event(core.window(), event).consumed;
         
         if ui_handled {
             return true;
         }
 
-        if self.base.handle_mouse_input(core, event, false) {
+        if self.render_kit.handle_mouse_input(core, event, false) {
             return true;
         }
 
         if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self.base.key_handler.handle_keyboard_input(core.window(), event);
+            return self.render_kit.key_handler.handle_keyboard_input(core.window(), event);
         }
 
         false
     }
 
     fn resize(&mut self, core: &Core) {
-        self.base.update_resolution(&core.queue, core.size);
+        self.render_kit.update_resolution(&core.queue, core.size);
         self.compute_shader.resize(core, core.size.width, core.size.height);
     }
 }

@@ -7,7 +7,7 @@ use log::info;
 use crate::{Core, UniformProvider, UniformBinding, TextureManager, ShaderHotReload, FontSystem};
 use super::builder::ComputeConfiguration;
 use super::multipass::MultiPassManager;
-use super::resource::ResourceLayout;
+use super::resource::ResourceManager;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -88,7 +88,7 @@ impl ComputeShader {
         config: ComputeConfiguration,
     ) -> Self {
         // Step 1: Create resource layout following 4-group convention
-        let mut resource_layout = ResourceLayout::new();
+        let mut resource_layout = ResourceManager::new();
         
         // Group 0: Always has time uniform
         resource_layout.add_time_uniform();
@@ -676,8 +676,8 @@ impl ComputeShader {
         channel_textures: &HashMap<u32, Option<(wgpu::TextureView, wgpu::Sampler)>>,
         num_channels: u32,
     ) -> Option<wgpu::BindGroup> {
-        // Create entries based on expected layout from ResourceLayout
-        // Order must match ResourceLayout creation order:
+        // Create entries based on expected layout from ResourceManager
+        // Order must match ResourceManager creation order:
         // 1. mouse (if has_mouse) -> binding 0
         // 2. fonts (if has_fonts) -> bindings 1,2,3  
         // 3. audio (if has_audio) -> binding N
@@ -967,7 +967,7 @@ impl ComputeShader {
         if let Some(ref mut _placeholder) = self.placeholder_input_texture {
             // Note: We can't directly replace the view/sampler references in TextureManager
             // since they're owned. In practice, fluid.rs calls this method with the texture 
-            // from base.get_current_texture_manager() which already updates the correct texture.
+            // from render_kit.get_current_texture_manager() which already updates the correct texture.
             // The placeholder serves as the fallback, but in multipass we should use the current one.
         }
         

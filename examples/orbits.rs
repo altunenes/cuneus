@@ -31,7 +31,7 @@ impl UniformProvider for ShaderParams {
 }
 
 struct Shader {
-    base: RenderKit,
+    render_kit: RenderKit,
     compute_shader: ComputeShader,
     mouse_dragging: bool,
     drag_start: [f32; 2],
@@ -53,8 +53,7 @@ impl ShaderManager for Shader {
         let initial_y = 2.14278;
 
         // Create texture display layout
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let render_kit = RenderKit::new(core, None);
 
         let config = ComputeShader::builder()
             .with_entry_point("main")
@@ -104,7 +103,7 @@ impl ShaderManager for Shader {
         compute_shader.set_custom_params(initial_params, &core.queue);
 
         Self {
-            base,
+            render_kit,
             compute_shader,
             mouse_dragging: false,
             drag_start: [0.0, 0.0],
@@ -115,10 +114,10 @@ impl ShaderManager for Shader {
     }
 
     fn update(&mut self, core: &Core) {
-        self.base.fps_tracker.update();
+        self.render_kit.fps_tracker.update();
         self.compute_shader.check_hot_reload(&core.device);
         // Handle export        
-        self.compute_shader.handle_export(core, &mut self.base);
+        self.compute_shader.handle_export(core, &mut self.render_kit);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
@@ -128,11 +127,11 @@ impl ShaderManager for Shader {
         let mut params = self.current_params;
         let mut changed = false;
         
-        let mut controls_request = self.base.controls.get_ui_request(&self.base.start_time, &core.size);
-        controls_request.current_fps = Some(self.base.fps_tracker.fps());
+        let mut controls_request = self.render_kit.controls.get_ui_request(&self.render_kit.start_time, &core.size);
+        controls_request.current_fps = Some(self.render_kit.fps_tracker.fps());
         
-        let full_output = if self.base.key_handler.show_ui {
-            self.base.render_ui(core, |ctx| {
+        let full_output = if self.render_kit.key_handler.show_ui {
+            self.render_kit.render_ui(core, |ctx| {
                 ctx.style_mut(|style| {
                     style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
                     style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;
@@ -208,10 +207,10 @@ impl ShaderManager for Shader {
                     });
             })
         } else {
-            self.base.render_ui(core, |_ctx| {})
+            self.render_kit.render_ui(core, |_ctx| {})
         };
 
-        self.base.apply_control_request(controls_request);
+        self.render_kit.apply_control_request(controls_request);
 
         if changed {
             self.current_params = params;
@@ -224,12 +223,12 @@ impl ShaderManager for Shader {
         });
 
         // Update time uniform
-        let current_time = self.base.controls.get_time(&self.base.start_time);
+        let current_time = self.render_kit.controls.get_time(&self.render_kit.start_time);
         let delta_time = 1.0 / 60.0;
         self.compute_shader.set_time(current_time, delta_time, &core.queue);
 
         // Update mouse uniform
-        self.compute_shader.update_mouse_uniform(&self.base.mouse_tracker.uniform, &core.queue);
+        self.compute_shader.update_mouse_uniform(&self.render_kit.mouse_tracker.uniform, &core.queue);
 
         // Dispatch compute shader
         self.compute_shader.dispatch(&mut encoder, core);
@@ -244,28 +243,28 @@ impl ShaderManager for Shader {
             );
 
             let compute_texture = self.compute_shader.get_output_texture();
-            render_pass.set_pipeline(&self.base.renderer.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
+            render_pass.set_pipeline(&self.render_kit.renderer.render_pipeline);
+            render_pass.set_vertex_buffer(0, self.render_kit.renderer.vertex_buffer.slice(..));
             render_pass.set_bind_group(0, &compute_texture.bind_group, &[]);
             render_pass.draw(0..4, 0..1);
         }
 
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
+        self.render_kit.handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(Some(encoder.finish()));
         output.present();
 
         Ok(())
     }
     fn resize(&mut self, core: &Core) {
-        self.base.update_resolution(&core.queue, core.size);
+        self.render_kit.update_resolution(&core.queue, core.size);
         self.compute_shader.resize(core, core.size.width, core.size.height);
     }
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self.base.egui_state.on_window_event(core.window(), event).consumed {
+        if self.render_kit.egui_state.on_window_event(core.window(), event).consumed {
             return true;
         }
         if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self.base.key_handler.handle_keyboard_input(core.window(), event);
+            return self.render_kit.key_handler.handle_keyboard_input(core.window(), event);
         }
         match event {
             WindowEvent::MouseInput { state, button, .. } => {
@@ -273,7 +272,7 @@ impl ShaderManager for Shader {
                     MouseButton::Left => {
                         match state {
                             ElementState::Pressed => {
-                                let mouse_pos = self.base.mouse_tracker.uniform.position;
+                                let mouse_pos = self.render_kit.mouse_tracker.uniform.position;
                                 self.mouse_dragging = true;
                                 self.drag_start = mouse_pos;
                                 self.drag_start_pos = [self.current_params.x, self.current_params.y];
@@ -291,7 +290,7 @@ impl ShaderManager for Shader {
             },
             WindowEvent::CursorMoved { .. } => {
                 if self.mouse_dragging {
-                    let current_pos = self.base.mouse_tracker.uniform.position;
+                    let current_pos = self.render_kit.mouse_tracker.uniform.position;
                     let dx = (current_pos[0] - self.drag_start[0]) * 3.0 * self.zoom_level;
                     let dy = (current_pos[1] - self.drag_start[1]) * 6.0 * self.zoom_level;
                     let mut new_x = self.drag_start_pos[0] + dx;
@@ -302,7 +301,7 @@ impl ShaderManager for Shader {
                     self.current_params.y = new_y;
                     self.compute_shader.set_custom_params(self.current_params, &core.queue);
                 }
-                self.base.handle_mouse_input(core, event, false)
+                self.render_kit.handle_mouse_input(core, event, false)
             },
             WindowEvent::MouseWheel { delta, .. } => {
                 let zoom_delta = match delta {
@@ -311,7 +310,7 @@ impl ShaderManager for Shader {
                 };
                 
                 if zoom_delta != 0.0 {
-                    let mouse_pos = self.base.mouse_tracker.uniform.position;
+                    let mouse_pos = self.render_kit.mouse_tracker.uniform.position;
                     let center_x = self.current_params.x;
                     let center_y = self.current_params.y;
                     
@@ -329,10 +328,10 @@ impl ShaderManager for Shader {
                     self.current_params.y = (center_y + dy).clamp(0.0, 6.0);
                     self.compute_shader.set_custom_params(self.current_params, &core.queue);
                 }
-                self.base.handle_mouse_input(core, event, false)
+                self.render_kit.handle_mouse_input(core, event, false)
             },
             
-            _ => self.base.handle_mouse_input(core, event, false),
+            _ => self.render_kit.handle_mouse_input(core, event, false),
         }
     }
 }

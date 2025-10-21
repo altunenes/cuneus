@@ -5,7 +5,7 @@ use winit::event::*;
 
 
 struct DebugScreen {
-    base: RenderKit,
+    render_kit: RenderKit,
     compute_shader: ComputeShader,
     audio_synthesis: Option<SynthesisManager>,
     generate_note: bool,
@@ -15,8 +15,7 @@ impl ShaderManager for DebugScreen {
     fn init(core: &Core) -> Self {
         // Create texture display layout - needed to show compute shader output on screen
         // This layout defines how to bind the texture (binding 0) and sampler (binding 1) for rendering
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let render_kit = RenderKit::new(core, None);
 
         // Entry point configuration
         let config = ComputeShader::builder()
@@ -60,7 +59,7 @@ impl ShaderManager for DebugScreen {
         };
 
         Self { 
-            base,
+            render_kit,
             compute_shader,
             audio_synthesis,
             generate_note: false,
@@ -69,27 +68,27 @@ impl ShaderManager for DebugScreen {
 
     fn update(&mut self, core: &Core) {
         // Update time
-        let current_time = self.base.controls.get_time(&self.base.start_time);
+        let current_time = self.render_kit.controls.get_time(&self.render_kit.start_time);
         let delta = 1.0/60.0;
         self.compute_shader.set_time(current_time, delta, &core.queue);
         
         // Update mouse data
         if let Some(mouse_uniform) = &mut self.compute_shader.mouse_uniform {
-            mouse_uniform.data = self.base.mouse_tracker.uniform;
+            mouse_uniform.data = self.render_kit.mouse_tracker.uniform;
             mouse_uniform.update(&core.queue);
         }
         
-        self.base.fps_tracker.update();
+        self.render_kit.fps_tracker.update();
         
         // Check for hot reload updates
         self.compute_shader.check_hot_reload(&core.device);
         
         // Handle audio generation
         if self.generate_note {
-            if self.base.time_uniform.data.frame % 60 == 0 {
+            if self.render_kit.time_uniform.data.frame % 60 == 0 {
                 if let Some(ref mut synth) = self.audio_synthesis {
-                    let frequency = 220.0 + self.base.mouse_tracker.uniform.position[1] * 440.0;
-                    let active = self.base.mouse_tracker.uniform.buttons[0] & 1 != 0;
+                    let frequency = 220.0 + self.render_kit.mouse_tracker.uniform.position[1] * 440.0;
+                    let active = self.render_kit.mouse_tracker.uniform.buttons[0] & 1 != 0;
                     let amp = if active { 0.1 } else { 0.0 };
                     synth.set_voice(0, frequency, amp, active);
                 }
@@ -104,7 +103,7 @@ impl ShaderManager for DebugScreen {
     }
 
     fn resize(&mut self, core: &Core) {
-        self.base.update_resolution(&core.queue, core.size);
+        self.render_kit.update_resolution(&core.queue, core.size);
         self.compute_shader.resize(core, core.size.width, core.size.height);
     }
 
@@ -112,16 +111,16 @@ impl ShaderManager for DebugScreen {
         let output = core.surface.get_current_texture()?;
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         
-        let mut controls_request = self.base.controls.get_ui_request(&self.base.start_time, &core.size);
-        controls_request.current_fps = Some(self.base.fps_tracker.fps());
+        let mut controls_request = self.render_kit.controls.get_ui_request(&self.render_kit.start_time, &core.size);
+        controls_request.current_fps = Some(self.render_kit.fps_tracker.fps());
         
-        let mouse_pos = self.base.mouse_tracker.uniform.position;
-        let raw_pos = self.base.mouse_tracker.raw_position;
-        let mouse_buttons = self.base.mouse_tracker.uniform.buttons[0];
-        let mouse_wheel = self.base.mouse_tracker.uniform.wheel;
+        let mouse_pos = self.render_kit.mouse_tracker.uniform.position;
+        let raw_pos = self.render_kit.mouse_tracker.raw_position;
+        let mouse_buttons = self.render_kit.mouse_tracker.uniform.buttons[0];
+        let mouse_wheel = self.render_kit.mouse_tracker.uniform.wheel;
 
-        let full_output = if self.base.key_handler.show_ui {
-            self.base.render_ui(core, |ctx| {
+        let full_output = if self.render_kit.key_handler.show_ui {
+            self.render_kit.render_ui(core, |ctx| {
                 ctx.style_mut(|style| {
                     style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
                 });
@@ -175,10 +174,10 @@ impl ShaderManager for DebugScreen {
                     });
             })
         } else {
-            self.base.render_ui(core, |_ctx| {})
+            self.render_kit.render_ui(core, |_ctx| {})
         };
 
-        self.base.apply_control_request(controls_request);
+        self.render_kit.apply_control_request(controls_request);
 
         // Create command encoder
         let mut encoder = core.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -198,13 +197,13 @@ impl ShaderManager for DebugScreen {
             );
 
             let compute_texture = self.compute_shader.get_output_texture();
-            render_pass.set_pipeline(&self.base.renderer.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
+            render_pass.set_pipeline(&self.render_kit.renderer.render_pipeline);
+            render_pass.set_vertex_buffer(0, self.render_kit.renderer.vertex_buffer.slice(..));
             render_pass.set_bind_group(0, &compute_texture.bind_group, &[]);
             render_pass.draw(0..4, 0..1);
         }
 
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
+        self.render_kit.handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(Some(encoder.finish()));
         output.present();
         
@@ -212,16 +211,16 @@ impl ShaderManager for DebugScreen {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self.base.egui_state.on_window_event(core.window(), event).consumed {
+        if self.render_kit.egui_state.on_window_event(core.window(), event).consumed {
             return true;
         }
         
-        if self.base.handle_mouse_input(core, event, false) {
+        if self.render_kit.handle_mouse_input(core, event, false) {
             return true;
         }
         
         if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self.base.key_handler.handle_keyboard_input(core.window(), event);
+            return self.render_kit.key_handler.handle_keyboard_input(core.window(), event);
         }
         
         false

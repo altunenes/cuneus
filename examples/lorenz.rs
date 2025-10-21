@@ -37,7 +37,7 @@ impl UniformProvider for LorenzParams {
 }
 
 struct LorenzShader {
-    base: RenderKit,
+    render_kit: RenderKit,
     compute_shader: ComputeShader,
     current_params: LorenzParams,
     mouse_look_enabled: bool,
@@ -51,7 +51,6 @@ impl LorenzShader {
 
 impl ShaderManager for LorenzShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
         let initial_params = LorenzParams {
             sigma: 40.0,
             rho: 33.0,
@@ -78,7 +77,7 @@ impl ShaderManager for LorenzShader {
             decay_speed: 8.0,
         };
 
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let render_kit = RenderKit::new(core, None);
 
         let mut config = ComputeShader::builder()
             .with_entry_point("Splat")
@@ -112,7 +111,7 @@ impl ShaderManager for LorenzShader {
         compute_shader.set_custom_params(initial_params, &core.queue);
 
         Self {
-            base,
+            render_kit,
             compute_shader,
             current_params: initial_params,
             mouse_look_enabled: false,
@@ -123,17 +122,17 @@ impl ShaderManager for LorenzShader {
         // Check for hot reload updates
         self.compute_shader.check_hot_reload(&core.device);
         // Handle export        
-        self.compute_shader.handle_export_dispatch(core, &mut self.base, |shader, encoder, core| {
+        self.compute_shader.handle_export_dispatch(core, &mut self.render_kit, |shader, encoder, core| {
             let particle_workgroups = (self.current_params.particle_count as u32 / 256).max(1);
             shader.dispatch_stage_with_workgroups(encoder, 0, [particle_workgroups, 1, 1]);
             shader.dispatch_stage(encoder, core, 1);
         });
         
-        self.base.fps_tracker.update();
+        self.render_kit.fps_tracker.update();
     }
     
     fn resize(&mut self, core: &Core) {
-        self.base.update_resolution(&core.queue, core.size);
+        self.render_kit.update_resolution(&core.queue, core.size);
         self.compute_shader.resize(core, core.size.width, core.size.height);
     }
     
@@ -147,15 +146,15 @@ impl ShaderManager for LorenzShader {
         let mut params = self.current_params;
         let mut changed = false;
         let mut should_start_export = false;
-        let mut export_request = self.base.export_manager.get_ui_request();
-        let mut controls_request = self.base.controls.get_ui_request(
-            &self.base.start_time,
+        let mut export_request = self.render_kit.export_manager.get_ui_request();
+        let mut controls_request = self.render_kit.controls.get_ui_request(
+            &self.render_kit.start_time,
             &core.size
         );
         
-        controls_request.current_fps = Some(self.base.fps_tracker.fps());
-        let full_output = if self.base.key_handler.show_ui {
-            self.base.render_ui(core, |ctx| {
+        controls_request.current_fps = Some(self.render_kit.fps_tracker.fps());
+        let full_output = if self.render_kit.key_handler.show_ui {
+            self.render_kit.render_ui(core, |ctx| {
                 ctx.style_mut(|style| {
                     style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
                     style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;
@@ -282,26 +281,26 @@ impl ShaderManager for LorenzShader {
                     });
             })
         } else {
-            self.base.render_ui(core, |_ctx| {})
+            self.render_kit.render_ui(core, |_ctx| {})
         };
         
-        self.base.export_manager.apply_ui_request(export_request);
+        self.render_kit.export_manager.apply_ui_request(export_request);
         if controls_request.should_clear_buffers {
             self.clear_buffers(core);
         }
-        self.base.apply_control_request(controls_request);
+        self.render_kit.apply_control_request(controls_request);
         
-        let current_time = self.base.controls.get_time(&self.base.start_time);
+        let current_time = self.render_kit.controls.get_time(&self.render_kit.start_time);
         
         let delta = 1.0 / 60.0;
         self.compute_shader.set_time(current_time, delta, &core.queue);
         
         // Mouse data is read from tracker and passed through custom uniform parameters
         if self.mouse_look_enabled {
-            params.rotation_x = self.base.mouse_tracker.uniform.position[0];
-            params.rotation_y = self.base.mouse_tracker.uniform.position[1];
+            params.rotation_x = self.render_kit.mouse_tracker.uniform.position[0];
+            params.rotation_y = self.render_kit.mouse_tracker.uniform.position[1];
         }
-        params.click_state = if self.base.mouse_tracker.uniform.buttons[0] & 1 > 0 { 1 } else { 0 };
+        params.click_state = if self.render_kit.mouse_tracker.uniform.buttons[0] & 1 > 0 { 1 } else { 0 };
         changed = true;
         
         if changed {
@@ -310,7 +309,7 @@ impl ShaderManager for LorenzShader {
         }
         
         if should_start_export {
-            self.base.export_manager.start_export();
+            self.render_kit.export_manager.start_export();
         }
         
         // Stage 0: Generate and splat particles (workgroup size [256, 1, 1])
@@ -328,21 +327,21 @@ impl ShaderManager for LorenzShader {
                 Some("Display Pass"),
             );
             
-            render_pass.set_pipeline(&self.base.renderer.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
+            render_pass.set_pipeline(&self.render_kit.renderer.render_pipeline);
+            render_pass.set_vertex_buffer(0, self.render_kit.renderer.vertex_buffer.slice(..));
             render_pass.set_bind_group(0, &self.compute_shader.output_texture.bind_group, &[]);
             
             render_pass.draw(0..4, 0..1);
         }
         
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
+        self.render_kit.handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(Some(encoder.finish()));
         output.present();
         Ok(())
     }
     
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self.base.egui_state.on_window_event(core.window(), event).consumed {
+        if self.render_kit.egui_state.on_window_event(core.window(), event).consumed {
             return true;
         }
         if let WindowEvent::MouseInput { state, button, .. } = event {
@@ -353,12 +352,12 @@ impl ShaderManager for LorenzShader {
                 }
             }
         }
-        if self.mouse_look_enabled && self.base.handle_mouse_input(core, event, false) {
+        if self.mouse_look_enabled && self.render_kit.handle_mouse_input(core, event, false) {
             return true;
         }
         
         if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self.base.key_handler.handle_keyboard_input(core.window(), event);
+            return self.render_kit.key_handler.handle_keyboard_input(core.window(), event);
         }
         
         false
