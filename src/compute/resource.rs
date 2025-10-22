@@ -306,7 +306,7 @@ impl ResourceLayout {
 
     /// Examples:
     /// - Algorithm data: add_dynamic_storage_buffer("data", DynamicSize::ResolutionSquared(8)) // 8 bytes per pixel
-    /// - Particle system: add_dynamic_storage_buffer("particles", DynamicSize::Fixed(1000 * 64)) // Fixed count  
+    /// - Particle system: add_dynamic_storage_buffer("particles", DynamicSize::Fixed(1000 * 64)) // Fixed count
     /// - Grid simulation: add_dynamic_storage_buffer("grid", DynamicSize::ResolutionLinear(16)) // 16 bytes per cell
     pub fn add_dynamic_storage_buffer(
         &mut self,
@@ -327,76 +327,76 @@ impl ResourceLayout {
     }
 }
 
-/// standard layouts for common shader patterns
-pub fn create_basic_layout() -> ResourceLayout {
-    let mut layout = ResourceLayout::new();
-    layout.add_time_uniform(); // Group 0
-    layout.add_output_texture(wgpu::TextureFormat::Rgba16Float); // Group 1
-    layout
-}
+// /// standard layouts for common shader patterns
+// pub fn create_basic_layout() -> ResourceLayout {
+//     let mut layout = ResourceLayout::new();
+//     layout.add_time_uniform(); // Group 0
+//     layout.add_output_texture(wgpu::TextureFormat::Rgba16Float); // Group 1
+//     layout
+// }
 
-pub fn create_layout_with_input() -> ResourceLayout {
-    let mut layout = create_basic_layout();
-    layout.add_input_texture(); // Group 1
-    layout
-}
+// pub fn create_layout_with_input() -> ResourceLayout {
+//     let mut layout = create_basic_layout();
+//     layout.add_input_texture(); // Group 1
+//     layout
+// }
 
-pub fn create_layout_with_uniform(uniform_size: u64) -> ResourceLayout {
-    let mut layout = create_basic_layout();
-    layout.add_custom_uniform("params", uniform_size); // Group 1
-    layout
-}
+// pub fn create_layout_with_uniform(uniform_size: u64) -> ResourceLayout {
+//     let mut layout = create_basic_layout();
+//     layout.add_custom_uniform("params", uniform_size); // Group 1
+//     layout
+// }
 
-/// Create layout for algorithms requiring resolution-dependent storage
-/// Useful for: FFT, convolution, image processing etc
-pub fn create_algorithm_layout(
-    uniform_size: u64,
-    resolution: u32,
-    bytes_per_pixel: u32,
-) -> ResourceLayout {
-    let mut layout = create_basic_layout();
-    layout.add_input_texture(); // Group 1 (for media input)
-    layout.add_custom_uniform("params", uniform_size); // Group 1
-                                                       // Algorithm needs resolution² × bytes_per_pixel storage
-    layout.add_dynamic_storage_buffer(
-        "algorithm_data",
-        DynamicSize::ResolutionSquared(bytes_per_pixel),
-        resolution,
-        resolution,
-    );
-    layout
-}
+// /// Create layout for algorithms requiring resolution-dependent storage
+// /// Useful for: FFT, convolution, image processing etc
+// pub fn create_algorithm_layout(
+//     uniform_size: u64,
+//     resolution: u32,
+//     bytes_per_pixel: u32,
+// ) -> ResourceLayout {
+//     let mut layout = create_basic_layout();
+//     layout.add_input_texture(); // Group 1 (for media input)
+//     layout.add_custom_uniform("params", uniform_size); // Group 1
+//                                                        // Algorithm needs resolution² × bytes_per_pixel storage
+//     layout.add_dynamic_storage_buffer(
+//         "algorithm_data",
+//         DynamicSize::ResolutionSquared(bytes_per_pixel),
+//         resolution,
+//         resolution,
+//     );
+//     layout
+// }
 
-/// for particle systems
-pub fn create_particle_layout(uniform_size: u64, particle_count: u32) -> ResourceLayout {
-    let mut layout = create_basic_layout();
-    layout.add_custom_uniform("params", uniform_size); // Group 1
-                                                       // Particles need fixed count × bytes per particle
-    let bytes_per_particle = 64; // Position + velocity + color + life
-    layout.add_dynamic_storage_buffer(
-        "particles",
-        DynamicSize::Fixed((particle_count * bytes_per_particle) as u64),
-        0,
-        0,
-    );
-    layout
-}
+// /// for particle systems
+// pub fn create_particle_layout(uniform_size: u64, particle_count: u32) -> ResourceLayout {
+//     let mut layout = create_basic_layout();
+//     layout.add_custom_uniform("params", uniform_size); // Group 1
+//                                                        // Particles need fixed count × bytes per particle
+//     let bytes_per_particle = 64; // Position + velocity + color + life
+//     layout.add_dynamic_storage_buffer(
+//         "particles",
+//         DynamicSize::Fixed((particle_count * bytes_per_particle) as u64),
+//         0,
+//         0,
+//     );
+//     layout
+// }
 
-/// Create layout for grid-based simulations (resolution-dependent)
-pub fn create_grid_layout(
-    uniform_size: u64,
-    width: u32,
-    height: u32,
-    bytes_per_cell: u32,
-) -> ResourceLayout {
-    let mut layout = create_basic_layout();
-    layout.add_custom_uniform("params", uniform_size); // Group 1
-                                                       // Grid needs width × height × bytes per cell
-    layout.add_dynamic_storage_buffer(
-        "grid_data",
-        DynamicSize::ResolutionLinear(bytes_per_cell),
-        width,
-        height,
-    );
-    layout
-}
+// /// Create layout for grid-based simulations (resolution-dependent)
+// pub fn create_grid_layout(
+//     uniform_size: u64,
+//     width: u32,
+//     height: u32,
+//     bytes_per_cell: u32,
+// ) -> ResourceLayout {
+//     let mut layout = create_basic_layout();
+//     layout.add_custom_uniform("params", uniform_size); // Group 1
+//                                                        // Grid needs width × height × bytes per cell
+//     layout.add_dynamic_storage_buffer(
+//         "grid_data",
+//         DynamicSize::ResolutionLinear(bytes_per_cell),
+//         width,
+//         height,
+//     );
+//     layout
+// }

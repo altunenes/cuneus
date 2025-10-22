@@ -116,8 +116,7 @@ impl Core {
         let prefer_power_preference = instance
             .enumerate_adapters(wgpu::Backends::all())
             .iter()
-            .filter(|p| p.get_info().device_type == wgpu::DeviceType::DiscreteGpu)
-            .next()
+            .find(|p| p.get_info().device_type == wgpu::DeviceType::DiscreteGpu)
             .map(|_| wgpu::PowerPreference::HighPerformance)
             .unwrap_or(wgpu::PowerPreference::default());
         log::info!("perferred power preference: {:?}", prefer_power_preference);
