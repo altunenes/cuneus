@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use cuneus::prelude::*;
 use cuneus::compute::*;
 use winit::event::WindowEvent;
@@ -277,6 +279,28 @@ impl ShaderManager for KuwaharaShader {
             render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
             render_pass.set_bind_group(0, &compute_texture.bind_group, &[]);
             render_pass.draw(0..4, 0..1);
+        }
+
+        if let Some(media_change_guard) = &controls_request.media_changed{
+            let guard_clone = Arc::clone(media_change_guard);
+            let mut guard_lock = guard_clone.write();
+            let media_changed = guard_lock.clone();
+            // let mut locker = guard_clone.write().unwrap();
+            // *locker = true;
+            if media_changed
+                || changed
+                || self.base.video_texture_manager.is_some()
+                || self.base.webcam_texture_manager.is_some()
+            {
+                self.compute_shader.dispatch_once = false;
+                *guard_lock = false;
+            } else {
+                self.compute_shader.dispatch_once = true;
+            }
+            if media_changed {
+                self.compute_shader.current_frame = 0;
+            }
+            drop(guard_lock);
         }
         
         self.base.handle_render_output(core, &view, full_output, &mut encoder);
