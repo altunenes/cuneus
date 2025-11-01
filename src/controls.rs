@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
+use egui::mutex::RwLock;
+
 #[cfg(feature = "media")]
 use crate::gst::video::VideoTextureManager;
 use crate::hdri::HdriMetadata;
@@ -33,6 +35,9 @@ pub struct ControlsRequest {
     pub start_webcam: bool,
     pub stop_webcam: bool,
     pub webcam_device_index: Option<u32>,
+
+    // media change status
+    pub media_changed: Option<Arc<RwLock<bool>>>,
 }
 impl Default for ControlsRequest {
     fn default() -> Self {
@@ -78,6 +83,8 @@ impl Default for ControlsRequest {
             start_webcam: false,
             stop_webcam: false,
             webcam_device_index: None,
+
+            media_changed: None,
         }
     }
 }
@@ -171,6 +178,8 @@ impl ShaderControls {
             start_webcam: false,
             stop_webcam: false,
             webcam_device_index: None,
+
+            media_changed: Some(Arc::new(RwLock::new(false))),
         }
     }
     
@@ -252,6 +261,12 @@ impl ShaderControls {
                             .pick_file() 
                         {
                             request.load_media_path = Some(path);
+                            if let Some(gaurd) = &request.media_changed {
+                                let guard_clone = Arc::clone(gaurd);
+                                let mut locker = guard_clone.write();
+                                *locker = true;
+                                drop(locker);
+                            }
                         }
                     }
                 });
