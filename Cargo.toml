@@ -11,7 +11,7 @@ keywords = ["graphics", "wgpu", "shaders", "gpu"]
 categories = ["graphics", "rendering"]
 
 [dependencies]
-wgpu = "27.0.1"
+wgpu = "28.0.0"
 winit = "0.30.12"
 bytemuck = { version = "1.23.2", features = ["derive"] }
 egui-wgpu = "0.33.0"
