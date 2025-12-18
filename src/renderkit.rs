@@ -197,7 +197,7 @@ impl RenderKit {
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
                 bind_group_layouts,
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
         let renderer = Renderer::new(
             &core.device,
