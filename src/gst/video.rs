@@ -44,6 +44,8 @@ pub struct VideoTextureManager {
     appsink: gst_app::AppSink,
     /// Whether the video has an audio track
     has_audio: bool,
+    /// Whether this is an audio-only file (no video track)
+    audio_only: Arc<Mutex<bool>>,
     /// Audio volume (0.0 to 1.0)
     volume: Arc<Mutex<f64>>,
     /// Whether audio is muted
@@ -82,6 +84,8 @@ pub struct VideoTextureManager {
     audio_level: Arc<Mutex<AudioLevel>>,
     /// bpm
     bpm_value: Arc<Mutex<f32>>,
+    /// Whether video track was found
+    has_video: Arc<Mutex<bool>>,
 }
 
 impl VideoTextureManager {
@@ -176,6 +180,8 @@ impl VideoTextureManager {
         let videorate_weak = videorate.downgrade();
         let has_audio = Arc::new(Mutex::new(false));
         let has_audio_clone = has_audio.clone();
+        let has_video = Arc::new(Mutex::new(false));
+        let has_video_clone = has_video.clone();
 
         // now audio elements reference holders
         let audioconvert_weak = Arc::new(Mutex::new(None));
@@ -300,14 +306,14 @@ impl VideoTextureManager {
                             }
                         }
 
-                        // Note: BPM messages are handled in update_texture() with octave correction
+                        // Note: BPM messages are handled in poll_audio_messages()
                     }
                 }
                 gst::MessageView::Tag(tag) => {
                     let tags = tag.tags();
-                    // Note: BPM tags are ignored - we use bpmdetect messages with octave correction instead
+                    // Note: BPM tags are handled in poll_audio_messages()
                     if let Some(bpm) = tags.get::<gst::tags::BeatsPerMinute>() {
-                        info!("BPM tag detected (ignored): {:.1}", bpm.get());
+                        info!("BPM tag detected: {:.1}", bpm.get());
                     }
                 }
                 gst::MessageView::Error(err) => {
@@ -339,6 +345,11 @@ impl VideoTextureManager {
             };
             // Check if this is a video or audio stream. maybe there could be other way to handle this but I love simpicity
             if structure.name().starts_with("video/") {
+                // Mark that we have a video track
+                if let Ok(mut has_video_lock) = has_video_clone.lock() {
+                    *has_video_lock = true;
+                    info!("Video track detected");
+                }
                 // Handle video path
                 if let Some(videorate) = videorate_weak.upgrade() {
                     let sink_pad = match videorate.static_pad("sink") {
@@ -609,6 +620,7 @@ impl VideoTextureManager {
             pipeline,
             appsink,
             has_audio: false,
+            audio_only: Arc::new(Mutex::new(false)),
             volume: volume_val,
             is_muted,
             dimensions: (1, 1),
@@ -628,6 +640,7 @@ impl VideoTextureManager {
             spectrum_data,
             audio_level,
             bpm_value: Arc::new(Mutex::new(0.0)),
+            has_video: has_video.clone(),
         };
         // Start pipeline in paused state to get video info
         if video_texture
@@ -664,7 +677,40 @@ impl VideoTextureManager {
             }
         }
         video_texture.has_audio = *has_audio.lock().unwrap();
-        info!("Video has audio: {}", video_texture.has_audio);
+        let has_video_track = *has_video.lock().unwrap();
+
+        // Determine if this is an audio-only file
+        if video_texture.has_audio && !has_video_track {
+            *video_texture.audio_only.lock().unwrap() = true;
+            info!("Audio-only file detected - no video track present");
+
+            // For audio-only files, remove unlinked video elements from the pipeline
+            if let Some(videorate_elem) = video_texture.pipeline.by_name("rate") {
+                let _ = videorate_elem.set_state(gst::State::Null);
+                let _ = video_texture.pipeline.remove(&videorate_elem);
+                info!("Removed unused videorate element");
+            }
+            if let Some(convert_elem) = video_texture.pipeline.by_name("convert") {
+                let _ = convert_elem.set_state(gst::State::Null);
+                let _ = video_texture.pipeline.remove(&convert_elem);
+                info!("Removed unused videoconvert element");
+            }
+            if let Some(capsfilter_elem) = video_texture.pipeline.by_name("capsfilter") {
+                let _ = capsfilter_elem.set_state(gst::State::Null);
+                let _ = video_texture.pipeline.remove(&capsfilter_elem);
+                info!("Removed unused capsfilter element");
+            }
+            if let Some(sink_elem) = video_texture.pipeline.by_name("sink") {
+                let _ = sink_elem.set_state(gst::State::Null);
+                let _ = video_texture.pipeline.remove(&sink_elem);
+                info!("Removed unused appsink element");
+            }
+        }
+
+        info!("Video has audio: {}, has video: {}, audio_only: {}",
+              video_texture.has_audio,
+              has_video_track,
+              *video_texture.audio_only.lock().unwrap());
 
         info!("Video texture manager created successfully");
         Ok(video_texture)
@@ -727,6 +773,15 @@ impl VideoTextureManager {
             return Ok(false);
         }
 
+        let is_audio_only = *self.audio_only.lock().unwrap();
+        let mut audio_updated = false;
+
+        // ALWAYS poll for audio messages, regardless of video frame availability
+        // This decouples audio processing from video frame rate
+        if self.has_audio && self.spectrum_enabled {
+            audio_updated = self.poll_audio_messages();
+        }
+
         // Check if we have a NEW frame to process
         let frame_to_process = {
             let mut frame_lock = self.current_frame.lock().unwrap();
@@ -748,324 +803,7 @@ impl VideoTextureManager {
                     self.frame_count, width, height
                 );
             }
-            if self.has_audio && self.spectrum_enabled {
-                if let Some(bus) = self.pipeline.bus() {
-                    // Poll for pending messages
-                    while let Some(message) = bus.pop() {
-                        match message.view() {
-                            gst::MessageView::Element(element) => {
-                                if let Some(structure) = element.structure() {
-                                    //spectrum data
-                                    if structure.name() == "spectrum" {
-                                        // Extract magnitude values - two possible approaches
-                                        let mut magnitude_values = Vec::with_capacity(128);
 
-                                        // APPROACH 1: Parse from structure string
-                                        let struct_str = structure.to_string();
-                                        if struct_str.contains("magnitude=(float){") {
-                                            // Extract magnitude values from string
-                                            if let Some(start_idx) =
-                                                struct_str.find("magnitude=(float){")
-                                            {
-                                                if let Some(end_idx) =
-                                                    struct_str[start_idx..].find("}")
-                                                {
-                                                    let magnitude_str = &struct_str[start_idx
-                                                        + "magnitude=(float){".len()
-                                                        ..start_idx + end_idx];
-                                                    let values: Vec<&str> =
-                                                        magnitude_str.split(',').collect();
-
-                                                    for value_str in values {
-                                                        if let Ok(value) =
-                                                            value_str.trim().parse::<f32>()
-                                                        {
-                                                            magnitude_values.push(value);
-                                                        }
-                                                    }
-
-                                                    info!(
-                                                        "Extracted {} magnitude values from string",
-                                                        magnitude_values.len()
-                                                    );
-                                                }
-                                            }
-                                        }
-
-                                        // APPROACH 2: Try to access directly by index if approach 1 fails
-                                        if magnitude_values.is_empty() {
-                                            for i in 0..128 {
-                                                let field_name = format!("magnitude[{i}]");
-                                                if let Ok(value) = structure.get::<f32>(&field_name)
-                                                {
-                                                    magnitude_values.push(value);
-                                                } else {
-                                                    break;
-                                                }
-                                            }
-
-                                            if !magnitude_values.is_empty() {
-                                                info!(
-                                                    "Extracted {} magnitude values by field access",
-                                                    magnitude_values.len()
-                                                );
-                                            }
-                                        }
-
-                                        // Process spectrum data if we have it
-                                        if !magnitude_values.is_empty() {
-                                            // Calculate audio metrics
-                                            let bands = magnitude_values.len();
-
-                                            // Calculate average and normalize values
-                                            // Values are in dB (typically negative, with higher/less negative being louder)
-                                            let threshold = self.spectrum_threshold as f32;
-
-                                            // Create normalized values from -60dB (silence) to 0dB (loudest)
-                                            let normalized_values: Vec<f32> = magnitude_values
-                                                .iter()
-                                                .map(|&v| {
-                                                    ((v - threshold) / -threshold).max(0.0).min(1.0)
-                                                })
-                                                .collect();
-
-                                            // Calculate frequency band energy averages (useful for visualization)
-                                            let bass_range = (bands as f32 * 0.1) as usize; // First 10% of frequencies
-                                            let mid_range_start = bass_range;
-                                            let mid_range_end = (bands as f32 * 0.5) as usize; // 10-50% of frequencies
-                                            let high_range_start = mid_range_end;
-
-                                            let bass_energy = if bass_range > 0 {
-                                                normalized_values[0..bass_range].iter().sum::<f32>()
-                                                    / bass_range as f32
-                                            } else {
-                                                0.0
-                                            };
-
-                                            let mid_energy = if mid_range_end > mid_range_start {
-                                                normalized_values[mid_range_start..mid_range_end]
-                                                    .iter()
-                                                    .sum::<f32>()
-                                                    / (mid_range_end - mid_range_start) as f32
-                                            } else {
-                                                0.0
-                                            };
-
-                                            let high_energy = if bands > high_range_start {
-                                                normalized_values[high_range_start..]
-                                                    .iter()
-                                                    .sum::<f32>()
-                                                    / (bands - high_range_start) as f32
-                                            } else {
-                                                0.0
-                                            };
-
-                                            // Find peak frequency band
-                                            let peak_info = normalized_values
-                                                .iter()
-                                                .enumerate()
-                                                .max_by(|(_, a), (_, b)| {
-                                                    a.partial_cmp(b)
-                                                        .unwrap_or(std::cmp::Ordering::Equal)
-                                                });
-
-                                            if let Some((peak_idx, &peak_val)) = peak_info {
-                                                // Rough estimate of frequency based on band index
-                                                let peak_freq =
-                                                    (peak_idx as f32 / bands as f32) * 20000.0;
-                                                info!(
-                                                    "Peak freq: ~{peak_freq:.0} Hz (band {peak_idx}, val: {peak_val:.2})"
-                                                );
-                                            }
-
-                                            // Log energy metrics
-                                            info!("Audio energy - Bass: {bass_energy:.2}, Mid: {mid_energy:.2}, High: {high_energy:.2}");
-
-                                            // Update spectrum data
-                                            if let Ok(mut data) = self.spectrum_data.lock() {
-                                                *data = SpectrumData {
-                                                    bands,
-                                                    magnitudes: magnitude_values,
-                                                    phases: None,
-                                                    timestamp: structure.get("timestamp").ok(),
-                                                };
-                                            }
-                                        }
-                                    }
-
-                                    // Check for level messages (RMS/peak/decay)
-                                    if structure.name() == "level" {
-                                        // Extract RMS and peak values
-                                        let mut rms_db_val = None;
-                                        let mut peak_val = None;
-
-                                        if let Ok(rms_list) =
-                                            structure.get::<gst::glib::ValueArray>("rms")
-                                        {
-                                            for val in rms_list.iter() {
-                                                if let Ok(rms_db) = val.get::<f64>() {
-                                                    rms_db_val = Some(rms_db);
-                                                    break; // Use first channel
-                                                }
-                                            }
-                                        }
-
-                                        if let Ok(peak_list) =
-                                            structure.get::<gst::glib::ValueArray>("peak")
-                                        {
-                                            for val in peak_list.iter() {
-                                                if let Ok(peak_db) = val.get::<f64>() {
-                                                    // Convert dB to linear (0.0 to 1.0)
-                                                    peak_val = Some(10.0_f64.powf(peak_db / 20.0));
-                                                    break; // Use first channel
-                                                }
-                                            }
-                                        }
-
-                                        if let (Some(rms_db), Some(peak)) = (rms_db_val, peak_val) {
-                                            // Convert RMS from dB to linear
-                                            let rms_linear = 10.0_f64.powf(rms_db / 20.0);
-
-                                            // Update audio_level data with level element values
-                                            if let Ok(mut level) = self.audio_level.lock() {
-                                                *level = AudioLevel {
-                                                    rms: rms_linear,
-                                                    rms_db,
-                                                    peak,
-                                                };
-                                            }
-                                        }
-                                    }
-
-                                    // Check for BPM messages from bpmdetect (structure name is "tempo")
-                                    // Note: This rarely triggers - bpmdetect primarily uses Tag messages
-                                    if structure.name() == "tempo" {
-                                        // bpmdetect posts "tempo" field
-                                        if let Ok(bpm_val) = structure.get::<f64>("tempo") {
-                                            let bpm_val = bpm_val as f32;
-                                            if let Ok(mut bpm_lock) = self.bpm_value.lock() {
-                                                // Apply musical heuristics to handle tempo octave ambiguity: https://www.ifs.tuwien.ac.at/~knees/publications/hoerschlaeger_etal_smc_2015.pdf
-                                                let current_bpm = *bpm_lock;
-
-                                                if current_bpm == 0.0 && bpm_val > 0.0 {
-                                                    // First detection - aggressively prefer 60-110 BPM range
-                                                    // Keep halving until we're in a reasonable range
-                                                    let mut corrected_bpm = bpm_val;
-                                                    let mut halving_count = 0;
-
-                                                    while corrected_bpm > 110.0 && halving_count < 3
-                                                    {
-                                                        corrected_bpm /= 2.0;
-                                                        halving_count += 1;
-                                                    }
-
-                                                    // If still too low after potential halving, try doubling
-                                                    if corrected_bpm < 50.0
-                                                        && corrected_bpm * 2.0 < 140.0
-                                                    {
-                                                        corrected_bpm *= 2.0;
-                                                        info!("Initial BPM doubled: {bpm_val:.1} → {corrected_bpm:.1}");
-                                                    } else if halving_count > 0 {
-                                                        info!("Initial BPM halved {halving_count}x: {bpm_val:.1} → {corrected_bpm:.1}");
-                                                    } else {
-                                                        info!("Initial BPM in range: {corrected_bpm:.1}");
-                                                    }
-
-                                                    *bpm_lock = corrected_bpm;
-                                                } else if current_bpm > 0.0 && bpm_val > 0.0 {
-                                                    // Subsequent detections - apply octave correction and smoothing
-                                                    let mut new_bpm = bpm_val;
-
-                                                    // Aggressively correct octave errors
-                                                    if new_bpm > 110.0 {
-                                                        // If new detection is high, try halving
-                                                        let halved = new_bpm / 2.0;
-                                                        if (60.0..=110.0).contains(&halved) {
-                                                            new_bpm = halved;
-                                                            info!("New BPM halved: {bpm_val:.1} → {new_bpm:.1}");
-                                                        }
-                                                    } else if new_bpm < 50.0 {
-                                                        // If new detection is low, try doubling
-                                                        let doubled = new_bpm * 2.0;
-                                                        if (60.0..=110.0).contains(&doubled) {
-                                                            new_bpm = doubled;
-                                                            info!("New BPM doubled: {bpm_val:.1} → {new_bpm:.1}");
-                                                        }
-                                                    }
-
-                                                    // Strong smoothing to prevent jumps - heavily favor current BPM
-                                                    let smoothed =
-                                                        current_bpm * 0.9 + new_bpm * 0.1;
-                                                    *bpm_lock = smoothed;
-                                                    info!("   Final BPM: {smoothed:.1} (smoothed from {new_bpm:.1})");
-                                                }
-
-                                                info!("BPM set to: {:.1}", *bpm_lock);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            // Also check for tag messages - bpmdetect posts BPM as tags!
-                            gst::MessageView::Tag(tag) => {
-                                let tags = tag.tags();
-
-                                // Check for BPM tag from bpmdetect
-                                if let Some(bpm) = tags.get::<gst::tags::BeatsPerMinute>() {
-                                    let bpm_val = bpm.get() as f32;
-
-                                    if bpm_val > 0.0 {
-                                        if let Ok(mut bpm_lock) = self.bpm_value.lock() {
-                                            let current_bpm = *bpm_lock;
-
-                                            if current_bpm == 0.0 {
-                                                // First detection - aggressively prefer 60-110 BPM range
-                                                let mut corrected_bpm = bpm_val;
-                                                let mut halving_count = 0;
-
-                                                while corrected_bpm > 110.0 && halving_count < 3 {
-                                                    corrected_bpm /= 2.0;
-                                                    halving_count += 1;
-                                                }
-
-                                                if corrected_bpm < 50.0
-                                                    && corrected_bpm * 2.0 < 140.0
-                                                {
-                                                    corrected_bpm *= 2.0;
-                                                } else if halving_count > 0 {
-                                                    info!("BPM octave corrected: {bpm_val:.1} → {corrected_bpm:.1}");
-                                                }
-
-                                                *bpm_lock = corrected_bpm;
-                                                info!("BPM initialized: {corrected_bpm:.1}");
-                                            } else if bpm_val > 0.0 {
-                                                // Subsequent detections
-                                                let mut new_bpm = bpm_val;
-
-                                                if new_bpm > 110.0 {
-                                                    let halved = new_bpm / 2.0;
-                                                    if (60.0..=110.0).contains(&halved) {
-                                                        new_bpm = halved;
-                                                    }
-                                                } else if new_bpm < 50.0 {
-                                                    let doubled = new_bpm * 2.0;
-                                                    if (60.0..=110.0).contains(&doubled) {
-                                                        new_bpm = doubled;
-                                                    }
-                                                }
-
-                                                // Strong smoothing (90% old, 10% new)
-                                                *bpm_lock = current_bpm * 0.9 + new_bpm * 0.1;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            _ => (),
-                        }
-                    }
-                }
-            }
             // ALWAYS recreate the texture for the first frame or if dimensions don't match
             let should_recreate = !self.texture_initialized
                 || self.dimensions != (width, height)
@@ -1117,8 +855,206 @@ impl VideoTextureManager {
 
             Ok(true) // Texture was updated
         } else {
+            // For audio-only files or when audio data was updated, return true
+            // to signal that the shader should re-render (even without new video frames)
+            if is_audio_only && audio_updated {
+                // Update position for audio-only files
+                if let Some(position) = self.pipeline.query_position::<gst::ClockTime>() {
+                    *self.position.lock().unwrap() = position;
+
+                    // Check if we reached the end
+                    if let Some(duration) = self.duration {
+                        let near_end_threshold =
+                            duration.saturating_sub(gst::ClockTime::from_mseconds(100));
+
+                        if position >= near_end_threshold {
+                            if *self.loop_playback.lock().unwrap() {
+                                debug!("Looping audio");
+                                self.seek(gst::ClockTime::ZERO)?;
+                            } else {
+                                debug!("Pausing at end of audio");
+                                self.pause()?;
+                            }
+                        }
+                    }
+                }
+                self.last_update = Instant::now();
+                return Ok(true);
+            }
+            // For video with low FPS but audio updated, still signal update
+            if audio_updated {
+                return Ok(true);
+            }
             Ok(false) // No update
         }
+    }
+
+    /// Poll the GStreamer bus for audio-related messages (spectrum, level, BPM)
+    /// Returns true if any audio data was updated
+    fn poll_audio_messages(&mut self) -> bool {
+        let mut updated = false;
+
+        if let Some(bus) = self.pipeline.bus() {
+            // Poll for pending messages
+            while let Some(message) = bus.pop() {
+                match message.view() {
+                    gst::MessageView::Element(element) => {
+                        if let Some(structure) = element.structure() {
+                            // spectrum data
+                            if structure.name() == "spectrum" {
+                                // Extract magnitude values - two possible approaches
+                                let mut magnitude_values = Vec::with_capacity(128);
+
+                                // APPROACH 1: Parse from structure string
+                                let struct_str = structure.to_string();
+                                if struct_str.contains("magnitude=(float){") {
+                                    // Extract magnitude values from string
+                                    if let Some(start_idx) =
+                                        struct_str.find("magnitude=(float){")
+                                    {
+                                        if let Some(end_idx) =
+                                            struct_str[start_idx..].find("}")
+                                        {
+                                            let magnitude_str = &struct_str[start_idx
+                                                + "magnitude=(float){".len()
+                                                ..start_idx + end_idx];
+                                            let values: Vec<&str> =
+                                                magnitude_str.split(',').collect();
+
+                                            for value_str in values {
+                                                if let Ok(value) =
+                                                    value_str.trim().parse::<f32>()
+                                                {
+                                                    magnitude_values.push(value);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // APPROACH 2: Try to access directly by index if approach 1 fails
+                                if magnitude_values.is_empty() {
+                                    for i in 0..128 {
+                                        let field_name = format!("magnitude[{i}]");
+                                        if let Ok(value) = structure.get::<f32>(&field_name)
+                                        {
+                                            magnitude_values.push(value);
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                // Process spectrum data if we have it
+                                if !magnitude_values.is_empty() {
+                                    let bands = magnitude_values.len();
+
+                                    // Update spectrum data
+                                    if let Ok(mut data) = self.spectrum_data.lock() {
+                                        *data = SpectrumData {
+                                            bands,
+                                            magnitudes: magnitude_values,
+                                            phases: None,
+                                            timestamp: structure.get("timestamp").ok(),
+                                        };
+                                    }
+                                    updated = true;
+                                }
+                            }
+
+                            // Check for level messages (RMS/peak/decay)
+                            if structure.name() == "level" {
+                                // Extract RMS and peak values
+                                let mut rms_db_val = None;
+                                let mut peak_val = None;
+
+                                if let Ok(rms_list) =
+                                    structure.get::<gst::glib::ValueArray>("rms")
+                                {
+                                    for val in rms_list.iter() {
+                                        if let Ok(rms_db) = val.get::<f64>() {
+                                            rms_db_val = Some(rms_db);
+                                            break; // Use first channel
+                                        }
+                                    }
+                                }
+
+                                if let Ok(peak_list) =
+                                    structure.get::<gst::glib::ValueArray>("peak")
+                                {
+                                    for val in peak_list.iter() {
+                                        if let Ok(peak_db) = val.get::<f64>() {
+                                            // Convert dB to linear (0.0 to 1.0)
+                                            peak_val = Some(10.0_f64.powf(peak_db / 20.0));
+                                            break; // Use first channel
+                                        }
+                                    }
+                                }
+
+                                if let (Some(rms_db), Some(peak)) = (rms_db_val, peak_val) {
+                                    // Convert RMS from dB to linear
+                                    let rms_linear = 10.0_f64.powf(rms_db / 20.0);
+
+                                    // Update audio_level data with level element values
+                                    if let Ok(mut level) = self.audio_level.lock() {
+                                        *level = AudioLevel {
+                                            rms: rms_linear,
+                                            rms_db,
+                                            peak,
+                                        };
+                                    }
+                                    updated = true;
+                                }
+                            }
+
+                            // Check for BPM messages from bpmdetect (structure name is "tempo")
+                            if structure.name() == "tempo" {
+                                if let Ok(bpm_val) = structure.get::<f64>("tempo") {
+                                    let bpm_val = bpm_val as f32;
+                                    if bpm_val > 0.0 {
+                                        if let Ok(mut bpm_lock) = self.bpm_value.lock() {
+                                            *bpm_lock = bpm_val;
+                                            info!("BPM detected: {:.1}", bpm_val);
+                                        }
+                                        updated = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Also check for tag messages - bpmdetect posts BPM as tags!
+                    gst::MessageView::Tag(tag) => {
+                        let tags = tag.tags();
+
+                        // Check for BPM tag from bpmdetect
+                        if let Some(bpm) = tags.get::<gst::tags::BeatsPerMinute>() {
+                            let bpm_val = bpm.get() as f32;
+
+                            if bpm_val > 0.0 {
+                                if let Ok(mut bpm_lock) = self.bpm_value.lock() {
+                                    *bpm_lock = bpm_val;
+                                    info!("BPM tag detected: {:.1}", bpm_val);
+                                }
+                                updated = true;
+                            }
+                        }
+                    }
+                    _ => (),
+                }
+            }
+        }
+
+        updated
+    }
+
+    /// Returns true if this is an audio-only file (no video track)
+    pub fn is_audio_only(&self) -> bool {
+        *self.audio_only.lock().unwrap()
+    }
+
+    /// Returns true if the media has a video track
+    pub fn has_video(&self) -> bool {
+        *self.has_video.lock().unwrap()
     }
 
     /// Start playing the video
