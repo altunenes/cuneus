@@ -439,7 +439,7 @@ impl RenderKit {
                 }
             }
             #[cfg(feature = "media")]
-            Some(ext) if ["mp4", "avi", "mkv", "mov", "webm"].contains(&ext.as_str()) => {
+            Some(ext) if ["mp4", "avi", "mkv", "mov", "webm","mp3", "wav", "ogg"].contains(&ext.as_str()) => {
                 info!("Loading video: {path_ref:?}");
                 match VideoTextureManager::new(
                     &core.device,
