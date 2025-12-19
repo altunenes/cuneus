@@ -53,7 +53,7 @@ jobs:
         if: runner.os == 'macOS' && matrix.shader_config.gstreamer_required
         run: |
           # Download and install official GStreamer packages
-          GSTREAMER_VERSION="1.26.7"
+          GSTREAMER_VERSION="1.26.9"
           curl -L "https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION/gstreamer-1.0-$GSTREAMER_VERSION-universal.pkg" -o gstreamer.pkg
           curl -L "https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION/gstreamer-1.0-devel-$GSTREAMER_VERSION-universal.pkg" -o gstreamer-devel.pkg
           
@@ -90,7 +90,7 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Starting GStreamer installation process..."
-          $gstVer = "1.26.7"
+          $gstVer = "1.26.9"
           $tempDir = "C:\gst-temp"
           $installDir = "C:\gstreamer"
           
