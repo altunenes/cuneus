@@ -255,7 +255,7 @@ impl ShaderControls {
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter(
                                 "Media Files",
-                                &["png", "jpg", "jpeg", "mp4", "avi", "mkv", "webm", "mov"],
+                                &["png", "jpg", "jpeg", "mp4", "avi", "mkv", "webm", "mov", "mp3", "wav", "ogg"],
                             )
                             .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "tiff"])
                             .add_filter("Videos", &["mp4", "avi", "mkv", "webm", "mov"])
