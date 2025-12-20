@@ -1350,15 +1350,16 @@ impl ComputeShader {
     }
 
     /// Update audio spectrum buffer with data from ResolutionUniform
+    /// Buffer layout: [0-63]: spectrum, [64]: BPM, [65-68]: bass/mid/high/total energy
     pub fn update_audio_spectrum(
         &mut self,
         resolution_uniform: &crate::ResolutionUniform,
         queue: &wgpu::Queue,
     ) {
         if let Some(ref buffer) = self.audio_spectrum_buffer {
-            // Convert audio_data from [[f32; 4]; 32] to [f32; 65] format
-            // 64 spectrum values + 1 BPM value at the end
-            let mut spectrum_data = vec![0.0f32; 65];
+            // Convert audio_data from [[f32; 4]; 32] to [f32; 69] format
+            // 64 spectrum values + 1 BPM + 4 energy values (bass, mid, high, total)
+            let mut spectrum_data = vec![0.0f32; 69];
             for i in 0..64 {
                 let vec_idx = i / 4;
                 let comp_idx = i % 4;
@@ -1371,7 +1372,7 @@ impl ComputeShader {
             spectrum_data[64] = resolution_uniform.bpm;
 
             // Debug: to see audio spectrum data flow
-            let total_energy: f32 = spectrum_data[..64].iter().sum();
+            let total_energy: f32 = spectrum_data[..69].iter().sum();
             if total_energy > 0.01 {
                 log::info!(
                     "Audio spectrum: energy={:.3}, BPM={:.1}",
@@ -1380,7 +1381,12 @@ impl ComputeShader {
                 );
             }
 
-            // Write the spectrum data to the buffer (including BPM)
+            spectrum_data[65] = resolution_uniform.bass_energy;
+            spectrum_data[66] = resolution_uniform.mid_energy;
+            spectrum_data[67] = resolution_uniform.high_energy;
+            spectrum_data[68] = resolution_uniform.total_energy;
+
+            // Write the spectrum data to the buffer
             queue.write_buffer(buffer, 0, bytemuck::cast_slice(&spectrum_data));
         }
     }
