@@ -319,16 +319,22 @@ The `.with_channels(N)` method exposes `N` texture/sampler pairs in Group 2, mak
 
 ### Audio Spectrum Analysis (`.with_audio_spectrum()`)
 
-Use `.with_audio_spectrum(65)` to **visualize** audio from loaded media files. GStreamer's spectrum analyzer processes the audio stream and writes frequency data to a GPU buffer that your shader can read.
+Use `.with_audio_spectrum(69)` to **visualize** audio from loaded media files. GStreamer's spectrum analyzer processes the audio stream and writes frequency data to a GPU buffer that your shader can read.
 
-- **Buffer Contents**: 64 frequency band magnitudes (indices 0-63) + BPM value (index 64)
+- **Buffer Layout**:
+  - Indices 0-63: frequency band magnitudes (RMS-normalized)
+  - Index 64: BPM value 
+  - Index 65: bass energy (pre-computed, ~0-200Hz)
+  - Index 66: mid energy (pre-computed, ~200-4000Hz)
+  - Index 67: high energy (pre-computed, ~4000-20000Hz)
+  - Index 68: total energy (weighted average)
 - **Shader Access**: `@group(2) var<storage, read> audio_spectrum: array<f32>` (read-only)
-- **Data Source**: Loaded audio/video files (not generated audio)
-- **Features**: RMS-normalized for consistent intensity, real-time BPM detection
+- **Data Source**: Loaded audio/video files (mp3, wav, ogg, mp4, etc.)
+- **Features**: RMS-normalized, real-time BPM detection, pre-computed energy bands
 - **Example**: `audiovis.rs` - Spectrum visualizer with beat-synced animations
 
 ### Fonts
 
-The `.with_fonts()` method provides everything needed to render text directly inside your compute shader. This is perfect for debug overlays or creative typography effects.
+The `.with_fonts()` method provides texture (see `assets/fonts/fonttexture.png`) needed to render text directly inside your shader
 
 - *Examples: `debugscreen.rs` uses this for its UI, and `cnn.rs` uses it to label its output bars.*
