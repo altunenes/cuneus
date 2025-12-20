@@ -9,7 +9,11 @@ pub struct ResolutionUniform {
     pub _padding: [f32; 2],
     pub audio_data: [[f32; 4]; 32],
     pub bpm: f32,
-    pub _bpm_padding: [f32; 3],
+    pub bass_energy: f32,
+    pub mid_energy: f32,
+    pub high_energy: f32,
+    pub total_energy: f32,
+    pub _energy_padding: [f32; 3],
 }
 
 impl UniformProvider for ResolutionUniform {
