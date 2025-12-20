@@ -120,7 +120,7 @@ fn nG(c: v3, i: f32) -> v3 {
 }
 
 // Bloom effect
-fn bE(c: v3) -> v3 {
+fn bloomEffect(c: v3) -> v3 {
     let bp = max(v3(0.0), c - v3(0.7));
     return c + bp * bp * 0.5;
 }
@@ -152,13 +152,18 @@ fn gAR(l: f32, h: f32) -> f32 {
     return s / c;
 }
 
-// Get BPM value from audio spectrum buffer
-// The audio_spectrum buffer contains:
-//   - Indices 0-63: frequency spectrum magnitudes (already RMS-normalized)
+// Audio spectrum buffer layout:
+//   - Indices 0-63: frequency spectrum magnitudes (RMS-normalized)
 //   - Index 64: BPM value (beats per minute)
-fn getBPM() -> f32 {
-    return audio_spectrum[64];
-}
+//   - Index 65: bass energy (pre-computed on CPU)
+//   - Index 66: mid energy (pre-computed on CPU)
+//   - Index 67: high energy (pre-computed on CPU)
+//   - Index 68: total energy (pre-computed on CPU)
+fn getBPM() -> f32 { return audio_spectrum[64]; }
+fn getBassEnergy() -> f32 { return audio_spectrum[65]; }
+fn getMidEnergy() -> f32 { return audio_spectrum[66]; }
+fn getHighEnergy() -> f32 { return audio_spectrum[67]; }
+fn getTotalEnergy() -> f32 { return audio_spectrum[68]; }
 
 @compute @workgroup_size(16, 16, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -168,12 +173,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     
     let tc = v2(f32(gid.x), f32(gid.y)) / v2(f32(dims.x), f32(dims.y));
     let t = time_data.time;
-    
-    // Audio energy in different ranges
-    let bE = gAR(0.0, 0.2);  // bass energy
-    let mE = gAR(0.2, 0.6);  // mid energy
-    let hE = gAR(0.6, 1.0);  // high energy
-    let tE = (bE * 1.5 + mE + hE) / 3.5;  // total energy
+
+    // Audio energy - pre-computed on CPU in spectrum.rs
+    let bE = getBassEnergy();
+    let mE = getMidEnergy();
+    let hE = getHighEnergy();
+    let tE = getTotalEnergy();
     
     // Final color - start with dark background
     var fc = v3(0.005, 0.005, 0.01);
@@ -301,7 +306,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     fc.b = pow(fc.b, 1.0 / params.blue_power);
     fc = pow(max(fc, v3(0.0)), v3(params.gamma));
     fc = (fc - 0.5) * params.contrast + 0.5;
-    fc = bE(fc) * (1.0 + params.glow * 0.7);
+    fc = bloomEffect(fc) * (1.0 + params.glow * 0.7);
     
     fc *= mix(1.0, smoothstep(0.5, 0.0, length(tc - 0.5) - 0.2), 0.85);
     

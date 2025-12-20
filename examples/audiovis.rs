@@ -54,7 +54,7 @@ impl ShaderManager for AudioVisCompute {
         let config = ComputeShader::builder()
             .with_entry_point("main")
             .with_custom_uniforms::<AudioVisParams>()
-            .with_audio_spectrum(65) // 64 frequency bands + 1 BPM value
+            .with_audio_spectrum(69) // 64 spectrum + BPM + 4 energy values
             .with_workgroup_size([16, 16, 1])
             .with_texture_format(COMPUTE_TEXTURE_FORMAT_RGBA16)
             .with_label("Audio Visualizer Compute")
@@ -93,8 +93,8 @@ impl ShaderManager for AudioVisCompute {
         self.compute_shader
             .set_time(current_time, delta, &core.queue);
 
-        // Update audio spectrum - first update RenderKit's resolution uniform, then copy to compute buffer
-        log::info!("using_video_texture: {}", self.base.using_video_texture);
+        // Update audio spectrum - energy values are computed in spectrum.rs
+        // and included in the buffer at indices 65-68
         self.base.update_audio_spectrum(&core.queue);
         self.compute_shader
             .update_audio_spectrum(&self.base.resolution_uniform.data, &core.queue);
