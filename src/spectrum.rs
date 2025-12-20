@@ -148,15 +148,37 @@ impl SpectrumAnalyzer {
                             }
                         }
 
-                        // Beat detection with balanced boost across frequency spectrum
-                        let mut bass_energy: f32 = 0.0;
-                        let bass_bands = 64 / 16;
-                        for i in 0..(bass_bands / 4) {
-                            for j in 0..4 {
-                                bass_energy += resolution_uniform.data.audio_data[i][j];
+                        // Compute audio energy for bass/mid/high ranges
+                        let mut bass_sum = 0.0f32;
+                        let mut mid_sum = 0.0f32;
+                        let mut high_sum = 0.0f32;
+
+                        for i in 0..64 {
+                            let vec_idx = i / 4;
+                            let component = i % 4;
+                            let value = resolution_uniform.data.audio_data[vec_idx][component];
+
+                            let freq = i as f32 / 64.0;
+                            if freq < 0.2 {
+                                bass_sum += value;
+                            } else if freq < 0.6 {
+                                mid_sum += value;
+                            } else {
+                                high_sum += value;
                             }
                         }
-                        bass_energy /= bass_bands as f32;
+
+                        // Normalize by band count
+                        let bass_energy = bass_sum / 13.0; // bands 0-12
+                        let mid_energy = mid_sum / 26.0;   // bands 13-38
+                        let high_energy = high_sum / 25.0; // bands 39-63
+                        let total_energy = (bass_energy * 1.5 + mid_energy + high_energy) / 3.5;
+
+                        // Store in resolution uniform for shaders to access
+                        resolution_uniform.data.bass_energy = bass_energy;
+                        resolution_uniform.data.mid_energy = mid_energy;
+                        resolution_uniform.data.high_energy = high_energy;
+                        resolution_uniform.data.total_energy = total_energy;
 
                         // If we detect a beat, provide progressive boost to mid/high frequencies
                         if bass_energy > 0.5 {
