@@ -82,6 +82,11 @@ fn aces_tonemap(color: v3) -> v3 {
     return m2 * (a / b);
 }
 
+fn pmap(value: f32, domain: f32) -> f32 {
+    let r = value % domain;
+    return select(r + domain, r, r >= 0.0) - (domain * 0.5);
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dims = textureDimensions(output);
@@ -112,11 +117,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         
         N = f(p + t * 0.1);
         d = length(p.xy) - 1.0 + N * 0.3;
-        p.z = (p.z % 4.0) - 2.0;
+        
+        p.z = pmap(p.z, 4.0);
+        
         d = abs(d) + 0.01;
         
-        var c = v3(params.color1_r, params.color1_g, params.color1_b) / (length(p.xy + N) * 0.8);
-        c += v3(params.color2_r, params.color2_g, params.color2_b) / (length(p.xz + N) * 0.8);
+        let den1 = max(length(p.xy + N) * 0.8, 0.005);
+        let den2 = max(length(p.xz + N) * 0.8, 0.005);
+
+        var c = v3(params.color1_r, params.color1_g, params.color1_b) / den1;
+        c += v3(params.color2_r, params.color2_g, params.color2_b) / den2;
         c += v3(params.color3_r, params.color3_g, params.color3_b) * (0.5 + 0.5 * sin(N * 1.0 + t));
         
         o += c / d * 0.12;
@@ -124,6 +134,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     
     var result = tanh(o * params.intensity);
     result = aces_tonemap(result);
+    result = max(result, v3(0.0));
     result = pow(result, v3(1.0 / params.gamma));
+    
     textureStore(output, gid.xy, v4(result, 1.0));
 }
