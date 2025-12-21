@@ -60,6 +60,11 @@ struct MandelbulbParams {
     glow_color_r: f32,
     glow_color_g: f32,
     glow_color_b: f32,
+
+    rotation_x: f32,
+    rotation_y: f32,
+    rotation_z: f32,
+    _pad: f32,
 }
 @group(1) @binding(0) var output: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(1) var<uniform> params: MandelbulbParams;
@@ -332,14 +337,9 @@ fn draw(frag_coord: v2, frame: u32) -> v4 {
     let focus_point = FOCUS_CAM_TARGET;
     let cam_tar = focus_point;
 
-    let mouse_sensitivity = 3.0;
-    let current_rotation = v3(
-        (mouse.position.y - 0.5) * mouse_sensitivity,
-        (mouse.position.x - 0.5) * mouse_sensitivity,
-        0.0
-    );
+
+    let mouse_rotation = rotation_y(params.rotation_x) * rotation_x(params.rotation_y) * rotation_z(params.rotation_z);
     let base_rotation = rotation_z(MANDEL_ROT_Z) * rotation_y(MANDEL_ROT_Y) * rotation_x(MANDEL_ROT_X);
-    let mouse_rotation = rotation_z(current_rotation.z) * rotation_y(current_rotation.y) * rotation_x(current_rotation.x);
     let rotation = mouse_rotation * base_rotation;
     let ww = normalize(cam_tar - cam_pos);
     let uu = normalize(cross(v3(0.0, 1.0, 0.0), ww));

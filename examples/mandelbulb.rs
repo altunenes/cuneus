@@ -1,6 +1,6 @@
 use cuneus::compute::ComputeShader;
 use cuneus::{
-    Core, ExportManager, MouseUniform, RenderKit, ShaderControls, ShaderManager, UniformProvider,
+    Core, ExportManager, RenderKit, ShaderControls, ShaderManager, UniformProvider,
 };
 use winit::event::WindowEvent;
 
@@ -48,6 +48,11 @@ struct MandelbulbParams {
     glow_color_r: f32,
     glow_color_g: f32,
     glow_color_b: f32,
+
+    rotation_x: f32,
+    rotation_y: f32,
+    rotation_z: f32,
+    _pad: f32,
 }
 
 impl UniformProvider for MandelbulbParams {
@@ -62,10 +67,14 @@ struct MandelbulbShader {
     frame_count: u32,
     should_reset_accumulation: bool,
     current_params: MandelbulbParams,
-    // Mouse tracking for accumulation reset
+    // Mouse tracking for delta-based rotation
     previous_mouse_pos: [f32; 2],
     mouse_enabled: bool,
-    stored_mouse_position: [f32; 2],
+    mouse_initialized: bool,
+    // Accumulated rotation (persists across frames)
+    accumulated_rotation: [f32; 3],
+    // Accumulated zoom from mouse wheel
+    accumulated_zoom: f32,
 }
 
 impl MandelbulbShader {
@@ -120,6 +129,11 @@ impl ShaderManager for MandelbulbShader {
             glow_color_r: 0.5,
             glow_color_g: 0.7,
             glow_color_b: 1.0,
+
+            rotation_x: 0.0,
+            rotation_y: 0.0,
+            rotation_z: 0.0,
+            _pad: 0.0,
         };
         let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
         let base = RenderKit::new(core, &texture_bind_group_layout, None);
@@ -171,7 +185,9 @@ impl ShaderManager for MandelbulbShader {
             current_params: initial_params,
             previous_mouse_pos: [0.5, 0.5],
             mouse_enabled: false,
-            stored_mouse_position: [0.5, 0.5],
+            mouse_initialized: false,
+            accumulated_rotation: [0.0, 0.0, 0.0],
+            accumulated_zoom: 1.0,
         }
     }
 
@@ -203,31 +219,35 @@ impl ShaderManager for MandelbulbShader {
                 label: Some("Render Encoder"),
             });
 
-        // Check if mouse moved and reset accumulation if needed
         let current_mouse_pos = self.base.mouse_tracker.uniform.position;
-        if self.mouse_enabled {
-            let moved = (current_mouse_pos[0] - self.previous_mouse_pos[0]).abs() > 0.001
-                || (current_mouse_pos[1] - self.previous_mouse_pos[1]).abs() > 0.001;
-            if moved {
-                self.should_reset_accumulation = true;
-                self.previous_mouse_pos = current_mouse_pos;
-            }
+        let mouse_wheel = self.base.mouse_tracker.uniform.wheel;
+
+        if mouse_wheel[1].abs() > 0.001 {
+            let zoom_sensitivity = 0.1;
+            self.accumulated_zoom *= 1.0 - mouse_wheel[1] * zoom_sensitivity;
+            self.accumulated_zoom = self.accumulated_zoom.clamp(0.2, 5.0);
+            self.should_reset_accumulation = true;
         }
 
         if self.mouse_enabled {
-            self.compute_shader
-                .update_mouse_uniform(&self.base.mouse_tracker.uniform, &core.queue);
-        } else {
-            // stored mouse position to hold the view
-            let static_mouse = MouseUniform {
-                position: self.stored_mouse_position,
-                click_position: self.stored_mouse_position,
-                wheel: [0.0, 0.0],
-                buttons: [0, 0],
-            };
-            self.compute_shader
-                .update_mouse_uniform(&static_mouse, &core.queue);
+            if !self.mouse_initialized {
+                self.previous_mouse_pos = current_mouse_pos;
+                self.mouse_initialized = true;
+            } else {
+                let delta_x: f32 = current_mouse_pos[0] - self.previous_mouse_pos[0];
+                let delta_y = current_mouse_pos[1] - self.previous_mouse_pos[1];
+                if delta_x.abs() > 0.0001 || delta_y.abs() > 0.0001 {
+                    let base_sensitivity = 5.0;
+                    let aspect = core.size.width as f32 / core.size.height as f32;
+                    self.accumulated_rotation[0] += delta_x * base_sensitivity;
+                    self.accumulated_rotation[1] += delta_y * base_sensitivity * aspect;
+                    self.should_reset_accumulation = true;
+                    self.previous_mouse_pos = current_mouse_pos;
+                }
+            }
         }
+
+        self.base.mouse_tracker.reset_wheel();
 
         let mut params = self.current_params;
         let mut changed = false;
@@ -240,7 +260,6 @@ impl ShaderManager for MandelbulbShader {
         controls_request.current_fps = Some(self.base.fps_tracker.fps());
 
         let current_fps = self.base.fps_tracker.fps();
-        let current_mouse_position = self.base.mouse_tracker.uniform.position;
 
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
@@ -264,18 +283,15 @@ impl ShaderManager for MandelbulbShader {
                     .resizable(true)
                     .default_width(350.0)
                     .show(ctx, |ui| {
-                        ui.label("Mouse - Rotate camera");
-                        ui.label("M key - Toggle mouse on/off");
+                        ui.label("WASD: Rotate | QE: Roll | Scroll: Zoom");
                         ui.separator();
 
                         egui::CollapsingHeader::new("Camera&View")
                             .default_open(false)
                             .show(ui, |ui| {
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.zoom, 0.1..=5.0).text("Zoom"),
-                                    )
-                                    .changed();
+                                if ui.add(egui::Slider::new(&mut self.accumulated_zoom, 0.2..=5.0).text("Zoom")).changed() {
+                                    self.should_reset_accumulation = true;
+                                }
                                 changed |= ui
                                     .add(
                                         egui::Slider::new(&mut params.focal_length, 2.0..=20.0)
@@ -291,10 +307,9 @@ impl ShaderManager for MandelbulbShader {
 
                                 ui.separator();
                                 let old_mouse_enabled = self.mouse_enabled;
-                                ui.checkbox(&mut self.mouse_enabled, "Mouse Camera Control");
-                                if self.mouse_enabled != old_mouse_enabled && !self.mouse_enabled {
-                                    self.stored_mouse_position = current_mouse_position;
-                                    self.should_reset_accumulation = true;
+                                ui.checkbox(&mut self.mouse_enabled, "Mouse Camera Control (M key)");
+                                if self.mouse_enabled != old_mouse_enabled {
+                                    self.mouse_initialized = false;
                                 }
                                 if !self.mouse_enabled {
                                     ui.colored_label(
@@ -302,11 +317,18 @@ impl ShaderManager for MandelbulbShader {
                                         "Mouse disabled - camera locked",
                                     );
                                 } else {
-                                    ui.colored_label(
-                                        egui::Color32::GREEN,
-                                        "Mouse enabled - move to rotate camera",
-                                    );
+                                    ui.colored_label(egui::Color32::GREEN, "Mouse active");
                                 }
+                                ui.horizontal(|ui| {
+                                    if ui.button("Reset Rotation").clicked() {
+                                        self.accumulated_rotation = [0.0, 0.0, 0.0];
+                                        self.should_reset_accumulation = true;
+                                    }
+                                    if ui.button("Reset Zoom").clicked() {
+                                        self.accumulated_zoom = 1.0;
+                                        self.should_reset_accumulation = true;
+                                    }
+                                });
                             });
 
                         egui::CollapsingHeader::new("Mandelbulb")
@@ -581,9 +603,14 @@ impl ShaderManager for MandelbulbShader {
 
         if changed {
             self.current_params = params;
-            self.compute_shader.set_custom_params(params, &core.queue);
             self.should_reset_accumulation = true;
         }
+
+        self.current_params.rotation_x = self.accumulated_rotation[0];
+        self.current_params.rotation_y = -self.accumulated_rotation[1];
+        self.current_params.rotation_z = self.accumulated_rotation[2];
+        self.current_params.zoom = self.accumulated_zoom;
+        self.compute_shader.set_custom_params(self.current_params, &core.queue);
 
         if should_start_export {
             self.base.export_manager.start_export();
@@ -646,14 +673,50 @@ impl ShaderManager for MandelbulbShader {
                     }
                     "m" | "M" => {
                         if event.state == winit::event::ElementState::Released {
-                            if self.mouse_enabled {
-                                self.stored_mouse_position =
-                                    self.base.mouse_tracker.uniform.position;
-                            }
                             self.mouse_enabled = !self.mouse_enabled;
-                            if !self.mouse_enabled {
-                                self.should_reset_accumulation = true;
-                            }
+                            self.mouse_initialized = false;
+                            return true;
+                        }
+                    }
+                    "w" | "W" => {
+                        if event.state == winit::event::ElementState::Pressed {
+                            self.accumulated_rotation[1] -= 0.1;
+                            self.should_reset_accumulation = true;
+                            return true;
+                        }
+                    }
+                    "s" | "S" => {
+                        if event.state == winit::event::ElementState::Pressed {
+                            self.accumulated_rotation[1] += 0.1;
+                            self.should_reset_accumulation = true;
+                            return true;
+                        }
+                    }
+                    "a" | "A" => {
+                        if event.state == winit::event::ElementState::Pressed {
+                            self.accumulated_rotation[0] -= 0.1;
+                            self.should_reset_accumulation = true;
+                            return true;
+                        }
+                    }
+                    "d" | "D" => {
+                        if event.state == winit::event::ElementState::Pressed {
+                            self.accumulated_rotation[0] += 0.1;
+                            self.should_reset_accumulation = true;
+                            return true;
+                        }
+                    }
+                    "q" | "Q" => {
+                        if event.state == winit::event::ElementState::Pressed {
+                            self.accumulated_rotation[2] -= 0.1;
+                            self.should_reset_accumulation = true;
+                            return true;
+                        }
+                    }
+                    "e" | "E" => {
+                        if event.state == winit::event::ElementState::Pressed {
+                            self.accumulated_rotation[2] += 0.1;
+                            self.should_reset_accumulation = true;
                             return true;
                         }
                     }
