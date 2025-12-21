@@ -20,6 +20,7 @@ struct CameraMovement {
     last_mouse_y: f32,
     mouse_initialized: bool,
     mouse_look_enabled: bool,
+    look_changed: bool,
 }
 
 impl Default for CameraMovement {
@@ -42,6 +43,7 @@ impl Default for CameraMovement {
             last_mouse_y: 0.0,
             mouse_initialized: false,
             mouse_look_enabled: true,
+            look_changed: false,
         }
     }
 }
@@ -53,6 +55,11 @@ impl CameraMovement {
         self.last_update = now;
 
         let mut changed = false;
+
+        if self.look_changed {
+            changed = true;
+            self.look_changed = false;
+        }
 
         let forward = [
             self.pitch.cos() * self.yaw.cos(),
@@ -147,6 +154,8 @@ impl CameraMovement {
             .pitch
             .clamp(-std::f32::consts::PI * 0.49, std::f32::consts::PI * 0.49);
 
+        self.look_changed = true;
+
         true
     }
 
@@ -173,8 +182,8 @@ struct PathTracingParams {
     accumulate: u32,
 
     num_spheres: u32,
-    mouse_x: f32,
-    mouse_y: f32,
+    _padding1: f32,
+    _padding2: f32,
 
     rotation_speed: f32,
 
@@ -222,8 +231,8 @@ impl ShaderManager for PathTracingShader {
             samples_per_pixel: 2,
             accumulate: 1,
             num_spheres: 15,
-            mouse_x: 0.5,
-            mouse_y: 0.5,
+            _padding1: 0.0,
+            _padding2: 0.0,
             rotation_speed: 0.2,
             exposure: 1.5,
         };
@@ -232,6 +241,7 @@ impl ShaderManager for PathTracingShader {
             .with_entry_point("main")
             .with_input_texture() // Enable input texture support for background
             .with_custom_uniforms::<PathTracingParams>()
+            .with_mouse()
             .with_storage_buffer(StorageBufferSpec::new(
                 "atomic_buffer",
                 (core.size.width * core.size.height * 3 * 4) as u64,
@@ -468,10 +478,9 @@ impl ShaderManager for PathTracingShader {
             self.base.export_manager.start_export();
         }
 
-        // Update mouse position in params
-        params.mouse_x = self.base.mouse_tracker.uniform.position[0];
-        params.mouse_y = self.base.mouse_tracker.uniform.position[1];
-        changed = true;
+        // Update mouse 
+        self.compute_shader
+            .update_mouse_uniform(&self.base.mouse_tracker.uniform, &core.queue);
 
         if changed {
             self.current_params = params;
@@ -584,6 +593,8 @@ impl ShaderManager for PathTracingShader {
         if let WindowEvent::CursorMoved { position, .. } = event {
             let x = position.x as f32;
             let y = position.y as f32;
+
+            self.base.handle_mouse_input(core, event, false);
 
             if self.camera_movement.handle_mouse_movement(x, y) {
                 self.should_reset_accumulation = true;

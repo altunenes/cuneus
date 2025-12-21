@@ -21,8 +21,8 @@ struct PathTracingParams {
     accumulate: u32,
 
     num_spheres: u32,
-    mouse_x: f32,
-    mouse_y: f32,
+    _padding1: f32,
+    _padding2: f32,
 
     rotation_speed: f32,
 
@@ -32,6 +32,15 @@ struct PathTracingParams {
 @group(1) @binding(1) var<uniform> params: PathTracingParams;
 @group(1) @binding(2) var background_texture: texture_2d<f32>;
 @group(1) @binding(3) var background_sampler: sampler;
+
+// Group 2: mouse
+struct MouseUniform {
+    position: vec2<f32>,
+    click_position: vec2<f32>,
+    wheel: vec2<f32>,
+    buttons: vec2<u32>,
+};
+@group(2) @binding(0) var<uniform> mouse: MouseUniform;
 
 @group(3) @binding(0) var<storage, read_write> atomic_buffer: array<atomic<u32>>;
 
@@ -196,9 +205,12 @@ fn hit_rect(rect: Rect, ray: Ray, t_min: f32, t_max: f32, rec: ptr<function, Hit
 
 const scene_offset_x: f32 = 12.5;
 
-fn create_scene(mouse_x: f32, mouse_y: f32, time: f32) -> array<Sphere, 12> {
+fn create_scene(time: f32) -> array<Sphere, 12> {
     var spheres: array<Sphere, 12>;
-    
+
+    let mouse_x = mouse.position.x;
+    let mouse_y = 1.0 - mouse.position.y;
+
     spheres[0] = Sphere(
         v3(0.0 + scene_offset_x, -100.5, -1.0),
         100.0,
@@ -214,7 +226,7 @@ fn create_scene(mouse_x: f32, mouse_y: f32, time: f32) -> array<Sphere, 12> {
         0.25,
         2u
     );
-    
+
     spheres[3] = Sphere(
         v3(mouse_x * 2.0 - 1.0 + scene_offset_x, mouse_y * 0.5 + 0.0, -1.5),
         0.1,
@@ -589,8 +601,8 @@ fn trace_ray(ray: Ray, max_bounces: u32) -> v3 {
     var current_ray = ray;
     var current_attenuation = v3(1.0);
     var final_color = v3(0.0);
-    
-    let spheres = create_scene(params.mouse_x, params.mouse_y, time_data.time);
+
+    let spheres = create_scene(time_data.time);
     let mirrors = create_mirrors();
     
     for (var bounce: u32 = 0; bounce < max_bounces; bounce++) {
