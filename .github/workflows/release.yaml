@@ -84,7 +84,7 @@ jobs:
             gstreamer1.0-plugins-ugly \
             patchelf
 
-      # Install GStreamer for Windows (only for media shaders)
+# Install GStreamer for Windows (only for media shaders)
       - name: Install Windows dependencies
         if: runner.os == 'Windows' && matrix.shader_config.gstreamer_required
         shell: pwsh
@@ -98,10 +98,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
           New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
-          Write-Host "Downloading installers..."
-          $baseUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstVer/msvc"
-          $runtimeUrl = "$baseUrl/gstreamer-1.0-msvc-x86_64-$gstVer.msi"
-          $develUrl = "$baseUrl/gstreamer-1.0-devel-msvc-x86_64-$gstVer.msi"
+          Write-Host "Downloading installers from GitHub mirror..."
+          $runtimeUrl = "https://github.com/altunenes/cuneus/releases/download/dependencies/gstreamer-1.0-msvc-x86_64-1.26.9.msi"
+          $develUrl = "https://github.com/altunenes/cuneus/releases/download/dependencies/gstreamer-1.0-devel-msvc-x86_64-1.26.9.msi"
           
           Write-Host "Downloading MSVC 64-bit runtime installer..."
           Invoke-WebRequest -Uri $runtimeUrl -OutFile "$tempDir\gstreamer.msi"
@@ -123,23 +122,6 @@ jobs:
             exit 1
           }
 
-          # Install libav/FFmpeg codecs package for video processing
-          Write-Host "Downloading FFmpeg/libav codecs package..."
-          try {
-            $libavUrl = "$baseUrl/gstreamer-1.0-libav-msvc-x86_64-$gstVer.msi"
-            Invoke-WebRequest -Uri $libavUrl -OutFile "$tempDir\gstreamer-libav.msi"
-            
-            Write-Host "Installing FFmpeg/libav codecs package..."
-            $proc = Start-Process msiexec -ArgumentList "/i", "`"$tempDir\gstreamer-libav.msi`"", "INSTALLDIR=$installDir", "/qn" -Wait -PassThru -NoNewWindow
-            if ($proc.ExitCode -eq 0) {
-              Write-Host "FFmpeg/libav codecs package installed successfully"
-            } else {
-              Write-Host "FFmpeg/libav installation failed with code: $($proc.ExitCode) - continuing without FFmpeg codecs"
-            }
-          } catch {
-            Write-Host "Could not download FFmpeg/libav package: $($_.Exception.Message)"
-            Write-Host "Video processing may be limited without FFmpeg codecs"
-          }
           
           Write-Host "Looking for GStreamer installation..."
           $expectedPath = "$installDir\1.0\msvc_x86_64"
