@@ -93,8 +93,6 @@ jobs:
           $gstVer = "1.26.9"
           $tempDir = "C:\gst-temp"
           $installDir = "C:\gstreamer"
-          # Define a browser-like User Agent to bypass 'go-away' bot protection
-          $ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
           
           # Create necessary directories
           New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
@@ -106,10 +104,10 @@ jobs:
           $develUrl = "$baseUrl/gstreamer-1.0-devel-msvc-x86_64-$gstVer.msi"
           
           Write-Host "Downloading MSVC 64-bit runtime installer..."
-          Invoke-WebRequest -Uri $runtimeUrl -OutFile "$tempDir\gstreamer.msi" -UserAgent $ua
+          Invoke-WebRequest -Uri $runtimeUrl -OutFile "$tempDir\gstreamer.msi"
           
           Write-Host "Downloading MSVC 64-bit development installer..."
-          Invoke-WebRequest -Uri $develUrl -OutFile "$tempDir\gstreamer-devel.msi" -UserAgent $ua
+          Invoke-WebRequest -Uri $develUrl -OutFile "$tempDir\gstreamer-devel.msi"
 
           Write-Host "Installing runtime package ..."
           $proc = Start-Process msiexec -ArgumentList "/i", "`"$tempDir\gstreamer.msi`"", "INSTALLDIR=$installDir", "INSTALLLEVEL=1000", "/qn" -Wait -PassThru -NoNewWindow
@@ -129,7 +127,7 @@ jobs:
           Write-Host "Downloading FFmpeg/libav codecs package..."
           try {
             $libavUrl = "$baseUrl/gstreamer-1.0-libav-msvc-x86_64-$gstVer.msi"
-            Invoke-WebRequest -Uri $libavUrl -OutFile "$tempDir\gstreamer-libav.msi" -UserAgent $ua
+            Invoke-WebRequest -Uri $libavUrl -OutFile "$tempDir\gstreamer-libav.msi"
             
             Write-Host "Installing FFmpeg/libav codecs package..."
             $proc = Start-Process msiexec -ArgumentList "/i", "`"$tempDir\gstreamer-libav.msi`"", "INSTALLDIR=$installDir", "/qn" -Wait -PassThru -NoNewWindow
