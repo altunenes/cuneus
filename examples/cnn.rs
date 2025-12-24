@@ -51,13 +51,18 @@ impl ShaderManager for CNNDigitRecognizer {
 
         // Configure multi-pass CNN with 5 stages: canvas_update -> conv_layer1 -> conv_layer2 -> fully_connected -> main_image
         let passes = vec![
-            PassDescription::new("canvas_update", &[]).with_workgroup_size([28, 28, 1]), // 28x28 canvas pixels
+            PassDescription::new("canvas_update", &[]).with_workgroup_size([28, 28, 1]),
+            
             PassDescription::new("conv_layer1", &["canvas_update"])
-                .with_workgroup_size([12, 12, 8]), // 12x12 output × 8 feature maps
-            PassDescription::new("conv_layer2", &["conv_layer1"]).with_workgroup_size([4, 4, 5]), // 4x4 output × 5 feature maps
+                .with_workgroup_size([12, 12, 16]), // 16 Feature Maps
+            
+            PassDescription::new("conv_layer2", &["conv_layer1"])
+                .with_workgroup_size([4, 4, 32]),   // 32 Feature Maps
+            
             PassDescription::new("fully_connected", &["conv_layer2"])
-                .with_workgroup_size([10, 1, 1]), // 10 output classes
-            PassDescription::new("main_image", &["fully_connected"]), // Screen size dispatch handled automatically
+                .with_workgroup_size([47, 1, 1]),   // 47 Classes
+            
+            PassDescription::new("main_image", &["fully_connected"]),
         ];
 
         let compute_shader = ComputeShaderBuilder::new()
@@ -66,13 +71,19 @@ impl ShaderManager for CNNDigitRecognizer {
             .with_custom_uniforms::<CNNParams>()
             .with_mouse()
             .with_fonts()
-            .with_storage_buffer(StorageBufferSpec::new("canvas_data", (28 * 28 * 4) as u64)) // Canvas data for 28x28 pixels
+            .with_storage_buffer(StorageBufferSpec::new("canvas_data", (28 * 28 * 4) as u64))
             .with_storage_buffer(StorageBufferSpec::new(
                 "conv1_data",
-                (12 * 12 * 8 * 4) as u64,
-            )) // First convolution layer: 12x12x8 feature maps
-            .with_storage_buffer(StorageBufferSpec::new("conv2_data", (4 * 4 * 5 * 4) as u64)) // Second convolution layer: 4x4x5 feature maps
-            .with_storage_buffer(StorageBufferSpec::new("fc_data", (10 * 4) as u64)) // Fully connected layer: 10 classes
+                (12 * 12 * 16 * 4) as u64,
+            )) 
+            .with_storage_buffer(StorageBufferSpec::new(
+                "conv2_data", 
+                (4 * 4 * 32 * 4) as u64
+            )) 
+            .with_storage_buffer(StorageBufferSpec::new(
+                "fc_data", 
+                (47 * 4) as u64
+            ))
             .build();
 
         let mut compute_shader =
@@ -100,11 +111,11 @@ impl ShaderManager for CNNDigitRecognizer {
             prediction_threshold: 0.1,
             canvas_offset_x: 0.1,
             canvas_offset_y: 0.1,
-            feature_maps_1: 8.0,
-            feature_maps_2: 5.0,
-            num_classes: 10.0,
-            normalization_mean: 0.1307,
-            normalization_std: 0.3081,
+            feature_maps_1: 16.0,
+            feature_maps_2: 32.0,
+            num_classes: 47.0,
+            normalization_mean: 0.175,
+            normalization_std: 0.33,
             show_frequencies: 0,
             conv1_pool_size: 12.0,
             conv2_pool_size: 4.0,
