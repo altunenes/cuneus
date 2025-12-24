@@ -729,14 +729,28 @@ fn conv2_index(x: i32, y: i32, fmap: i32) -> u32 {
 }
 
 fn screen_to_canvas(p: vec2<f32>, res: vec2<f32>) -> vec2<i32> {
-    let q = vec2(p.x, 1.-p.y);
-    let start = vec2(params.canvas_offset_x, params.canvas_offset_y);
-    let end = start + params.canvas_size;
-    if any(q < start) || any(q > end) { return vec2(-1); }
-    let rel = (q - start) / params.canvas_size * params.input_resolution;
-    return min(vec2<i32>(rel), vec2(i32(params.input_resolution - 1.)));
-}
+    let uv_mouse = vec2(p.x, 1.0 - p.y); 
+    let input_pos = vec2(0.05, 0.5);
+    let input_size = 0.20;
+    let aspect = res.x / res.y;
+    let min_x = input_pos.x;
+    let max_x = input_pos.x + input_size;
+    let half_height = input_size * 0.5 * aspect;
+    let min_y = input_pos.y - half_height;
+    let max_y = input_pos.y + half_height;
+    if (uv_mouse.x < min_x || uv_mouse.x > max_x || 
+        uv_mouse.y < min_y || uv_mouse.y > max_y) {
+        return vec2(-1); // Outside
+    }
 
+    let rel_x = (uv_mouse.x - min_x) / (max_x - min_x);
+    let rel_y = (uv_mouse.y - min_y) / (max_y - min_y);
+    
+    let pixel_x = i32(floor(rel_x * params.input_resolution));
+    let pixel_y = i32(floor(rel_y * params.input_resolution));
+    
+    return vec2(pixel_x, pixel_y);
+}
 
 fn sample_canvas(pos: vec2<i32>) -> f32 {
     if (pos.x < 0 || pos.x >= i32(INPUT_SIZE) || pos.y < 0 || pos.y >= i32(INPUT_SIZE)) {
@@ -860,6 +874,16 @@ fn fully_connected(@builtin(global_invocation_id) id: vec3<u32>) {
     
     fc_data[class_idx] = sum;
 }
+fn get_weight_color(w: f32) -> vec3<f32> {
+    // Visualization: Red = Negative, Black = Zero, Cyan = Positive
+    let val = clamp(w * 2.0, -1.0, 1.0);
+    if (val < 0.0) {
+        return mix(vec3(0.0), vec3(1.0, 0.2, 0.2), -val);
+    } else {
+        return mix(vec3(0.0), vec3(0.2, 1.0, 1.0), val);
+    }
+}
+
 
 @compute @workgroup_size(16, 16, 1)
 fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -867,163 +891,180 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= res) { return; }
     
     let uv = vec2<f32>(f32(id.x), f32(res.y - id.y)) / vec2<f32>(res);
-    var color = vec3(.02, .02, .05);
     
-    let canvas_start = vec2(params.canvas_offset_x, params.canvas_offset_y);
-    let canvas_end = canvas_start + params.canvas_size;
-    
-    if all(uv >= canvas_start) && all(uv <= canvas_end) {
-        color = vec3(0.0); // Black canvas
+    var color = vec3(0.05, 0.05, 0.08);
+
+    let input_pos = vec2(0.05, 0.5);
+    let input_size = 0.20;
+    let aspect = f32(res.x) / f32(res.y);
+    let input_rect_min = vec2(input_pos.x, input_pos.y - input_size * 0.5 * aspect);
+    let input_rect_max = vec2(input_pos.x + input_size, input_pos.y + input_size * 0.5 * aspect);
+
+    if all(uv >= input_rect_min) && all(uv <= input_rect_max) {
+        let local_uv = (uv - input_rect_min) / (input_rect_max - input_rect_min);
         
-        let canvas_uv = (uv - canvas_start) / params.canvas_size;
-        let canvas_coord = vec2<i32>(canvas_uv * params.input_resolution);
-        
-        if all(canvas_coord >= vec2(0)) && all(canvas_coord < vec2(i32(params.input_resolution))) {
+        // Draw Border
+        let border = 0.02;
+        if any(local_uv < vec2(border)) || any(local_uv > vec2(1.0 - border)) {
+             color = vec3(0.3);
+        } else {
+            // Sample actual canvas data
+            let content_uv = (local_uv - border) / (1.0 - 2.0 * border);
+            let canvas_coord = vec2<i32>(content_uv * params.input_resolution);
             let val = sample_canvas(canvas_coord);
-            color = mix(color, vec3(1.0), val); // White for drawn pixels
+            color = mix(vec3(0.0), vec3(1.0), val);
         }
         
-        let border = .005;
-        if any(uv < canvas_start + border) || any(uv > canvas_end - border) {
-            color = vec3(.5);
+        // Draw Mouse Cursor Overlay
+        let mouse_uv = vec2<f32>(mouse.position.x, 1.0 - mouse.position.y);
+        // Map mouse to local canvas space for drawing feedback
+        if (distance(uv, mouse_uv) < 0.005) {
+             color = vec3(1.0, 0.0, 0.0);
         }
     }
+
+    // LAYER 1 (Middle Left)
+    // 8 Rows: [Kernel 5x5] -> [Feature Map 12x12]
+    let l1_start_x = 0.30;
+    let l1_width = 0.25;
+    let l1_row_height = 0.11;
+    let l1_start_y = 0.90;
     
-    var predictions: array<f32, 10>;
-    var max_logit = -1000.;
-    
-    for (var i = 0; i < i32(NUM_CLASSES); i++) {
-        predictions[i] = fc_data[i];
-        max_logit = max(max_logit, predictions[i]);
-    }
-    
-    var exp_sum = 0.;
-    for (var i = 0; i < i32(NUM_CLASSES); i++) {
-        let exp_val = exp(predictions[i] - max_logit);
-        predictions[i] = exp_val;
-        exp_sum += exp_val;
-    }
-    
-    let inv_sum = 1. / max(exp_sum, .001);
-    for (var i = 0; i < i32(NUM_CLASSES); i++) {
-        predictions[i] *= inv_sum;
-    }
-    
-    let bar_start = vec2(.1, .75);
-    let bar_dims = vec2(.06, .15);
-    let bar_spacing = .08;
-    
-    if uv.y >= bar_start.y && uv.y <= bar_start.y + bar_dims.y {
-        for (var digit = 0; digit < i32(NUM_CLASSES); digit++) {
-            let bar_x = bar_start.x + f32(digit) * bar_spacing;
+    for (var i = 0; i < 8; i++) {
+        let row_y = l1_start_y - f32(i) * l1_row_height;
+        
+        // A. The Kernel (Weights) Visualization
+        // -------------------------------------
+        let k_size = 0.04;
+        let k_pos = vec2(l1_start_x, row_y);
+        
+        if (uv.x >= k_pos.x && uv.x < k_pos.x + k_size && 
+            uv.y >= k_pos.y && uv.y < k_pos.y + k_size * aspect) {
             
-            if uv.x >= bar_x && uv.x <= bar_x + bar_dims.x {
-                let confidence = predictions[digit];
-                let bar_uv = (uv - vec2(bar_x, bar_start.y)) / bar_dims;
-                
-                color = vec3(.2);
-                
-                if bar_uv.y <= confidence {
-                    color = mix(vec3(0., .5, 1.), vec3(1., .5, 0.), confidence) * (confidence * 3.);
-                }
-                
-                var max_conf = 0.;
-                var max_digit = 0;
-                for (var i = 0; i < i32(NUM_CLASSES); i++) {
-                    if predictions[i] > max_conf {
-                        max_conf = predictions[i];
-                        max_digit = i;
-                    }
-                }
-                
-                if digit == max_digit && max_conf > params.prediction_threshold {
-                    let glow = sin(time_data.time * 3.) * .2 + .8;
-                    color = mix(color, vec3(1., 1., 0.), .3 * glow);
-                }
-                
+            let local_uv = (uv - k_pos) / vec2(k_size, k_size * aspect);
+            // Kernel is 5x5
+            let k_coord = vec2<i32>(local_uv * 5.0);
+            
+            let w_idx = (4 - k_coord.y) * 5 + k_coord.x;
+            let weight = get_conv1_weight(i, w_idx);
+            
+            color = get_weight_color(weight);
+            
+            // Grid lines for kernel
+            let grid = fract(local_uv * 5.0);
+            if (any(grid < vec2(0.1)) || any(grid > vec2(0.9))) {
+                color *= 0.5;
             }
         }
-    }
-    let pixel_pos = vec2<f32>(f32(id.x), f32(id.y));
-    let label_y = 0.05;
-    
-    for (var digit = 0; digit < i32(NUM_CLASSES); digit++) {
-        let bar_x = bar_start.x + f32(digit) * bar_spacing;
-        let digit_screen_pos = vec2<f32>(
-            bar_x * f32(res.x) + bar_dims.x * f32(res.x) * 0.5 - 16.0,
-            label_y * f32(res.y)
-        );
-        let digit_alpha = render_digit(pixel_pos, digit_screen_pos, u32(digit), 32.0);
-        color = mix(color, vec3(1.0), digit_alpha);
-    }
 
-    // Visualize Feature Maps
-    let viz_area_start = vec2(0.72, 0.5);
-    let viz_size_conv1 = 0.06;
-    let viz_size_conv2 = 0.04;
-    let padding = 0.008;
-    // Visualize conv1 feature maps (8 maps in 2 rows of 4)
-    for (var i = 0; i < i32(FEATURE_MAPS_1); i++) {
-        let row = i / 4;
-        let col = i % 4;
-        let map_pos = viz_area_start + vec2<f32>(f32(col) * (viz_size_conv1 + padding), f32(row) * (viz_size_conv1 + padding));
-
-        if (all(uv >= map_pos) && all(uv < map_pos + viz_size_conv1)) {
-            let map_uv = (uv - map_pos) / viz_size_conv1;
-            var map_coord = vec2<i32>(map_uv * vec2<f32>(f32(CONV1_SIZE)));
+        // B. The Feature Map vis
+        let map_size = 0.08;
+        let map_pos = vec2(l1_start_x + 0.06, row_y - 0.02);
+        
+        if (uv.x >= map_pos.x && uv.x < map_pos.x + map_size && 
+            uv.y >= map_pos.y && uv.y < map_pos.y + map_size * aspect) {
             
+            let local_uv = (uv - map_pos) / vec2(map_size, map_size * aspect);
+            var map_coord = vec2<i32>(local_uv * f32(CONV1_SIZE));
             map_coord.y = i32(CONV1_SIZE) - 1 - map_coord.y;
 
             let val = sample_conv1(map_coord, i);
-            let viz_val = smoothstep(0.0, 1.0, val * 0.5);
+            // Heatmap: Black -> Orange -> White
+            let hot = vec3(1.0, 0.5, 0.0);
+            color = mix(vec3(0.0), hot, clamp(val * 0.5, 0.0, 1.0));
+            if (val > 2.0) { color = vec3(1.0); }
             
-            let color_a = vec3(0.1, 0.5, 1.0);
-            let color_b = vec3(0.5, 1.0, 0.5);
-            let interp = f32(i) / f32(FEATURE_MAPS_1 - 1u);
-            let base_color = mix(color_a, color_b, interp);
-
-            color = mix(color, base_color * viz_val, 0.9);
-
-            let border_width = 0.02;
-            if (any(map_uv < vec2<f32>(border_width)) || any(map_uv > vec2<f32>(1.0 - border_width))) {
-                color = mix(color, vec3(0.5), 0.5);
-            }
+            // Border
+            if (any(local_uv < vec2(0.02)) || any(local_uv > vec2(0.98))) { color = vec3(0.4); }
         }
+        let arrow_p = vec2(l1_start_x + 0.045, row_y + k_size * aspect * 0.5);
+        if (distance(uv, arrow_p) < 0.003) { color = vec3(0.5); }
     }
 
-    // Visualize conv2 feature maps (5 maps in 1 row)
-    let conv2_start_y = viz_area_start.y + 2.0 * (viz_size_conv1 + padding) + padding;
-    for (var i = 0; i < i32(FEATURE_MAPS_2); i++) {
-        let map_pos = vec2(viz_area_start.x + f32(i) * (viz_size_conv2 + padding), conv2_start_y);
+    // LAYER 2 (Middle Right)
+    // 5 Rows: Feature Maps 4x4
 
-        if (all(uv >= map_pos) && all(uv < map_pos + viz_size_conv2)) {
-            let map_uv = (uv - map_pos) / viz_size_conv2;
-            var map_coord = vec2<i32>(map_uv * vec2<f32>(f32(CONV2_SIZE)));
+    let l2_start_x = 0.60;
+    let l2_row_height = 0.15;
+    let l2_start_y = 0.80;
+    
+    for (var i = 0; i < 5; i++) {
+        let row_y = l2_start_y - f32(i) * l2_row_height;
+        let map_size = 0.10; // Bigger because they are 4x4 pixels
+        let map_pos = vec2(l2_start_x, row_y);
 
+        if (uv.x >= map_pos.x && uv.x < map_pos.x + map_size && 
+            uv.y >= map_pos.y && uv.y < map_pos.y + map_size * aspect) {
+            
+            let local_uv = (uv - map_pos) / vec2(map_size, map_size * aspect);
+            var map_coord = vec2<i32>(local_uv * f32(CONV2_SIZE));
             map_coord.y = i32(CONV2_SIZE) - 1 - map_coord.y;
 
             let val = sample_conv2(map_coord, i);
-            let viz_val = smoothstep(0.0, 1.0, val * 0.5);
+            // Heatmap: Black -> Green/Cyan -> White
+            let hot = vec3(0.0, 0.8, 0.8);
+            color = mix(vec3(0.0), hot, clamp(val * 0.3, 0.0, 1.0));
             
-            let color_c = vec3(1.0, 0.8, 0.3);
-            let color_d = vec3(1.0, 0.4, 0.4);
-            let interp = f32(i) / f32(FEATURE_MAPS_2 - 1u);
-            let base_color = mix(color_c, color_d, interp);
-
-            color = mix(color, base_color * viz_val, 0.9);
-            let border_width = 0.03;
-            if (any(map_uv < vec2<f32>(border_width)) || any(map_uv > vec2<f32>(1.0 - border_width))) {
-                color = mix(color, vec3(0.5), 0.5);
-            }
+             // Border
+            if (any(local_uv < vec2(0.02)) || any(local_uv > vec2(0.98))) { color = vec3(0.4); }
         }
     }
 
-    let mouse_corrected = vec2<f32>(mouse.position.x, 1.0 - mouse.position.y);
-    let mouse_dist = distance(uv, mouse_corrected);
-    if mouse_dist < .02 {
-        let pulse = sin(time_data.time * 10.) * .5 + .5;
-        color = mix(color, vec3(1.), .3 * pulse);
+    // SECTION 4: OUTPUT CLASS
+    // 10 Bars
+    
+    // Calculate Softmax on the fly for visualization
+    var predictions: array<f32, 10>;
+    var max_logit = -1000.0;
+    for (var i = 0; i < 10; i++) {
+        predictions[i] = fc_data[i];
+        max_logit = max(max_logit, predictions[i]);
+    }
+    var exp_sum = 0.0;
+    for (var i = 0; i < 10; i++) {
+        predictions[i] = exp(predictions[i] - max_logit);
+        exp_sum += predictions[i];
+    }
+    for (var i = 0; i < 10; i++) {
+        predictions[i] /= max(exp_sum, 0.001);
+    }
+
+    // Draw Bars
+    let out_start_x = 0.80;
+    let out_start_y = 0.85;
+    let bar_height = 0.06;
+    let bar_spacing = 0.08;
+    
+    for (var i = 0; i < 10; i++) {
+        let row_y = out_start_y - f32(i) * bar_spacing;
+        let bar_width_max = 0.15;
+        let prob = predictions[i];
+        
+        let bar_pos = vec2(out_start_x, row_y);
+        
+        // Check Background of bar (dim container)
+        if (uv.x >= bar_pos.x && uv.x < bar_pos.x + bar_width_max &&
+            uv.y >= bar_pos.y && uv.y < bar_pos.y + bar_height) {
+            
+            color = vec3(0.15);
+            
+            // Check Filled portion
+            if (uv.x < bar_pos.x + bar_width_max * prob) {
+                // Gradient color based on confidence
+                let bar_col = mix(vec3(0.0, 0.5, 1.0), vec3(1.0, 1.0, 0.0), prob);
+                color = bar_col;
+            }
+        }
+        
+        let label_pos = vec2(bar_pos.x - 0.03, bar_pos.y + 0.01);
+        let screen_px = vec2<f32>(f32(res.x), f32(res.y));
+        let label_screen_pos = vec2(label_pos.x * screen_px.x, (1.0 - label_pos.y) * screen_px.y);
+        let pixel_pos = vec2<f32>(f32(id.x), f32(id.y));
+        
+        let alpha = render_digit(pixel_pos, label_screen_pos, u32(i), 16.0);
+        color = mix(color, vec3(1.0), alpha);
     }
     
-    textureStore(output, vec2<i32>(id.xy), vec4(pow(color, vec3(.8)), 1.));
+    
+    textureStore(output, vec2<i32>(id.xy), vec4(pow(color, vec3(0.8)), 1.0));
 }
