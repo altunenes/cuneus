@@ -11,14 +11,10 @@ struct TimeUniform {
 @group(0) @binding(0) var<uniform> time_data: TimeUniform;
 
 struct CNNParams {
-    canvas_size: f32,       
     brush_size: f32,        
     input_resolution: f32,  
     clear_canvas: i32,      
     show_debug: i32,        
-    prediction_threshold: f32, 
-    canvas_offset_x: f32,   
-    canvas_offset_y: f32,
     feature_maps_1: f32,    
     feature_maps_2: f32,    
     num_classes: f32,       
@@ -859,7 +855,7 @@ fn canvas_update(@builtin(global_invocation_id) id: vec3<u32>) {
             let radius = params.brush_size * params.input_resolution * 10.;
             let intensity = 1. - smoothstep(0., radius, dist);
             if intensity > 0. {
-                canvas_data[idx] = min(1., canvas_data[idx] + intensity * 0.3); // Normal brush intensity
+                canvas_data[idx] = min(1., canvas_data[idx] + intensity * 0.3);
             }
         }
     }

@@ -5,14 +5,10 @@ use winit::event::WindowEvent;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct CNNParams {
-    canvas_size: f32,
     brush_size: f32,
     input_resolution: f32,
     clear_canvas: i32,
     show_debug: i32,
-    prediction_threshold: f32,
-    canvas_offset_x: f32,
-    canvas_offset_y: f32,
     feature_maps_1: f32,
     feature_maps_2: f32,
     num_classes: f32,
@@ -103,14 +99,10 @@ impl ShaderManager for CNNDigitRecognizer {
         }
 
         let current_params = CNNParams {
-            canvas_size: 0.6,
             brush_size: 0.007,
             input_resolution: 28.0,
             clear_canvas: 0,
             show_debug: 0,
-            prediction_threshold: 0.1,
-            canvas_offset_x: 0.1,
-            canvas_offset_y: 0.1,
             feature_maps_1: 16.0,
             feature_maps_2: 32.0,
             num_classes: 47.0,
@@ -186,64 +178,31 @@ impl ShaderManager for CNNDigitRecognizer {
                         .size = 10.0;
                 });
 
-                egui::Window::new("CNN Digit Recognizer")
+                egui::Window::new("CNN chr Recognizer")
                     .collapsible(true)
                     .resizable(true)
                     .default_width(280.0)
                     .show(ctx, |ui| {
-                        ui.label("Draw a digit in the canvas area and watch the CNN predict it!");
+                        ui.label("Draw a character in the canvas area and watch the CNN predict it!");
                         ui.separator();
-                        ui.label("The CNN will predict the digit using pre-trained weights");
+                        ui.label("The CNN will predict the character using pre-trained weights");
                         ui.separator();
 
-                        egui::CollapsingHeader::new("Canvas Settings")
+                        egui::CollapsingHeader::new("Brush")
                             .default_open(true)
                             .show(ui, |ui| {
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.canvas_size, 0.3..=0.8)
-                                            .text("Canvas Size"),
-                                    )
-                                    .changed();
                                 changed |= ui
                                     .add(
                                         egui::Slider::new(&mut params.brush_size, 0.001..=0.015)
                                             .text("Brush Size"),
                                     )
                                     .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.canvas_offset_x, 0.0..=0.5)
-                                            .text("Canvas X"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.canvas_offset_y, 0.0..=0.5)
-                                            .text("Canvas Y"),
-                                    )
-                                    .changed();
-
                                 if ui.button("Clear Canvas").clicked() {
                                     params.clear_canvas = 1;
                                     changed = true;
                                 } else {
                                     params.clear_canvas = 0;
                                 }
-                            });
-
-                        egui::CollapsingHeader::new("CNN Settings")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(
-                                            &mut params.prediction_threshold,
-                                            0.0..=0.5,
-                                        )
-                                        .text("Prediction Threshold"),
-                                    )
-                                    .changed();
                             });
 
                         ui.separator();
@@ -331,7 +290,7 @@ impl ShaderManager for CNNDigitRecognizer {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (app, event_loop) = ShaderApp::new("CNN Digit Recognizer", 800, 600);
+    let (app, event_loop) = ShaderApp::new("EMNIST", 800, 600);
 
     app.run(event_loop, CNNDigitRecognizer::init)
 }
