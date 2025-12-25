@@ -974,7 +974,7 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
         // Draw Border
         let border = 0.02;
         if any(local_uv < vec2(border)) || any(local_uv > vec2(1.0 - border)) {
-             color = vec3(0.3);
+             color = vec3(0.5);
         } else {
             // Sample actual canvas data
             let content_uv = (local_uv - border) / (1.0 - 2.0 * border);
@@ -985,15 +985,14 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
         
         // Draw Mouse Cursor Overlay
         let mouse_uv = vec2<f32>(mouse.position.x, 1.0 - mouse.position.y);
-        // Map mouse to local canvas space for drawing feedback
         if (distance(uv, mouse_uv) < 0.005) {
-             color = vec3(1.0, 0.0, 0.0);
+             color = vec3(1.0, 0.2, 0.2);
         }
     }
 
     // LAYER 1 (Middle Left)
     // 8 Rows: [Kernel 5x5] -> [Feature Map 12x12]
-    let l1_start_x = 0.30;
+    let l1_start_x = 0.32;
     let l1_width = 0.25;
     let l1_row_height = 0.11;
     let l1_start_y = 0.90;
@@ -1001,58 +1000,43 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     for (var i = 0; i < 8; i++) {
         let row_y = l1_start_y - f32(i) * l1_row_height;
         
-        // A. The Kernel (Weights) Visualization
-        // -------------------------------------
+        // Kernel 5x5
         let k_size = 0.04;
         let k_pos = vec2(l1_start_x, row_y);
         
         if (uv.x >= k_pos.x && uv.x < k_pos.x + k_size && 
             uv.y >= k_pos.y && uv.y < k_pos.y + k_size * aspect) {
-            
             let local_uv = (uv - k_pos) / vec2(k_size, k_size * aspect);
-            // Kernel is 5x5
             let k_coord = vec2<i32>(local_uv * 5.0);
-            
             let w_idx = (4 - k_coord.y) * 5 + k_coord.x;
             let weight = get_conv1_weight(i, w_idx);
-            
             color = get_weight_color(weight);
-            
-            // Grid lines for kernel
+            // Grid lines
             let grid = fract(local_uv * 5.0);
-            if (any(grid < vec2(0.1)) || any(grid > vec2(0.9))) {
-                color *= 0.5;
-            }
+            if (any(grid < vec2(0.1)) || any(grid > vec2(0.9))) { color *= 0.5; }
         }
 
-        // B. The Feature Map vis
+        // Feature Map 12x12
         let map_size = 0.08;
         let map_pos = vec2(l1_start_x + 0.06, row_y - 0.02);
         
         if (uv.x >= map_pos.x && uv.x < map_pos.x + map_size && 
             uv.y >= map_pos.y && uv.y < map_pos.y + map_size * aspect) {
-            
             let local_uv = (uv - map_pos) / vec2(map_size, map_size * aspect);
             var map_coord = vec2<i32>(local_uv * f32(CONV1_SIZE));
             map_coord.y = i32(CONV1_SIZE) - 1 - map_coord.y;
-
             let val = sample_conv1(map_coord, i);
-            // Heatmap: Black -> Orange -> White
-            let hot = vec3(1.0, 0.5, 0.0);
+            let hot = vec3(1.0, 0.7, 0.2);
             color = mix(vec3(0.0), hot, clamp(val * 0.5, 0.0, 1.0));
             if (val > 2.0) { color = vec3(1.0); }
-            
-            // Border
-            if (any(local_uv < vec2(0.02)) || any(local_uv > vec2(0.98))) { color = vec3(0.4); }
+            if (any(local_uv < vec2(0.02)) || any(local_uv > vec2(0.98))) { color = vec3(0.3); }
         }
-        let arrow_p = vec2(l1_start_x + 0.045, row_y + k_size * aspect * 0.5);
-        if (distance(uv, arrow_p) < 0.003) { color = vec3(0.5); }
+        let arrow_p = vec2(l1_start_x + 0.048, row_y + k_size * aspect * 0.5);
+        if (distance(uv, arrow_p) < 0.002) { color = vec3(0.6); }
     }
 
-    // LAYER 2 (Middle Right)
-    // 5 Rows: Feature Maps 4x4
-
-    let l2_start_x = 0.60;
+    // Layer 2 Visualization
+    let l2_start_x = 0.58;
     let l2_row_height = 0.15;
     let l2_start_y = 0.80;
     
@@ -1063,42 +1047,28 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
 
         if (uv.x >= map_pos.x && uv.x < map_pos.x + map_size && 
             uv.y >= map_pos.y && uv.y < map_pos.y + map_size * aspect) {
-            
             let local_uv = (uv - map_pos) / vec2(map_size, map_size * aspect);
             var map_coord = vec2<i32>(local_uv * f32(CONV2_SIZE));
             map_coord.y = i32(CONV2_SIZE) - 1 - map_coord.y;
-
             let val = sample_conv2(map_coord, i);
-            // Heatmap: Black -> Green/Cyan -> White
-            let hot = vec3(0.0, 0.8, 0.8);
+            let hot = vec3(0.0, 0.9, 0.9);
             color = mix(vec3(0.0), hot, clamp(val * 0.3, 0.0, 1.0));
-            
-             // Border
-            if (any(local_uv < vec2(0.02)) || any(local_uv > vec2(0.98))) { color = vec3(0.4); }
+            if (any(local_uv < vec2(0.02)) || any(local_uv > vec2(0.98))) { color = vec3(0.3); }
         }
     }
 
-    // Calculate Softmax on the fly for visualization
-    var predictions: array<f32, 10>;
+    // Softmax & Predictions
     var max_logit = -1000.0;
-    for (var i = 0; i < 47; i++) {
-        max_logit = max(max_logit, fc_data[i]);
-    }
-
-    // Softmax Denominator
+    for (var i = 0; i < 47; i++) { max_logit = max(max_logit, fc_data[i]); }
     var exp_sum = 0.0;
-    for (var i = 0; i < 47; i++) {
-        exp_sum += exp(fc_data[i] - max_logit);
-    }
+    for (var i = 0; i < 47; i++) { exp_sum += exp(fc_data[i] - max_logit); }
 
-    // 3. Find Top 3 Candidates
     var top1_idx = -1; var top1_val = -1.0;
     var top2_idx = -1; var top2_val = -1.0;
     var top3_idx = -1; var top3_val = -1.0;
 
     for (var i = 0; i < 47; i++) {
         let prob = exp(fc_data[i] - max_logit) / max(exp_sum, 0.0001);
-        
         if (prob > top1_val) {
             top3_val = top2_val; top3_idx = top2_idx;
             top2_val = top1_val; top2_idx = top1_idx;
@@ -1112,8 +1082,8 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     let out_start_x = 0.80;
-    let out_start_y = 0.85;
-    let bar_spacing = 0.12;
+    let out_start_y = 0.65; 
+    let bar_spacing = 0.14;
     var display_indices = vec3<i32>(top1_idx, top2_idx, top3_idx);
     var display_probs = vec3<f32>(top1_val, top2_val, top3_val);
 
@@ -1129,16 +1099,14 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
             uv.y >= bar_pos.y && uv.y < bar_pos.y + 0.05) {
             color = vec3(0.15);
             if (uv.x < bar_pos.x + 0.15 * prob) {
-                color = mix(vec3(0.0, 0.5, 1.0), vec3(1.0, 1.0, 0.0), prob);
+                color = mix(vec3(0.0, 0.6, 1.0), vec3(1.0, 0.9, 0.1), prob);
             }
         }
 
-        var char_code = 63u; // Default '?'
-        if (idx <= 9) { char_code = 48u + u32(idx); } // 0-9
-        else if (idx <= 35) { char_code = 65u + u32(idx - 10); } // A-Z
+        var char_code = 63u; 
+        if (idx <= 9) { char_code = 48u + u32(idx); } 
+        else if (idx <= 35) { char_code = 65u + u32(idx - 10); } 
         else { 
-            // Mapping last 11 classes of EMNIST Balanced to Lowercase
-            // 'a','b','d','e','f','g','h','n','q','r','t'
             let sub = idx - 36;
             if(sub==0){char_code=97u;} else if(sub==1){char_code=98u;}
             else if(sub==2){char_code=100u;} else if(sub==3){char_code=101u;}
@@ -1148,14 +1116,57 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
             else {char_code=116u;}
         }
 
-        let label_pos = vec2(bar_pos.x - 0.05, bar_pos.y); 
+        // Draw Label Left of Bar
+        let label_pos = vec2(bar_pos.x - 0.04, bar_pos.y + 0.015); 
         let screen_px = vec2<f32>(f32(res.x), f32(res.y));
         let label_screen_pos = vec2(label_pos.x * screen_px.x, (1.0 - label_pos.y) * screen_px.y);
-        
-        let alpha = ch(vec2<f32>(f32(id.x), f32(id.y)), label_screen_pos, char_code, 24.0);
+        let alpha = ch(vec2<f32>(f32(id.x), f32(id.y)), label_screen_pos, char_code, 28.0); // Size 28
         color = mix(color, vec3(1.0), alpha);
     }
+
+    let pixel_pos = vec2<f32>(f32(id.x), f32(id.y));
+    let screen_px = vec2<f32>(f32(res.x), f32(res.y));
+    var t_alpha = 0.0;
     
-    
+    let title_y_bottom = 0.05;
+    let title_size = 22.0;
+    let char_spacing = 0.012; 
+    let title_color = vec3(0.9, 0.5, 0.1);
+
+    // "DRAW INPUT"
+    let t1_pos = vec2(input_rect_min.x+0.03, input_rect_max.y + 0.03);
+    let t1_codes = array<u32, 10>(68u, 82u, 65u, 87u, 0u, 73u, 78u, 80u, 85u, 84u);
+    for(var c=0; c<10; c++) {
+        let cp = vec2(t1_pos.x + f32(c)*char_spacing, t1_pos.y);
+        let scr = vec2(cp.x * screen_px.x, (1.0 - cp.y) * screen_px.y);
+        if(t1_codes[c] != 0u) { t_alpha += ch(pixel_pos, scr, t1_codes[c], title_size); }
+    }
+    // LAYER 1
+    let t2_pos = vec2(0.375, title_y_bottom);
+    let t2_codes = array<u32, 7>(76u, 65u, 89u, 69u, 82u, 0u, 49u);
+    for(var c=0; c<7; c++) {
+        let cp = vec2(t2_pos.x + f32(c)*char_spacing, t2_pos.y);
+        let scr = vec2(cp.x * screen_px.x, (1.0 - cp.y) * screen_px.y);
+        if(t2_codes[c] != 0u) { t_alpha += ch(pixel_pos, scr, t2_codes[c], title_size); }
+    }
+
+    //  "LAYER 2"
+    let t3_pos = vec2(0.58, title_y_bottom);
+    let t3_codes = array<u32, 7>(76u, 65u, 89u, 69u, 82u, 0u, 50u);
+    for(var c=0; c<7; c++) {
+        let cp = vec2(t3_pos.x + f32(c)*char_spacing, t3_pos.y);
+        let scr = vec2(cp.x * screen_px.x, (1.0 - cp.y) * screen_px.y);
+        if(t3_codes[c] != 0u) { t_alpha += ch(pixel_pos, scr, t3_codes[c], title_size); }
+    }
+
+    // "PREDICTIONS"
+    let t4_pos = vec2(out_start_x, out_start_y + 0.1);
+    let t4_codes = array<u32, 11>(80u, 82u, 69u, 68u, 73u, 67u, 84u, 73u, 79u, 78u, 83u);
+    for(var c=0; c<11; c++) {
+        let cp = vec2(t4_pos.x + f32(c)*char_spacing, t4_pos.y);
+        let scr = vec2(cp.x * screen_px.x, (1.0 - cp.y) * screen_px.y);
+        if(t4_codes[c] != 0u) { t_alpha += ch(pixel_pos, scr, t4_codes[c], title_size); }
+    }
+    color = mix(color, title_color, clamp(t_alpha, 0.0, 1.0));
     textureStore(output, vec2<i32>(id.xy), vec4(pow(color, vec3(0.8)), 1.0));
 }
