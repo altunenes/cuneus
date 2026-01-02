@@ -1174,7 +1174,7 @@ impl VideoTextureManager {
     }
 
     pub fn duration(&self) -> Option<gst::ClockTime> {
-        self.duration
+        self.pipeline.query_duration::<gst::ClockTime>().or(self.duration)
     }
 
     pub fn dimensions(&self) -> (u32, u32) {
