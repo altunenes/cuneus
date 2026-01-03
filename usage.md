@@ -185,9 +185,10 @@ struct TimeUniform { time: f32, delta: f32, frame: u32, /* ... */ };
 
 // Group 2: Global Engine Resources
 // IMPORTANT: Binding numbers are DYNAMIC based on what you enable in the builder.
-// Resources are added in this order: mouse → fonts → audio → atomics → audio_spectrum → channels
+// Resources are added in this order: mouse → fonts → audio → audio_spectrum → atomics → channels
 // Example 1: Only .with_audio_spectrum() → audio_spectrum is @binding(0)
-// Example 2: .with_mouse() + .with_fonts() + .with_audio() → mouse @binding(0), fonts @binding(1-2), audio @binding(3)
+// Example 2: .with_audio_spectrum() + .with_atomic_buffer() → audio_spectrum @binding(0), atomic_buffer @binding(1)
+// Example 3: .with_mouse() + .with_fonts() + .with_audio() → mouse @binding(0), fonts @binding(1-2), audio @binding(3)
 
 // Mouse (if .with_mouse() is used) - takes 1 binding
 @group(2) @binding(N) var<uniform> mouse: MouseUniform;
@@ -196,10 +197,10 @@ struct TimeUniform { time: f32, delta: f32, frame: u32, /* ... */ };
 @group(2) @binding(N+1) var font_texture: texture_2d<f32>;
 // Audio buffer (if .with_audio() is used) - takes 1 binding
 @group(2) @binding(N) var<storage, read_write> audio_buffer: array<f32>;
-// Atomic buffer (if .with_atomic_buffer() is used) - takes 1 binding
-@group(2) @binding(N) var<storage, read_write> atomic_buffer: array<atomic<u32>>;
 // Audio spectrum (if .with_audio_spectrum() is used) - takes 1 binding
 @group(2) @binding(N) var<storage, read> audio_spectrum: array<f32>;
+// Atomic buffer (if .with_atomic_buffer() is used) - takes 1 binding
+@group(2) @binding(N) var<storage, read_write> atomic_buffer: array<atomic<u32>>;
 // Media channels (if .with_channels(2) is used) - takes 2 bindings per channel
 @group(2) @binding(N) var channel0: texture_2d<f32>;
 @group(2) @binding(N+1) var channel0_sampler: sampler;

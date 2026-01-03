@@ -108,14 +108,14 @@ impl ComputeShader {
         if config.has_audio {
             resource_layout.add_audio_buffer(config.audio_buffer_size);
         }
+        if config.has_audio_spectrum {
+            resource_layout.add_audio_spectrum_buffer(config.audio_spectrum_size);
+        }
         if config.has_atomic_buffer {
             // Create buffer with 3 u32s per pixel
             // The shader accesses: atomic_buffer[idx], atomic_buffer[idx + w*h], atomic_buffer[idx + 2*w*h]
             let atomic_size = (core.size.width * core.size.height * 3 * 4) as u64;
             resource_layout.add_atomic_buffer(atomic_size);
-        }
-        if config.has_audio_spectrum {
-            resource_layout.add_audio_spectrum_buffer(config.audio_spectrum_size);
         }
         if let Some(num_channels) = config.num_channels {
             resource_layout.add_channel_textures(num_channels);
