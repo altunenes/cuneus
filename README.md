@@ -18,6 +18,7 @@ A tool for experimenting with WGSL shaders, it uses `wgpu` for rendering, `egui`
 
 ## Current look
 
+
   <a href="https://github.com/user-attachments/assets/25d47df4-45f5-4455-b2cf-ba673a8c081c">
     <img src="https://github.com/user-attachments/assets/25d47df4-45f5-4455-b2cf-ba673a8c081c" width="300" alt="Cuneus IDE Interface"/>
   </a>
@@ -48,16 +49,16 @@ A tool for experimenting with WGSL shaders, it uses `wgpu` for rendering, `egui`
 |:---:|:---:|:---:|
 | <a href="https://github.com/user-attachments/assets/0758e450-f0a7-4ab2-a063-b071ebedee99"><img src="https://github.com/user-attachments/assets/f77114f6-2937-4ca9-8438-1ee8303f447c" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/sinh.rs) | <a href="https://github.com/user-attachments/assets/f07023a3-0d93-4740-a95c-49f16d815e29"><img src="https://github.com/user-attachments/assets/8c71ce99-58ff-4354-9c0a-0a0fd4e5032d" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/jfa.rs) | <a href="https://github.com/user-attachments/assets/c19365ac-267f-4301-a9c8-42097d4b167a"><img src="https://github.com/user-attachments/assets/5ef301cd-cb11-4850-b013-13537939fd22" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/volumepassage.rs)|
 
-| **PathTracing Mandelbulb** | **CNN:EMNIST** | **Galaxy** |
+| **PathTracing Mandelbulb** | **CNN:EMNIST** | **Tame Impala** |
 |:---:|:---:|:---:|
-| <a href="https://github.com/user-attachments/assets/24083cae-7e96-4726-8509-fb3d5973308a"><img src="https://github.com/user-attachments/assets/e454b395-a1a0-4b91-a776-9afd1a789d23" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/mandelbulb.rs) | <a href="https://github.com/user-attachments/assets/f692e325-a0d2-4ae6-9246-bcbddd85516f"><img src="https://github.com/user-attachments/assets/f692e325-a0d2-4ae6-9246-bcbddd85516f" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/cnn.rs) | <a href="https://github.com/user-attachments/assets/a2647904-55bd-4912-9713-4558203ee6aa"><img src="https://github.com/user-attachments/assets/a2647904-55bd-4912-9713-4558203ee6aa" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/galaxy.rs) |
+| <a href="https://github.com/user-attachments/assets/24083cae-7e96-4726-8509-fb3d5973308a"><img src="https://github.com/user-attachments/assets/e454b395-a1a0-4b91-a776-9afd1a789d23" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/mandelbulb.rs) | <a href="https://github.com/user-attachments/assets/f692e325-a0d2-4ae6-9246-bcbddd85516f"><img src="https://github.com/user-attachments/assets/f692e325-a0d2-4ae6-9246-bcbddd85516f" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/cnn.rs) | <a href="https://github.com/user-attachments/assets/b8b8ccf6-dee1-40d1-85c2-9b7d1ee9b6f5"><img src="https://github.com/user-attachments/assets/b8b8ccf6-dee1-40d1-85c2-9b7d1ee9b6f5" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/tameimp.rs) |
 
 | **Buddhabrot** | **FFT(Butterworth filter)** | **Clifford** |
 |:---:|:---:|:---:|
 | <a href="https://github.com/user-attachments/assets/93a17f27-695a-4249-9ff8-be2742926358"><img src="https://github.com/user-attachments/assets/93a17f27-695a-4249-9ff8-be2742926358" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/buddhabrot.rs) | <a href="https://github.com/user-attachments/assets/5806af3b-a640-433c-b7ec-1ca051412300"><img src="https://github.com/user-attachments/assets/e1e7f7e9-5979-43fe-8bb0-ccda8e428fe5" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/fft.rs) | <a href="https://github.com/user-attachments/assets/8b078f40-a989-4d07-bb2f-d19d8232cc9f"><img src="https://github.com/user-attachments/assets/8b078f40-a989-4d07-bb2f-d19d8232cc9f" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/cliffordcompute.rs) |
 
 
-| **Block Tower: 3D Game** | **System** | **Gaussian Splatting** |
+| **Block Tower: 3D Game** | **System** | **2d Gaussian Splatting** |
 |:---:|:---:|:---:|
 | <a href="https://github.com/user-attachments/assets/9ce52cc1-31c0-4e50-88c7-2fb06d1a57b3"><img src="https://github.com/user-attachments/assets/9ce52cc1-31c0-4e50-88c7-2fb06d1a57b3" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/blockgame.rs) | <a href="https://github.com/user-attachments/assets/8bd86b80-11fb-4757-93ca-703b8227bd4c"><img src="https://github.com/user-attachments/assets/c606c3bf-07de-40f4-abb4-f88de4031d69" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/system.rs) | <a href="https://github.com/user-attachments/assets/f91c7ff7-f56e-43d5-9d60-97d9c037d700"><img src="https://github.com/user-attachments/assets/f91c7ff7-f56e-43d5-9d60-97d9c037d700" width="250"/></a><br/>[Code](https://github.com/altunenes/cuneus/blob/main/examples/gaussian.rs) |
 
