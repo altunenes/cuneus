@@ -1,0 +1,293 @@
+use crate::radix_sort::RadixSorter;
+
+/// GPU Sorter for Gaussian depth ordering
+pub struct GaussianSorter {
+    radix_sorter: RadixSorter,
+    bind_group: Option<wgpu::BindGroup>,
+    aux_keys: Option<wgpu::Buffer>,
+    aux_payload: Option<wgpu::Buffer>,
+    internal_buffer: Option<wgpu::Buffer>,
+    state_buffer: Option<wgpu::Buffer>,
+    current_count: u32,
+}
+
+impl GaussianSorter {
+    /// Create a new GaussianSorter
+    pub fn new(device: &wgpu::Device) -> Self {
+        Self {
+            radix_sorter: RadixSorter::new(device),
+            bind_group: None,
+            aux_keys: None,
+            aux_payload: None,
+            internal_buffer: None,
+            state_buffer: None,
+            current_count: 0,
+        }
+    }
+
+    /// Prepare sorter for specific buffers
+    /// This binds directly to the depth_keys and sorted_indices buffers
+    pub fn prepare_with_buffers(
+        &mut self,
+        device: &wgpu::Device,
+        depth_keys_buffer: &wgpu::Buffer,
+        sorted_indices_buffer: &wgpu::Buffer,
+        count: u32,
+    ) {
+        if self.current_count != count {
+            // Create auxiliary buffers and bind group that binds directly to the source buffers
+            let (state_buffer, aux_keys, aux_payload, internal_buffer, bind_group) =
+                self.radix_sorter.create_direct_bind_group(
+                    device,
+                    depth_keys_buffer,
+                    sorted_indices_buffer,
+                    count,
+                );
+            self.bind_group = Some(bind_group);
+            self.aux_keys = Some(aux_keys);
+            self.aux_payload = Some(aux_payload);
+            self.internal_buffer = Some(internal_buffer);
+            self.state_buffer = Some(state_buffer);
+            self.current_count = count;
+        }
+    }
+
+    pub fn sort(&self, encoder: &mut wgpu::CommandEncoder, count: u32) {
+        let Some(ref bind_group) = self.bind_group else {
+            return;
+        };
+
+        self.radix_sorter.sort_with_bind_group(encoder, bind_group, count);
+    }
+
+    /// Get the current gaussian count this sorter is prepared for
+    pub fn count(&self) -> u32 {
+        self.current_count
+    }
+}
+
+
+pub struct GaussianRenderer {
+    pipeline: wgpu::RenderPipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+}
+
+impl GaussianRenderer {
+    /// Create a new GaussianRenderer
+    ///
+    /// The shader_source should contain `vs_main` and `fs_main` entry points.
+    pub fn new(device: &wgpu::Device, texture_format: wgpu::TextureFormat, shader_source: &str) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Gaussian Render Shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Gaussian Render Bind Group Layout"),
+            entries: &[
+                // Params uniform
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // cam uniform
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Gaussian 2D data
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Sorted indices
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Gaussian Render Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Gaussian Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: texture_format,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        Self {
+            pipeline,
+            bind_group_layout,
+        }
+    }
+
+    /// for rendering
+    pub fn create_bind_group(
+        &self,
+        device: &wgpu::Device,
+        params_buffer: &wgpu::Buffer,
+        camera_buffer: &wgpu::Buffer,
+        gaussian_2d_buffer: &wgpu::Buffer,
+        sorted_indices_buffer: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Gaussian Render Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: gaussian_2d_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: sorted_indices_buffer.as_entire_binding() },
+            ],
+        })
+    }
+
+    pub fn bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.bind_group_layout
+    }
+
+    /// - `pass`: Active render pass
+    /// - `bind_group`: Bind group created with `create_bind_group`
+    /// - `count`: Number of gaussians to render
+    pub fn render<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        bind_group: &'a wgpu::BindGroup,
+        count: u32,
+    ) {
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, bind_group, &[]);
+        pass.draw(0..6, 0..count);
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GaussianCamera {
+    pub view: [[f32; 4]; 4],
+    pub proj: [[f32; 4]; 4],
+    pub viewport: [f32; 2],
+    pub focal: [f32; 2],
+}
+
+impl GaussianCamera {
+    pub fn from_orbit(
+        yaw: f32,
+        pitch: f32,
+        distance: f32,
+        target: [f32; 3],
+        fov: f32,
+        viewport: [f32; 2],
+    ) -> Self {
+        let (sy, cy) = (yaw.sin(), yaw.cos());
+        let (sp, cp) = (pitch.sin(), pitch.cos());
+
+        let pos = [
+            target[0] + distance * cp * sy,
+            target[1] + distance * sp,
+            target[2] + distance * cp * cy,
+        ];
+
+        let f = [target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]];
+        let fl = (f[0]*f[0] + f[1]*f[1] + f[2]*f[2]).sqrt();
+        let f = [f[0]/fl, f[1]/fl, f[2]/fl];
+
+        let up = [0.0, 1.0, 0.0];
+        let r = [f[1]*up[2] - f[2]*up[1], f[2]*up[0] - f[0]*up[2], f[0]*up[1] - f[1]*up[0]];
+        let rl = (r[0]*r[0] + r[1]*r[1] + r[2]*r[2]).sqrt().max(0.0001);
+        let r = [r[0]/rl, r[1]/rl, r[2]/rl];
+
+        let u = [r[1]*f[2] - r[2]*f[1], r[2]*f[0] - r[0]*f[2], r[0]*f[1] - r[1]*f[0]];
+
+        let tx = -(r[0]*pos[0] + r[1]*pos[1] + r[2]*pos[2]);
+        let ty = -(u[0]*pos[0] + u[1]*pos[1] + u[2]*pos[2]);
+        let tz = f[0]*pos[0] + f[1]*pos[1] + f[2]*pos[2];
+
+        let view = [
+            [r[0], u[0], -f[0], 0.0],
+            [r[1], u[1], -f[1], 0.0],
+            [r[2], u[2], -f[2], 0.0],
+            [tx, ty, tz, 1.0],
+        ];
+
+        let aspect = viewport[0] / viewport[1];
+        let focal_len = 1.0 / (fov / 2.0).tan();
+        let (near, far) = (0.01, 1000.0); 
+        let proj = [
+            [focal_len / aspect, 0.0, 0.0, 0.0],
+            [0.0, focal_len, 0.0, 0.0],
+            [0.0, 0.0, (far + near) / (near - far), -1.0],
+            [0.0, 0.0, (2.0 * far * near) / (near - far), 0.0],
+        ];
+
+        let focal = [
+            focal_len * viewport[0] * 0.5,
+            focal_len * viewport[1] * 0.5,
+        ];
+
+        Self { view, proj, viewport, focal }
+    }
+}

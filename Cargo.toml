@@ -28,6 +28,7 @@ gstreamer-app = { version = "0.24.4", optional = true }
 gstreamer-pbutils = { version = "0.24.4", optional = true }
 anyhow = "1.0.96"
 log = "0.4.25"
+ply-rs-bw = "=2.0.3"
 
 [features]
 default = ["media"]
