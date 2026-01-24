@@ -183,4 +183,16 @@ impl Core {
             println!("Surface reconfigured");
         }
     }
+
+    /// Submit the current encoder and create a new one.
+    ///
+    /// Useful for multi-pass simulations where you need buffer updates to take effect
+    /// before the next dispatch. wgpu batches all write_buffer calls before dispatches
+    /// in the same submit, so this forces the GPU to see your changes.
+    pub fn flush_encoder(&self, encoder: wgpu::CommandEncoder) -> wgpu::CommandEncoder {
+        self.queue.submit(Some(encoder.finish()));
+        self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Continued Encoder"),
+        })
+    }
 }
