@@ -4,6 +4,19 @@ Cuneus is a GPU compute shader engine with a unified backend for single-pass, mu
 
 **Key Philosophy:** Declare what you need in the builder → get predictable bindings in WGSL. No manual binding management, no boilerplate. Add `.with_mouse()` in Rust, access `@group(2) mouse` in your shader. The **4-Group Binding Convention** guarantees where every resource lives: Group 0 (time), Group 1 (output/params), Group 2 (engine resources), Group 3 (user data/multi-pass). Everything flows from the builder.
 
+## Shadertoy Mapping
+
+| Shadertoy | Cuneus WGSL |
+|-----------|-------------|
+| `iResolution.xy` | `vec2<f32>(textureDimensions(output))` |
+| `iTime` | `time_data.time` |
+| `iTimeDelta` | `time_data.delta` |
+| `iFrame` | `time_data.frame` |
+| `iMouse` | `mouse` (requires `.with_mouse()`) |
+| `iChannel0` | `channel0` (requires `.with_channels(1)`) |
+| `fragCoord` | `vec2<f32>(id.xy)` from `@builtin(global_invocation_id)` |
+| `fragColor = ...` | `textureStore(output, id.xy, color)` |
+
 ## Core Concepts
 
 ### 1. The Unified Compute Pipeline
@@ -92,12 +105,17 @@ impl ShaderManager for MyShader {
         
         // 1. (Multi-Pass) Define your passes and their dependencies.
         //    The string in `new()` is the WGSL entry point name.
-        //    The slice `&[]` contains the names of the buffers this pass reads from.
+        //    The slice `&[]` lists buffers to bind as input_texture0, input_texture1, etc.
+        //    Self-reference (e.g., "buffer_a" in its own inputs) enables cross-frame feedback.
         /*
         let passes = vec![
-            PassDescription::new("buffer_a", &["buffer_a"]), // A pass that reads its own previous frame output
-            PassDescription::new("main_image", &["buffer_a"]), // A pass that reads the final state of buffer_a
+            PassDescription::new("buffer_a", &[]),              // No inputs
+            PassDescription::new("buffer_b", &["buffer_a"]),    // input_texture0 = buffer_a
+            PassDescription::new("main_image", &["buffer_b"]),
         ];
+        // For cross-frame feedback (temporal effects), add self to inputs:
+        // PassDescription::new("buffer_b", &["buffer_a", "buffer_b"])
+        // Then input_texture1 = buffer_b's PREVIOUS frame (requires flip_buffers())
         */
 
         // Configure the compute shader using the builder
@@ -172,7 +190,7 @@ Your WGSL shaders should follow this layout for predictable resource access.
 
 ```wgsl
 // Group 0: Per-Frame Data (Engine-Managed)
-struct TimeUniform { time: f32, delta: f32, frame: u32, /* ... */ };
+struct TimeUniform { time: f32, delta: f32, frame: u32, _padding: u32 };
 @group(0) @binding(0) var<uniform> time_data: TimeUniform;
 
 // Group 1: Primary Pass I/O & Custom Parameters
@@ -253,6 +271,22 @@ fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
 }
 ```
 
+### Mid-Frame Buffer Updates (`flush_encoder`)
+
+When doing ping-pong buffer simulations, you may need buffer updates to take effect before the next dispatch. wgpu batches all `write_buffer` calls before any dispatches in the same submit, so use `core.flush_encoder()` to force changes through:
+
+```rust
+// Update params, submit, get new encoder
+self.params.ping = 1 - self.params.ping;
+self.compute_shader.set_custom_params(self.params, &core.queue);
+encoder = core.flush_encoder(encoder);
+
+// Now the next dispatch sees the updated ping value
+self.compute_shader.dispatch_stage(&mut encoder, core, NEXT_PASS);
+```
+
+*See `fluidsim.rs` for a full example with 20+ pressure iterations per frame.*
+
 ## Media & Integration
 
 ### GPU Music Generation & Synthesis
@@ -312,11 +346,42 @@ if let Ok(data) = pollster::block_on(
 - `blockgame.rs` - Uses the "audio buffer" to store game state (score, block positions, camera) - no audio at all!
 - The buffer persists across frames, making it stateful GPU applications beyond audio synthesis
 
-### External Textures (`.with_channels()`)
+### External Textures
 
-The `.with_channels(N)` method exposes `N` texture/sampler pairs in Group 2, making them globally accessible to **all passes** of a multi-pass shader. This is the preferred way to pipe in video, webcam feeds, or static images into complex simulations.
+Two methods for external texture input:
 
-- *Example: `fluid.rs` uses `.with_channels(1)` to feed a video into its simulation.*
+**`.with_input_texture()`** - Single input in **Group 1** (bindings 2-3).
+
+```wgsl
+@group(1) @binding(2) var input_texture: texture_2d<f32>;
+@group(1) @binding(3) var input_sampler: sampler;
+```
+
+```rust
+compute_shader.update_input_texture(&tm.view, &tm.sampler, &core.device);
+```
+
+**Important for multi-pass:** When using `.dispatch()`, `input_texture` is only available in `main_image` pass. Intermediate passes do not receive it. To access `input_texture` from all passes, use `dispatch_stage()` instead. See `fft.rs` and `computecolors.rs` for this pattern.
+
+**`.with_channels(N)`** - N texture/sampler pairs in **Group 2**. Accessible from **all passes** with both `.dispatch()` and `dispatch_stage()`.
+
+```wgsl
+@group(2) @binding(0) var channel0: texture_2d<f32>;
+@group(2) @binding(1) var channel0_sampler: sampler;
+```
+
+```rust
+compute_shader.update_channel_texture(0, &tm.view, &tm.sampler, &core.device, &core.queue);
+```
+
+*See `kuwahara.wgsl` where `channel0` is sampled from multiple passes via a helper function.*
+
+**Summary:**
+
+| Method                  | Single-pass | Multi-pass `.dispatch()` | Multi-pass `dispatch_stage()` |
+|-------------------------|-------------|--------------------------|-------------------------------|
+| `.with_input_texture()` | All passes  | `main_image` only        | All stages                    |
+| `.with_channels()`      | All passes  | All passes               | All stages                    |
 
 ### Audio Spectrum Analysis (`.with_audio_spectrum()`)
 
@@ -324,7 +389,7 @@ Use `.with_audio_spectrum(69)` to **visualize** audio from loaded media files. G
 
 - **Buffer Layout**:
   - Indices 0-63: frequency band magnitudes (RMS-normalized)
-  - Index 64: BPM value 
+  - Index 64: BPM value
   - Index 65: bass energy (pre-computed, ~0-200Hz)
   - Index 66: mid energy (pre-computed, ~200-4000Hz)
   - Index 67: high energy (pre-computed, ~4000-20000Hz)
