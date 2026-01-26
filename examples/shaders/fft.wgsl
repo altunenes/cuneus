@@ -24,7 +24,7 @@ struct FFTParams {
     filter_radius: f32,   
     show_freqs: i32,      
     resolution: u32,      
-    _padding1: u32,
+    is_bw: i32,
     _padding2: u32,
 };
 // Group 1: Primary Pass I/O & Parameters  
@@ -527,7 +527,6 @@ fn main_image(@builtin(global_invocation_id) id: vec3u) {
     }
     
     let N = params.resolution;
-    let center = dimensions / 2u;
     
     // Calculate position in FFT image (centered)
     var p = vec2i(id.xy) - vec2i(dimensions) / 2 + vec2i(N / 2u);
@@ -542,18 +541,25 @@ fn main_image(@builtin(global_invocation_id) id: vec3u) {
     
     if (params.show_freqs == 1) {
         // Frequency domain for better vis also log scaling for better dynamic rang
+        
+        let shift_x = (u32(p.x) + N / 2u) % N;
+        let shift_y = (u32(p.y) + N / 2u) % N;
+        
         for (var i = 0u; i < N_CHANNELS; i++) {
-            let data = image_data[index(i, u32(p.y), u32(p.x))];
-            let amplitude = length(data);
-            color[i] = log(1.0 + amplitude * 30.0) / log(31.0);
+            let data = image_data[index(i, shift_y, shift_x)];
+            
+
+            let pixel_count = f32(N * N);
+            let normalized_amp = length(data) / pixel_count;
+            
+
+            let exposure = 5000.0;
+            color[i] = log(1.0 + normalized_amp * exposure) / log(exposure + 1.0);
         }
     } else {
-        // Spatial domain (filtered image)
+        // Spatial domain (Filtered Image)
         for (var i = 0u; i < N_CHANNELS; i++) {
             let data = image_data[index(i, u32(p.y), u32(p.x))];
-            
-            // Use only the real component for the image - this is critical!
-            // The imaginary part should be very close to zero after IFFT
             color[i] = data.x;
         }
     }
@@ -564,5 +570,9 @@ fn main_image(@builtin(global_invocation_id) id: vec3u) {
         color = vec3(color.r);
     }
     
+    if (params.is_bw != 0) {
+        let luminance = dot(color, vec3(0.299, 0.587, 0.114));
+        color = vec3(luminance);
+    }
     textureStore(output, id.xy, vec4(color, 1.0));
 }

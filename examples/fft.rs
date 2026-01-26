@@ -13,8 +13,8 @@ struct FFTParams {
     filter_radius: f32,
     show_freqs: i32,
     resolution: u32,
-    _padding1: u32,
-    _padding2: u32,
+    is_bw: i32,
+    _padding: u32,
 }
 
 impl UniformProvider for FFTParams {
@@ -39,8 +39,8 @@ impl ShaderManager for FFTShader {
             filter_radius: 3.0,
             show_freqs: 0,
             resolution: 1024,
-            _padding1: 0,
-            _padding2: 0,
+            is_bw: 0,
+            _padding: 0,
         };
 
         let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
@@ -62,7 +62,7 @@ impl ShaderManager for FFTShader {
             .with_multi_pass(&passes)
             .with_input_texture() // Re-enable input texture support
             .with_custom_uniforms::<FFTParams>()
-            .with_storage_buffer(StorageBufferSpec::new("image_data", 1024 * 1024 * 3 * 8)) // FFT working memory: 3 channels × 8 bytes per complex number (vec2f)
+            .with_storage_buffer(StorageBufferSpec::new("image_data", 2048 * 2048 * 3 * 8)) // FFT working memory: max res to avoid crash
             .with_workgroup_size([16, 16, 1])
             .with_texture_format(COMPUTE_TEXTURE_FORMAT_RGBA16)
             .with_label("FFT Multi-Pass")
@@ -220,6 +220,12 @@ impl ShaderManager for FFTShader {
                                 changed |= ui
                                     .radio_value(&mut params.show_freqs, 1, "Frequency Domain")
                                     .changed();
+                                
+                                let mut is_bw_bool = params.is_bw != 0;
+                                if ui.checkbox(&mut is_bw_bool, "Black & White").changed() {
+                                    params.is_bw = if is_bw_bool { 1 } else { 0 };
+                                    changed = true;
+                                }
 
                                 ui.separator();
                             });
@@ -369,13 +375,15 @@ impl ShaderManager for FFTShader {
                 [n.div_ceil(16), n.div_ceil(16), 1],
             );
 
-            // Stage 4: Inverse FFT horizontal (Nx1 workgroups)
-            self.compute_shader
-                .dispatch_stage_with_workgroups(&mut encoder, 4, [n, 1, 1]);
+            if params.show_freqs == 0 {
+                // Stage 4: Inverse FFT horizontal
+                self.compute_shader
+                    .dispatch_stage_with_workgroups(&mut encoder, 4, [n, 1, 1]);
 
-            // Stage 5: Inverse FFT vertical (Nx1 workgroups)
-            self.compute_shader
-                .dispatch_stage_with_workgroups(&mut encoder, 5, [n, 1, 1]);
+                // Stage 5: Inverse FFT vertical
+                self.compute_shader
+                    .dispatch_stage_with_workgroups(&mut encoder, 5, [n, 1, 1]);
+            }
 
             self.should_initialize = false;
             log::info!("Completed full FFT pipeline");
