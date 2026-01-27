@@ -1,5 +1,5 @@
 use cuneus::prelude::ComputeShader;
-use cuneus::{Core, RenderKit, ShaderApp, ShaderManager, UniformProvider};
+use cuneus::{Core, ExportManager, RenderKit, ShaderApp, ShaderControls, ShaderManager, UniformProvider};
 use winit::event::*;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -125,6 +125,8 @@ impl ShaderManager for Shader {
 
         let mut params = self.current_params;
         let mut changed = false;
+        let mut should_start_export = false;
+        let mut export_request = self.base.export_manager.get_ui_request();
 
         let mut controls_request = self
             .base
@@ -293,18 +295,26 @@ impl ShaderManager for Shader {
                             });
 
                         ui.separator();
-                        cuneus::ShaderControls::render_controls_widget(ui, &mut controls_request);
+                        ShaderControls::render_controls_widget(ui, &mut controls_request);
+                        ui.separator();
+                        should_start_export =
+                            ExportManager::render_export_ui_widget(ui, &mut export_request);
                     });
             })
         } else {
             self.base.render_ui(core, |_ctx| {})
         };
 
+        self.base.export_manager.apply_ui_request(export_request);
         self.base.apply_control_request(controls_request);
 
         if changed {
             self.current_params = params;
             self.compute_shader.set_custom_params(params, &core.queue);
+        }
+
+        if should_start_export {
+            self.base.export_manager.start_export();
         }
 
         // Create command encoder

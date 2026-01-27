@@ -1,4 +1,3 @@
-
 struct GaussianParams {
     num_gaussians: u32,
     scale_modifier: f32,
@@ -31,7 +30,6 @@ struct Gaussian2D {
     _pad: f32,
 };
 
-
 struct TimeUniform { time: f32, delta: f32, frame: u32, _pad: u32 };
 
 @group(0) @binding(0) var<uniform> time: TimeUniform;
@@ -44,7 +42,14 @@ struct TimeUniform { time: f32, delta: f32, frame: u32, _pad: u32 };
 @group(3) @binding(3) var<storage, read_write> sorted_indices: array<u32>;
 @group(3) @binding(4) var<storage, read_write> camera_data: Camera;
 
-fn compute_cov2d(cov3d: array<f32, 6>, pos_view: vec3<f32>, focal: vec2<f32>, viewport: vec2<f32>, view_mat: mat4x4<f32>) -> vec3<f32> {
+fn compute_cov2d(
+    cov3d: array<f32, 6>, 
+    pos_view: vec3<f32>, 
+    focal: vec2<f32>, 
+    viewport: vec2<f32>, 
+    view_mat: mat4x4<f32>,
+    scale_mod: f32
+) -> vec3<f32> {
     let t = pos_view;
     let tan_fovx = 0.5 * viewport.x / focal.x;
     let tan_fovy = 0.5 * viewport.y / focal.y;
@@ -70,9 +75,10 @@ fn compute_cov2d(cov3d: array<f32, 6>, pos_view: vec3<f32>, focal: vec2<f32>, vi
     let cov_view = W * cov3d_mat * transpose(W);
     let cov2d = J * cov_view * transpose(J);
 
-    let a = cov2d[0][0] + 0.3;
-    let b = cov2d[0][1];
-    let c = cov2d[1][1] + 0.3;
+    let s2 = scale_mod * scale_mod;
+    let a = cov2d[0][0] * s2 + 0.3;
+    let b = cov2d[0][1] * s2;
+    let c = cov2d[1][1] * s2 + 0.3;
 
     let det = a * c - b * b;
     if det <= 0.0 { return vec3<f32>(0.0); }
@@ -129,14 +135,23 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>) {
     scaled_cov[4] = g.cov[4] * ss2;
     scaled_cov[5] = g.cov[5] * ss2;
 
-    let conic = compute_cov2d(scaled_cov, pos_view.xyz, camera_data.focal, camera_data.viewport, camera_data.view);
+    let conic = compute_cov2d(
+        scaled_cov, 
+        pos_view.xyz, 
+        camera_data.focal, 
+        camera_data.viewport, 
+        camera_data.view,
+        params.scale_modifier
+    );
+
     if conic.x == 0.0 && conic.y == 0.0 && conic.z == 0.0 {
         gaussian_2d[idx].radius = 0.0;
         depth_keys[idx] = 0xFFFFFFFFu;
         return;
     }
 
-    let radius = compute_radius(conic) * params.scale_modifier;
+    let radius = compute_radius(conic);
+    
     if radius <= 0.0 {
         gaussian_2d[idx].radius = 0.0;
         depth_keys[idx] = 0xFFFFFFFFu;
@@ -153,7 +168,6 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>) {
     let depth_uint = bitcast<u32>(pos_view.z);
     depth_keys[idx] = 0xFFFFFFFFu - depth_uint;
 }
-
 
 
 @group(0) @binding(0) var<uniform> render_params: GaussianParams;
@@ -218,7 +232,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     if power > 0.0 { discard; }
 
-    let alpha = min(0.99, in.opacity * exp(power));
+    if power < -4.5 { discard; }
+    let gaussian = exp(power);
+    var alpha = min(0.99, in.opacity * gaussian);
     if alpha < 1.0 / 255.0 { discard; }
 
     let color = pow(in.color, vec3<f32>(render_params.gamma));
