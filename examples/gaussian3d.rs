@@ -243,6 +243,10 @@ impl ShaderManager for Gaussian3DShader {
         let dt = self.base.fps_tracker.delta_time();
         self.camera.apply_held_keys(dt);
         self.update_camera(core);
+
+        let current_time = self.base.controls.get_time(&self.base.start_time);
+        self.preprocess.set_time(current_time, dt, &core.queue);
+
         self.base.fps_tracker.update();
     }
 
