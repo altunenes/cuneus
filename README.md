@@ -9,6 +9,7 @@ A tool for experimenting with WGSL shaders, it uses `wgpu` for rendering, `egui`
 
 - Hot shader reloading
 - Multi-pass, atomics etc
+- 3DGS Rendering Inference (PLY Import, radix gpu sort)
 - Interactive parameter adjustment, ez media imports through egui
 - Easily use HDR textures, videos/webcam via UI
 - Audio/Visual synchronization: Spectrum and BPM detection
