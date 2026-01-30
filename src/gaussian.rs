@@ -1,4 +1,6 @@
+use crate::compute::ComputeShader;
 use crate::radix_sort::RadixSorter;
+use crate::{Core, ExportSettings};
 
 /// GPU Sorter for Gaussian depth ordering
 pub struct GaussianSorter {
@@ -325,5 +327,148 @@ impl GaussianCamera {
         ];
 
         Self { view, proj, viewport, focal }
+    }
+}
+
+pub struct GaussianExporter;
+
+impl GaussianExporter {
+    /// Capture a single frame of gaussian rendering to CPU memory.
+    ///
+    /// preprocess → sort → render
+    pub fn capture_frame(
+        core: &Core,
+        preprocess: &mut ComputeShader,
+        sorter: &GaussianSorter,
+        renderer: &GaussianRenderer,
+        render_bind_group: &wgpu::BindGroup,
+        count: u32,
+        settings: &ExportSettings,
+        texture_format: wgpu::TextureFormat,
+    ) -> Result<Vec<u8>, wgpu::SurfaceError> {
+        let capture_texture = core.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Gaussian Export Capture"),
+            size: wgpu::Extent3d {
+                width: settings.width,
+                height: settings.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: texture_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+
+        let align = 256u32;
+        let unpadded_bytes_per_row = settings.width * 4;
+        let padding = (align - unpadded_bytes_per_row % align) % align;
+        let padded_bytes_per_row = unpadded_bytes_per_row + padding;
+
+        let output_buffer = core.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Gaussian Export Buffer"),
+            size: (padded_bytes_per_row * settings.height) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let capture_view = capture_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = core.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Gaussian Export Encoder"),
+        });
+
+        if count > 0 {
+            let workgroups = (count + 255) / 256;
+            preprocess.dispatch_stage_with_workgroups(&mut encoder, 0, [workgroups, 1, 1]);
+            sorter.sort(&mut encoder, count);
+            encoder = core.flush_encoder(encoder);
+
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Gaussian Export Render"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &capture_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    ..Default::default()
+                });
+                renderer.render(&mut pass, render_bind_group, count);
+            }
+        }
+
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &capture_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &output_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(settings.height),
+                },
+            },
+            wgpu::Extent3d {
+                width: settings.width,
+                height: settings.height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        core.queue.submit(Some(encoder.finish()));
+
+        let buffer_slice = output_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        let _ = core.device.poll(wgpu::PollType::wait_indefinitely());
+        rx.recv().unwrap().unwrap();
+
+        let padded_data = buffer_slice.get_mapped_range().to_vec();
+        let mut data = Vec::with_capacity((settings.width * settings.height * 4) as usize);
+        for chunk in padded_data.chunks(padded_bytes_per_row as usize) {
+            data.extend_from_slice(&chunk[..unpadded_bytes_per_row as usize]);
+        }
+
+        Ok(data)
+    }
+
+    /// Capture and save a single export frame.
+    ///
+    /// Convenience wrapper that calls `capture_frame` and then `save_frame`.
+    /// The caller should update camera and time uniforms before calling this.
+    pub fn export_frame(
+        core: &Core,
+        preprocess: &mut ComputeShader,
+        sorter: &GaussianSorter,
+        renderer: &GaussianRenderer,
+        render_bind_group: &wgpu::BindGroup,
+        count: u32,
+        frame: u32,
+        settings: &ExportSettings,
+        texture_format: wgpu::TextureFormat,
+    ) {
+        match Self::capture_frame(
+            core, preprocess, sorter, renderer,
+            render_bind_group, count, settings, texture_format,
+        ) {
+            Ok(data) => {
+                if let Err(e) = crate::save_frame(data, frame, settings) {
+                    eprintln!("Error saving gaussian export frame {frame}: {e:?}");
+                }
+            }
+            Err(e) => eprintln!("Error capturing gaussian export frame {frame}: {e}"),
+        }
     }
 }
