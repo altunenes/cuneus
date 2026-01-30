@@ -199,11 +199,22 @@ impl ShaderManager for Gaussian3DShader {
             .with_storage_buffer(StorageBufferSpec::new("camera", camera_size))
             .build();
 
-        let preprocess = ComputeShader::from_builder(
+        let mut preprocess = ComputeShader::from_builder(
             core,
             include_str!("shaders/gaussian3d.wgsl"),
             config,
         );
+
+        if let Err(e) = preprocess.enable_hot_reload(
+            core.device.clone(),
+            std::path::PathBuf::from("examples/shaders/gaussian3d.wgsl"),
+            core.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Gaussian3D Hot Reload"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gaussian3d.wgsl").into()),
+            }),
+        ) {
+            eprintln!("Failed to enable hot reload: {e}");
+        }
 
         let camera_buffer = core.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Gaussian Camera"),
@@ -240,6 +251,8 @@ impl ShaderManager for Gaussian3DShader {
     }
 
     fn update(&mut self, core: &Core) {
+        self.preprocess.check_hot_reload(&core.device);
+
         let dt = self.base.fps_tracker.delta_time();
         self.camera.apply_held_keys(dt);
         self.update_camera(core);
