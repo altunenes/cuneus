@@ -1,6 +1,6 @@
 use cuneus::compute::{ComputeShader, ComputeShaderBuilder, StorageBufferSpec};
 use cuneus::prelude::*;
-use cuneus::{GaussianCamera, GaussianCloud, GaussianRenderer, GaussianSorter};
+use cuneus::{GaussianCamera, GaussianCloud, GaussianExporter, GaussianRenderer, GaussianSorter};
 use std::collections::HashSet;
 use winit::event::WindowEvent;
 
@@ -118,6 +118,7 @@ struct Gaussian3DShader {
     params_buffer: wgpu::Buffer,
     params: GaussianParams,
     camera: CameraState,
+    surface_format: wgpu::TextureFormat,
 }
 
 impl Gaussian3DShader {
@@ -160,6 +161,25 @@ impl Gaussian3DShader {
     fn sync_params(&self, core: &Core) {
         self.preprocess.set_custom_params(self.params, &core.queue);
         core.queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&self.params));
+    }
+
+    fn export_frame(&mut self, core: &Core, frame: u32, time: f32) {
+        let settings = self.base.export_manager.settings().clone();
+        let camera = GaussianCamera::from_orbit(
+            self.camera.yaw, self.camera.pitch, self.camera.distance,
+            self.camera.target, self.camera.fov.to_radians(),
+            [settings.width as f32, settings.height as f32],
+        );
+        core.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera));
+        core.queue.write_buffer(&self.preprocess.storage_buffers[4], 0, bytemuck::bytes_of(&camera));
+        self.preprocess.set_time(time, 1.0 / settings.fps as f32, &core.queue);
+
+        if let Some(ref bg) = self.render_bind_group {
+            GaussianExporter::export_frame(
+                core, &mut self.preprocess, &self.sorter, &self.renderer,
+                bg, self.params.num_gaussians, frame, &settings, self.surface_format,
+            );
+        }
     }
 
     fn update_camera(&self, core: &Core) {
@@ -247,11 +267,18 @@ impl ShaderManager for Gaussian3DShader {
             params_buffer,
             params: GaussianParams::default(),
             camera: CameraState::new(),
+            surface_format: core.config.format,
         }
     }
 
     fn update(&mut self, core: &Core) {
         self.preprocess.check_hot_reload(&core.device);
+
+        if let Some((frame, time)) = self.base.export_manager.try_get_next_frame() {
+            self.export_frame(core, frame, time);
+        } else {
+            self.base.export_manager.complete_export();
+        }
 
         let dt = self.base.fps_tracker.delta_time();
         self.camera.apply_held_keys(dt);
@@ -274,6 +301,8 @@ impl ShaderManager for Gaussian3DShader {
         let mut params = self.params;
         let mut changed = false;
         let mut load_ply_path: Option<std::path::PathBuf> = None;
+        let mut should_start_export = false;
+        let mut export_request = self.base.export_manager.get_ui_request();
         let mut controls_request = self.base.controls.get_ui_request(&self.base.start_time, &core.size);
         controls_request.current_fps = Some(self.base.fps_tracker.fps());
 
@@ -344,13 +373,22 @@ impl ShaderManager for Gaussian3DShader {
 
                         ui.separator();
                         ShaderControls::render_controls_widget(ui, &mut controls_request);
+
+                        ui.separator();
+                        should_start_export =
+                            ExportManager::render_export_ui_widget(ui, &mut export_request);
                     });
             })
         } else {
             self.base.render_ui(core, |_ctx| {})
         };
 
+        self.base.export_manager.apply_ui_request(export_request);
         self.base.apply_control_request(controls_request);
+
+        if should_start_export {
+            self.base.export_manager.start_export();
+        }
 
         if let Some(path) = load_ply_path {
             self.load_ply(core, &path);
