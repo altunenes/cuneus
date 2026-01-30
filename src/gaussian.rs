@@ -9,10 +9,11 @@ pub struct GaussianSorter {
     internal_buffer: Option<wgpu::Buffer>,
     state_buffer: Option<wgpu::Buffer>,
     current_count: u32,
+    last_camera_forward: Option<[f32; 3]>,
 }
 
 impl GaussianSorter {
-    /// Create a new GaussianSorter
+    /// Create a new GaussianSorter (32-bit radix sort, 4 passes)
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
             radix_sorter: RadixSorter::new(device),
@@ -22,6 +23,21 @@ impl GaussianSorter {
             internal_buffer: None,
             state_buffer: None,
             current_count: 0,
+            last_camera_forward: None,
+        }
+    }
+
+    /// 16-bit 2 passes (note fn new is 4 passes and 32)
+    pub fn new_16bit(device: &wgpu::Device) -> Self {
+        Self {
+            radix_sorter: RadixSorter::new_16bit(device),
+            bind_group: None,
+            aux_keys: None,
+            aux_payload: None,
+            internal_buffer: None,
+            state_buffer: None,
+            current_count: 0,
+            last_camera_forward: None,
         }
     }
 
@@ -35,7 +51,6 @@ impl GaussianSorter {
         count: u32,
     ) {
         if self.current_count != count {
-            // Create auxiliary buffers and bind group that binds directly to the source buffers
             let (state_buffer, aux_keys, aux_payload, internal_buffer, bind_group) =
                 self.radix_sorter.create_direct_bind_group(
                     device,
@@ -58,6 +73,27 @@ impl GaussianSorter {
         };
 
         self.radix_sorter.sort_with_bind_group(encoder, bind_group, count);
+    }
+
+    /// Check if sorting is needed based on camera forward vector change.
+    /// Returns true if the camera has moved enough to warrant re-sorting.
+    /// Updates internal state when returning true.
+    pub fn needs_sort(&mut self, camera_forward: [f32; 3]) -> bool {
+        if let Some(last) = self.last_camera_forward {
+            let dot = last[0] * camera_forward[0]
+                + last[1] * camera_forward[1]
+                + last[2] * camera_forward[2];
+            if dot > 0.9999 {
+                return false;
+            }
+        }
+        self.last_camera_forward = Some(camera_forward);
+        true
+    }
+
+    /// Force a sort on the next frame (e.g. after loading new data)
+    pub fn force_sort(&mut self) {
+        self.last_camera_forward = None;
     }
 
     /// Get the current gaussian count this sorter is prepared for

@@ -45,4 +45,9 @@ impl FpsTracker {
     pub fn fps(&self) -> f32 {
         self.current_fps
     }
+
+    /// Returns the time elapsed since the last frame in seconds.
+    pub fn delta_time(&self) -> f32 {
+        self.last_frame_time.elapsed().as_secs_f32()
+    }
 }

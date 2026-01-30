@@ -3,6 +3,10 @@ struct GaussianParams {
     scale_modifier: f32,
     scene_scale: f32,
     gamma: f32,
+    depth_shift: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 };
 
 struct Camera {
@@ -166,7 +170,7 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>) {
     gaussian_2d[idx].color = g.color.rgb;
 
     let depth_uint = bitcast<u32>(pos_view.z);
-    depth_keys[idx] = 0xFFFFFFFFu - depth_uint;
+    depth_keys[idx] = (0xFFFFFFFFu - depth_uint) >> params.depth_shift;
 }
 
 

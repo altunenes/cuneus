@@ -1,7 +1,7 @@
-//! GPU Radix Sort for cuneus
-//!
-//! Ported from wgpu_sort (BSD 2-Clause License) : https://github.com/KeKsBoTer/wgpu_sort/tree/master/src
-//! please see the original repo for code explanations in detail. 
+  //! GPU Radix Sort for cuneus                                                                                                                                
+  //!                                                                                                                                                          
+  //! Based on wgpu_sort (BSD 2-Clause License): https://github.com/KeKsBoTer/wgpu_sort/tree/master/src                                                        
+  //! I extended it with a 16-bit key mode (2 passes) for faster depth sorting.   
 
 /*
 BSD 2-Clause License
@@ -63,6 +63,7 @@ pub struct RadixSorter {
     scatter_even_pipeline: wgpu::ComputePipeline,
     scatter_odd_pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
+    key_val_size: u32,
 }
 
 impl RadixSorter {
@@ -170,6 +171,120 @@ impl RadixSorter {
             scatter_even_pipeline,
             scatter_odd_pipeline,
             bind_group_layout,
+            key_val_size: RS_KEYVAL_SIZE,
+        }
+    }
+
+    /// Create a 16-bit radix sorter 2 passes.
+    /// Use with 16-bit depth keys for faster gaussian splatting sort.
+    pub fn new_16bit(device: &wgpu::Device) -> Self {
+        let key_val_size: u32 = 2;
+        let bind_group_layout = Self::create_bind_group_layout(device);
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Radix Sort 16-bit Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let subgroup_size = 1u32;
+        let rs_sweep_0_size = RS_RADIX_SIZE / subgroup_size.max(1);
+        let rs_sweep_1_size = rs_sweep_0_size / subgroup_size.max(1);
+        let rs_smem_phase_2 = RS_RADIX_SIZE + RS_SCATTER_BLOCK_ROWS * SCATTER_WG_SIZE;
+        let rs_mem_dwords = rs_smem_phase_2;
+
+        let shader_source = format!(
+            "const histogram_sg_size: u32 = {}u;\n\
+             const histogram_wg_size: u32 = {}u;\n\
+             const rs_radix_log2: u32 = {}u;\n\
+             const rs_radix_size: u32 = {}u;\n\
+             const rs_keyval_size: u32 = {}u;\n\
+             const rs_histogram_block_rows: u32 = {}u;\n\
+             const rs_scatter_block_rows: u32 = {}u;\n\
+             const rs_mem_dwords: u32 = {}u;\n\
+             const rs_mem_sweep_0_offset: u32 = 0u;\n\
+             const rs_mem_sweep_1_offset: u32 = {}u;\n\
+             const rs_mem_sweep_2_offset: u32 = {}u;\n\
+             {}",
+            subgroup_size.max(1),
+            HISTOGRAM_WG_SIZE,
+            RS_RADIX_LOG2,
+            RS_RADIX_SIZE,
+            key_val_size,
+            RS_HISTOGRAM_BLOCK_ROWS,
+            RS_SCATTER_BLOCK_ROWS,
+            rs_mem_dwords,
+            rs_sweep_0_size,
+            rs_sweep_0_size + rs_sweep_1_size,
+            include_str!("shader.wgsl")
+        );
+
+        let shader_code = shader_source
+            .replace("{histogram_wg_size}", &HISTOGRAM_WG_SIZE.to_string())
+            .replace("{prefix_wg_size}", &PREFIX_WG_SIZE.to_string())
+            .replace("{scatter_wg_size}", &SCATTER_WG_SIZE.to_string())
+            .replace(
+                "histogram_pass(3u, lid.x);\n    histogram_pass(2u, lid.x);\n    histogram_pass(1u, lid.x);\n    histogram_pass(0u, lid.x);",
+                "histogram_pass(1u, lid.x);\n    histogram_pass(0u, lid.x);"
+            );
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Radix Sort 16-bit Shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_code.into()),
+        });
+
+        let zero_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Radix Sort 16-bit Zero"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("zero_histograms"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        let histogram_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Radix Sort 16-bit Histogram"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("calculate_histogram"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        let prefix_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Radix Sort 16-bit Prefix"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("prefix_histogram"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        let scatter_even_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Radix Sort 16-bit Scatter Even"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("scatter_even"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        let scatter_odd_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Radix Sort 16-bit Scatter Odd"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("scatter_odd"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        Self {
+            zero_pipeline,
+            histogram_pipeline,
+            prefix_pipeline,
+            scatter_even_pipeline,
+            scatter_odd_pipeline,
+            bind_group_layout,
+            key_val_size,
         }
     }
 
@@ -250,7 +365,7 @@ impl RadixSorter {
     /// Create sort buffers for a given number of elements
     pub fn create_sort_buffers(&self, device: &wgpu::Device, count: u32) -> SortBuffers {
         let padded_size = keys_buffer_size(count);
-        let keys_size = (padded_size * RS_KEYVAL_SIZE * 4) as u64;
+        let keys_size = (padded_size * self.key_val_size * 4) as u64;
         let payload_size = (count * 4) as u64;
 
         let state_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -329,7 +444,7 @@ impl RadixSorter {
     fn internal_buffer_size(&self, count: u32) -> u32 {
         let scatter_blocks_ru = scatter_blocks_ru(count);
         let histo_size = RS_RADIX_SIZE * 4;
-        (RS_KEYVAL_SIZE + scatter_blocks_ru) * histo_size
+        (self.key_val_size + scatter_blocks_ru) * histo_size
     }
 
     /// Sort the keys and payload
@@ -376,10 +491,10 @@ impl RadixSorter {
             });
             pass.set_pipeline(&self.prefix_pipeline);
             pass.set_bind_group(0, &buffers.bind_group, &[]);
-            pass.dispatch_workgroups(RS_KEYVAL_SIZE, 1, 1);
+            pass.dispatch_workgroups(self.key_val_size, 1, 1);
         }
 
-        // Scatter passes (4 passes for 32-bit keys)
+        // Scatter passes
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Radix Sort Scatter"),
@@ -387,17 +502,13 @@ impl RadixSorter {
             });
             pass.set_bind_group(0, &buffers.bind_group, &[]);
 
-            pass.set_pipeline(&self.scatter_even_pipeline);
-            pass.dispatch_workgroups(scatter_blocks, 1, 1);
+            for _i in 0..self.key_val_size / 2 {
+                pass.set_pipeline(&self.scatter_even_pipeline);
+                pass.dispatch_workgroups(scatter_blocks, 1, 1);
 
-            pass.set_pipeline(&self.scatter_odd_pipeline);
-            pass.dispatch_workgroups(scatter_blocks, 1, 1);
-
-            pass.set_pipeline(&self.scatter_even_pipeline);
-            pass.dispatch_workgroups(scatter_blocks, 1, 1);
-
-            pass.set_pipeline(&self.scatter_odd_pipeline);
-            pass.dispatch_workgroups(scatter_blocks, 1, 1);
+                pass.set_pipeline(&self.scatter_odd_pipeline);
+                pass.dispatch_workgroups(scatter_blocks, 1, 1);
+            }
         }
     }
 
@@ -411,7 +522,7 @@ impl RadixSorter {
         count: u32,
     ) -> (wgpu::Buffer, wgpu::Buffer, wgpu::Buffer, wgpu::Buffer, wgpu::BindGroup) {
         let padded_size = keys_buffer_size(count);
-        let keys_aux_size = (padded_size * RS_KEYVAL_SIZE * 4) as u64;
+        let keys_aux_size = (padded_size * self.key_val_size * 4) as u64;
         let payload_aux_size = (count * 4) as u64;
 
         let state_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -504,10 +615,10 @@ impl RadixSorter {
             });
             pass.set_pipeline(&self.prefix_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
-            pass.dispatch_workgroups(RS_KEYVAL_SIZE, 1, 1);
+            pass.dispatch_workgroups(self.key_val_size, 1, 1);
         }
 
-        // Scatter passes (4 passes for 32-bit keys)
+        // Scatter passes
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Radix Sort Scatter"),
@@ -515,18 +626,19 @@ impl RadixSorter {
             });
             pass.set_bind_group(0, bind_group, &[]);
 
-            pass.set_pipeline(&self.scatter_even_pipeline);
-            pass.dispatch_workgroups(scatter_blocks, 1, 1);
+            for _i in 0..self.key_val_size / 2 {
+                pass.set_pipeline(&self.scatter_even_pipeline);
+                pass.dispatch_workgroups(scatter_blocks, 1, 1);
 
-            pass.set_pipeline(&self.scatter_odd_pipeline);
-            pass.dispatch_workgroups(scatter_blocks, 1, 1);
-
-            pass.set_pipeline(&self.scatter_even_pipeline);
-            pass.dispatch_workgroups(scatter_blocks, 1, 1);
-
-            pass.set_pipeline(&self.scatter_odd_pipeline);
-            pass.dispatch_workgroups(scatter_blocks, 1, 1);
+                pass.set_pipeline(&self.scatter_odd_pipeline);
+                pass.dispatch_workgroups(scatter_blocks, 1, 1);
+            }
         }
+    }
+
+    /// Get the key-value size (number of bytes per key, 4 for 32-bit, 2 for 16-bit)
+    pub fn key_val_size(&self) -> u32 {
+        self.key_val_size
     }
 }
 
