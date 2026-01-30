@@ -1,6 +1,7 @@
 use cuneus::compute::{ComputeShader, ComputeShaderBuilder, StorageBufferSpec};
 use cuneus::prelude::*;
 use cuneus::{GaussianCamera, GaussianCloud, GaussianRenderer, GaussianSorter};
+use std::collections::HashSet;
 use winit::event::WindowEvent;
 
 const MAX_GAUSSIANS: u32 = 2_000_000;
@@ -13,6 +14,10 @@ struct GaussianParams {
     gaussian_size: f32,
     scene_scale: f32,
     gamma: f32,
+    depth_shift: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 impl UniformProvider for GaussianParams {
@@ -28,11 +33,14 @@ impl Default for GaussianParams {
             gaussian_size: 1.0,
             scene_scale: 10.0,
             gamma: 1.2,
+            depth_shift: 16,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         }
     }
 }
 
-#[derive(Default)]
 struct CameraState {
     yaw: f32,
     pitch: f32,
@@ -41,6 +49,22 @@ struct CameraState {
     target: [f32; 3],
     is_dragging: bool,
     last_mouse: [f32; 2],
+    keys_held: HashSet<String>,
+}
+
+impl Default for CameraState {
+    fn default() -> Self {
+        Self {
+            yaw: 0.0,
+            pitch: 0.0,
+            distance: 1.0,
+            fov: 51.0,
+            target: [0.0; 3],
+            is_dragging: false,
+            last_mouse: [0.0; 2],
+            keys_held: HashSet::new(),
+        }
+    }
 }
 
 impl CameraState {
@@ -56,7 +80,31 @@ impl CameraState {
     }
 
     fn reset(&mut self) {
+        let keys = std::mem::take(&mut self.keys_held);
         *self = Self::new();
+        self.keys_held = keys;
+    }
+
+    fn apply_held_keys(&mut self, dt: f32) {
+        if self.keys_held.is_empty() {
+            return;
+        }
+        let speed = 2.0 * self.distance * dt;
+        let (sy, cy) = (self.yaw.sin(), self.yaw.cos());
+        let forward = [sy, 0.0, cy];
+        let right = [-cy, 0.0, sy];
+
+        for key in &self.keys_held {
+            match key.as_str() {
+                "w" => { self.target[0] += forward[0] * speed; self.target[2] += forward[2] * speed; }
+                "s" => { self.target[0] -= forward[0] * speed; self.target[2] -= forward[2] * speed; }
+                "a" => { self.target[0] -= right[0] * speed; self.target[2] -= right[2] * speed; }
+                "d" => { self.target[0] += right[0] * speed; self.target[2] += right[2] * speed; }
+                "q" => { self.target[1] += speed; }
+                "e" => { self.target[1] -= speed; }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -102,6 +150,7 @@ impl Gaussian3DShader {
                     &self.preprocess.storage_buffers[3],
                 ));
 
+                self.sorter.force_sort();
                 self.camera.reset();
             }
             Err(e) => eprintln!("Load error: {:?}", e),
@@ -170,7 +219,7 @@ impl ShaderManager for Gaussian3DShader {
             mapped_at_creation: false,
         });
 
-        let sorter = GaussianSorter::new(&core.device);
+        let sorter = GaussianSorter::new_16bit(&core.device);
         let renderer = GaussianRenderer::new(
             &core.device,
             core.config.format,
@@ -191,6 +240,8 @@ impl ShaderManager for Gaussian3DShader {
     }
 
     fn update(&mut self, core: &Core) {
+        let dt = self.base.fps_tracker.delta_time();
+        self.camera.apply_held_keys(dt);
         self.update_camera(core);
         self.base.fps_tracker.update();
     }
@@ -242,10 +293,18 @@ impl ShaderManager for Gaussian3DShader {
                             .show(ui, |ui| {
                                 changed |= ui.add(egui::Slider::new(&mut params.scene_scale, 0.01..=100.0)
                                     .logarithmic(true).text("Scene Scale")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.gaussian_size, 0.1..=3.0)
+                                changed |= ui.add(egui::Slider::new(&mut params.gaussian_size, 0.1..=2.0)
                                     .text("Gaussian Size")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.gamma, 0.1..=2.2)
                                     .text("Gamma")).changed();
+
+                                let mut depth_shift_f = params.depth_shift as f32;
+                                if ui.add(egui::Slider::new(&mut depth_shift_f, 1.0..=30.0)
+                                    .step_by(1.0)
+                                    .text("Depth Blur")).changed() {
+                                    params.depth_shift = depth_shift_f as u32;
+                                    changed = true;
+                                }
                             });
 
                         egui::CollapsingHeader::new("Camera Settings")
@@ -255,8 +314,8 @@ impl ShaderManager for Gaussian3DShader {
                                     .logarithmic(true).text("Distance")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut self.camera.fov, 20.0..=120.0)
                                     .text("FOV")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut self.camera.yaw, 0.0..=6.28)
-                                    .text("Yaw")).changed();
+                                changed |= ui.add(egui::DragValue::new(&mut self.camera.yaw)
+                                    .speed(0.05).prefix("Yaw: ")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut self.camera.pitch, -1.5..=1.5)
                                     .text("Pitch")).changed();
 
@@ -298,6 +357,9 @@ impl ShaderManager for Gaussian3DShader {
 
             // GPU Radix Sort
             self.sorter.sort(&mut encoder, count);
+
+            // Split submission: submit preprocess+sort, start new encoder for render
+            encoder = core.flush_encoder(encoder);
 
             // Fragment render
             {
@@ -344,23 +406,25 @@ impl ShaderManager for Gaussian3DShader {
         }
 
         if let WindowEvent::KeyboardInput { event, .. } = event {
+            if self.base.key_handler.handle_keyboard_input(core.window(), event) {
+                return true;
+            }
             if let winit::keyboard::Key::Character(ch) = &event.logical_key {
-                let pressed = event.state == winit::event::ElementState::Pressed;
-                if pressed {
-                    let speed = 0.1 * self.camera.distance;
-                    let (sy, cy) = (self.camera.yaw.sin(), self.camera.yaw.cos());
-                    let forward = [sy, 0.0, cy];
-                    let right = [-cy, 0.0, sy];
-
-                    match ch.as_str() {
-                        "w" | "W" => { self.camera.target[0] += forward[0] * speed; self.camera.target[2] += forward[2] * speed; return true; }
-                        "s" | "S" => { self.camera.target[0] -= forward[0] * speed; self.camera.target[2] -= forward[2] * speed; return true; }
-                        "a" | "A" => { self.camera.target[0] -= right[0] * speed; self.camera.target[2] -= right[2] * speed; return true; }
-                        "d" | "D" => { self.camera.target[0] += right[0] * speed; self.camera.target[2] += right[2] * speed; return true; }
-                        "q" | "Q" => { self.camera.target[1] += speed; return true; }
-                        "e" | "E" => { self.camera.target[1] -= speed; return true; }
-                        "r" | "R" => { self.camera.reset(); return true; }
-                        _ => {}
+                let key = ch.as_str().to_lowercase();
+                match event.state {
+                    winit::event::ElementState::Pressed => {
+                        if key == "r" {
+                            self.camera.reset();
+                            self.sorter.force_sort();
+                            return true;
+                        }
+                        if matches!(key.as_str(), "w" | "a" | "s" | "d" | "q" | "e") {
+                            self.camera.keys_held.insert(key);
+                            return true;
+                        }
+                    }
+                    winit::event::ElementState::Released => {
+                        self.camera.keys_held.remove(&key);
                     }
                 }
             }
@@ -389,9 +453,10 @@ impl ShaderManager for Gaussian3DShader {
         if let WindowEvent::MouseWheel { delta, .. } = event {
             let d = match delta {
                 winit::event::MouseScrollDelta::LineDelta(_, y) => *y,
-                winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32 / 100.0,
+                winit::event::MouseScrollDelta::PixelDelta(p) => (p.y as f32 / 100.0).clamp(-3.0, 3.0),
             };
-            self.camera.distance = (self.camera.distance * (1.0 - d * 0.15)).clamp(0.01, 500.0);
+            let factor = (1.0 + d * 0.1).clamp(0.5, 2.0);
+            self.camera.distance = (self.camera.distance * factor).clamp(0.1, 500.0);
             return true;
         }
 
@@ -400,12 +465,6 @@ impl ShaderManager for Gaussian3DShader {
                 self.load_ply(core, path);
             }
             return true;
-        }
-
-        if let WindowEvent::KeyboardInput { event, .. } = event {
-            if self.base.key_handler.handle_keyboard_input(core.window(), event) {
-                return true;
-            }
         }
 
         false
