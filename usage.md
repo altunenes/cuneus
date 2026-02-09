@@ -303,6 +303,10 @@ Cuneus supports **bidirectional GPU-CPU audio workflows** using two complementar
 - **Shader Access**: `@group(2) var<storage, read_write> audio_buffer: array<f32>` (read-write)
 - **Use Case**: Music generators like `synth.rs`, `veridisquo.rs`
 
+> **Note:** Audio synthesis examples use two different patterns depending on *who decides what to play*:
+> - **GPU-driven** (`veridisquo.rs`): The shader composes the music (frequencies, amplitudes) and writes to the audio buffer. The CPU reads it back with `pollster::block_on(read_audio_buffer(...))` and feeds it to `SynthesisManager`. The GPU is the "composer".
+> - **CPU-driven** (`synth.rs`): The user presses keys on the keyboard and the CPU calls `synth.set_voice(...)` directly. No GPU→CPU readback is needed — the GPU only handles visualization.
+
 #### Composing Music on the GPU
 
 You can write entire songs in your compute shader by calculating note sequences, melodies, and synthesis parameters:
