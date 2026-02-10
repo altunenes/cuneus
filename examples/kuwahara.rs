@@ -77,20 +77,7 @@ impl ShaderManager for KuwaharaShader {
             .with_label("Kuwahara Multi-Pass")
             .build();
 
-        let mut compute_shader =
-            ComputeShader::from_builder(core, include_str!("shaders/kuwahara.wgsl"), config);
-
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/kuwahara.wgsl"),
-            core.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Kuwahara Hot Reload"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/kuwahara.wgsl").into()),
-                }),
-        ) {
-            eprintln!("Failed to enable hot reload for Kuwahara shader: {e}");
-        }
+        let compute_shader = cuneus::compute_shader!(core, "shaders/kuwahara.wgsl", config);
 
         compute_shader.set_custom_params(initial_params, &core.queue);
 

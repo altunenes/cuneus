@@ -60,8 +60,7 @@ impl ShaderManager for Shader {
             .with_mouse()
             .build();
 
-        let mut compute_shader =
-            ComputeShader::from_builder(core, include_str!("shaders/orbits.wgsl"), config);
+        let compute_shader = cuneus::compute_shader!(core, "shaders/orbits.wgsl", config);
 
         let initial_params = ShaderParams {
             base_color: [0.0, 0.5, 1.0],
@@ -83,19 +82,6 @@ impl ShaderManager for Shader {
             wave_speed: 0.1,
             fold_intensity: 1.0,
         };
-
-        // Enable hot reload
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/orbits.wgsl"),
-            core.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Orbits Hot Reload"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/orbits.wgsl").into()),
-                }),
-        ) {
-            eprintln!("Failed to enable hot reload for orbits shader: {e}");
-        }
 
         compute_shader.set_custom_params(initial_params, &core.queue);
 

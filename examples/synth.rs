@@ -121,20 +121,7 @@ impl ShaderManager for SynthManager {
             .with_label("Synth Unified")
             .build();
 
-        let mut compute_shader =
-            ComputeShader::from_builder(core, include_str!("shaders/synth.wgsl"), config);
-
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/synth.wgsl"),
-            core.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Synth Hot Reload"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/synth.wgsl").into()),
-                }),
-        ) {
-            eprintln!("Failed to enable hot reload for synth shader: {e}");
-        }
+        let compute_shader = cuneus::compute_shader!(core, "shaders/synth.wgsl", config);
 
         compute_shader.set_custom_params(initial_params, &core.queue);
 

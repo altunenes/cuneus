@@ -84,20 +84,7 @@ impl ShaderManager for LegoShader {
             .with_label("LEGO Effect")
             .build();
 
-        let mut compute_shader =
-            ComputeShader::from_builder(core, include_str!("shaders/lego.wgsl"), config);
-
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/lego.wgsl"),
-            core.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("LEGO Hot Reload"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/lego.wgsl").into()),
-                }),
-        ) {
-            eprintln!("Failed to enable hot reload: {e}");
-        }
+        let compute_shader = cuneus::compute_shader!(core, "shaders/lego.wgsl", config);
 
         compute_shader.set_custom_params(initial_params, &core.queue);
 

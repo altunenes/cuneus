@@ -110,22 +110,7 @@ impl ShaderManager for ExperimentShader {
             .with_label("Currents Port")
             .build();
 
-        let mut compute_shader = ComputeShader::from_builder(
-            core,
-            include_str!("shaders/tameimp.wgsl"),
-            config,
-        );
-
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/tameimp.wgsl"),
-            core.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Hot Reload"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/tameimp.wgsl").into()),
-            }),
-        ) {
-            eprintln!("Hot reload error: {e}");
-        }
+        let compute_shader = cuneus::compute_shader!(core, "shaders/tameimp.wgsl", config);
 
         compute_shader.set_custom_params(initial_params, &core.queue);
 
