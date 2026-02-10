@@ -1,3 +1,4 @@
+use crate::compute::ComputeShader;
 use wgpu::util::DeviceExt;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -112,6 +113,25 @@ impl Renderer {
             vertex_buffer,
         }
     }
+    /// Blit a compute shader's output texture to the screen in one call.
+    pub fn render_to_view(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        compute_shader: &ComputeShader,
+    ) {
+        let mut render_pass = Self::begin_render_pass(
+            encoder,
+            view,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            Some("Blit Pass"),
+        );
+        render_pass.set_pipeline(&self.render_pipeline);
+        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        render_pass.set_bind_group(0, &compute_shader.get_output_texture().bind_group, &[]);
+        render_pass.draw(0..4, 0..1);
+    }
+
     pub fn begin_render_pass<'a>(
         encoder: &'a mut wgpu::CommandEncoder,
         view: &'a wgpu::TextureView,
