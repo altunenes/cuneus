@@ -157,8 +157,11 @@ impl ShaderManager for MyShader {
         // This works for both single-pass and multi-pass shaders automatically.
         self.compute_shader.dispatch(&mut encoder, core);
 
-        // Display the final output texture and UI
-        // ... rendering boilerplate ...
+        // Blit the compute shader's output texture to the screen
+        self.base.renderer.render_to_view(&mut encoder, &view, &self.compute_shader);
+
+        // Handle UI overlay and submit
+        self.base.handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(Some(encoder.finish()));
         output.present();
 
