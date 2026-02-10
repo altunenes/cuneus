@@ -116,15 +116,7 @@ impl ShaderManager for ColorProjection {
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
-        let output = core.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = core
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Color Projection Render Encoder"),
-            });
+        let mut frame = self.base.begin_frame(core)?;
 
         // Handle UI and controls
         let mut params = self.current_params;
@@ -146,20 +138,7 @@ impl ShaderManager for ColorProjection {
         controls_request.current_fps = Some(self.base.fps_tracker.fps());
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
-                ctx.style_mut(|style| {
-                    style.visuals.window_fill =
-                        egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
-                    style
-                        .text_styles
-                        .get_mut(&egui::TextStyle::Body)
-                        .unwrap()
-                        .size = 11.0;
-                    style
-                        .text_styles
-                        .get_mut(&egui::TextStyle::Button)
-                        .unwrap()
-                        .size = 10.0;
-                });
+                RenderKit::apply_default_style(ctx);
 
                 egui::Window::new("Particle Splatting")
                     .collapsible(true)
@@ -294,7 +273,7 @@ impl ShaderManager for ColorProjection {
         // Color projection multi-stage dispatch - run all stages every frame for animation
 
         // Stage 0: Clear atomic buffer (16x16 workgroups)
-        self.compute_shader.dispatch_stage(&mut encoder, core, 0);
+        self.compute_shader.dispatch_stage(&mut frame.encoder, core, 0);
 
         // Stage 1: Project colors to 3D space (uses input texture dimensions)
         if let Some(texture_manager) = self.base.get_current_texture_manager() {
@@ -304,21 +283,18 @@ impl ShaderManager for ColorProjection {
                 1,
             ];
             self.compute_shader
-                .dispatch_stage_with_workgroups(&mut encoder, 1, input_workgroups);
+                .dispatch_stage_with_workgroups(&mut frame.encoder, 1, input_workgroups);
         } else {
             // Fallback to screen size if no input texture
-            self.compute_shader.dispatch_stage(&mut encoder, core, 1);
+            self.compute_shader.dispatch_stage(&mut frame.encoder, core, 1);
         }
 
         // Stage 2: Generate final image (16x16 workgroups, screen size)
-        self.compute_shader.dispatch_stage(&mut encoder, core, 2);
+        self.compute_shader.dispatch_stage(&mut frame.encoder, core, 2);
 
-        self.base.renderer.render_to_view(&mut encoder, &view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
 
-        self.base
-            .handle_render_output(core, &view, full_output, &mut encoder);
-        core.queue.submit(Some(encoder.finish()));
-        output.present();
+        self.base.end_frame(core, frame, full_output);
 
         Ok(())
     }

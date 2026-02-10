@@ -149,21 +149,28 @@ impl ShaderManager for MyShader {
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
-        let output = core.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = core.device.create_command_encoder(/* ... */);
+        // begin_frame() bundles surface texture + view + encoder into a FrameContext
+        let mut frame = self.base.begin_frame(core)?;
+
+        // Build the UI (apply_default_style sets the standard theme)
+        let full_output = if self.base.key_handler.show_ui {
+            self.base.render_ui(core, |ctx| {
+                RenderKit::apply_default_style(ctx);
+                // ... egui windows here ...
+            })
+        } else {
+            self.base.render_ui(core, |_ctx| {})
+        };
 
         // Execute the entire compute pipeline.
         // This works for both single-pass and multi-pass shaders automatically.
-        self.compute_shader.dispatch(&mut encoder, core);
+        self.compute_shader.dispatch(&mut frame.encoder, core);
 
         // Blit the compute shader's output texture to the screen
-        self.base.renderer.render_to_view(&mut encoder, &view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
 
-        // Handle UI overlay and submit
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
-        core.queue.submit(Some(encoder.finish()));
-        output.present();
+        // end_frame() handles UI overlay + submit + present in one call
+        self.base.end_frame(core, frame, full_output);
 
         // 3. (Multi-Pass with Cross-Frame Feedback ONLY) If your effect needs to accumulate
         //    or preserve state across frames (like reaction-diffusion or temporal effects),
@@ -278,10 +285,10 @@ When doing ping-pong buffer simulations, you may need buffer updates to take eff
 // Update params, submit, get new encoder
 self.params.ping = 1 - self.params.ping;
 self.compute_shader.set_custom_params(self.params, &core.queue);
-encoder = core.flush_encoder(encoder);
+frame.encoder = core.flush_encoder(frame.encoder);
 
 // Now the next dispatch sees the updated ping value
-self.compute_shader.dispatch_stage(&mut encoder, core, NEXT_PASS);
+self.compute_shader.dispatch_stage(&mut frame.encoder, core, NEXT_PASS);
 ```
 
 *See `fluidsim.rs` for a full example with 20+ pressure iterations per frame.*

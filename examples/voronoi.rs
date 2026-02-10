@@ -80,10 +80,7 @@ impl ShaderManager for Voronoi {
         self.compute_shader.check_hot_reload(&core.device);
     }
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
-        let output = core.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut frame = self.base.begin_frame(core)?;
 
         let _video_updated = if self.base.using_video_texture {
             self.base.update_video_texture(core, &core.queue)
@@ -198,11 +195,6 @@ impl ShaderManager for Voronoi {
         }
 
         // Create command encoder
-        let mut encoder = core
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
 
         // Update time uniform
         let current_time = self.base.controls.get_time(&self.base.start_time);
@@ -211,14 +203,11 @@ impl ShaderManager for Voronoi {
             .set_time(current_time, delta_time, &core.queue);
 
         // Dispatch compute shader
-        self.compute_shader.dispatch(&mut encoder, core);
+        self.compute_shader.dispatch(&mut frame.encoder, core);
 
-        self.base.renderer.render_to_view(&mut encoder, &view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
 
-        self.base
-            .handle_render_output(core, &view, full_output, &mut encoder);
-        core.queue.submit(Some(encoder.finish()));
-        output.present();
+        self.base.end_frame(core, frame, full_output);
 
         Ok(())
     }

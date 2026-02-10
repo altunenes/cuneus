@@ -116,11 +116,7 @@ impl ShaderManager for RorschachShader {
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
-        let output = core.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = core.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Rorschach Render Encoder"),
-        });
+        let mut frame = self.base.begin_frame(core)?;
 
         let mut params = self.current_params;
         let mut changed = false;
@@ -215,9 +211,9 @@ impl ShaderManager for RorschachShader {
             self.compute_shader.time_uniform.update(&core.queue);
         }
 
-        self.compute_shader.dispatch(&mut encoder, core);
+        self.compute_shader.dispatch(&mut frame.encoder, core);
 
-        self.base.renderer.render_to_view(&mut encoder, &view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
 
         self.base.apply_control_request(controls_request);
         self.base.export_manager.apply_ui_request(export_request);
@@ -231,9 +227,7 @@ impl ShaderManager for RorschachShader {
             self.base.export_manager.start_export();
         }
 
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
-        core.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
+        self.base.end_frame(core, frame, full_output);
 
         Ok(())
     }

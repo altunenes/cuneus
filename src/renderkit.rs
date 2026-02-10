@@ -20,6 +20,13 @@ use log::{error, info};
 use std::path::Path;
 use std::time::Instant;
 use winit::event::WindowEvent;
+
+pub struct FrameContext {
+    pub output: wgpu::SurfaceTexture,
+    pub view: wgpu::TextureView,
+    pub encoder: wgpu::CommandEncoder,
+}
+
 #[cfg(target_os = "macos")]
 pub const CAPTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 #[cfg(not(target_os = "macos"))]
@@ -377,6 +384,52 @@ impl RenderKit {
             self.egui_renderer.free_texture(id);
         }
     }
+    pub fn begin_frame(&self, core: &Core) -> Result<FrameContext, wgpu::SurfaceError> {
+        let output = core.surface.get_current_texture()?;
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let encoder = core
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
+        Ok(FrameContext {
+            output,
+            view,
+            encoder,
+        })
+    }
+
+    pub fn end_frame(
+        &mut self,
+        core: &Core,
+        frame: FrameContext,
+        full_output: egui::FullOutput,
+    ) {
+        let mut encoder = frame.encoder;
+        self.handle_render_output(core, &frame.view, full_output, &mut encoder);
+        core.queue.submit(std::iter::once(encoder.finish()));
+        frame.output.present();
+    }
+
+    pub fn apply_default_style(ctx: &egui::Context) {
+        ctx.style_mut(|style| {
+            style.visuals.window_fill =
+                egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
+            style
+                .text_styles
+                .get_mut(&egui::TextStyle::Body)
+                .unwrap()
+                .size = 11.0;
+            style
+                .text_styles
+                .get_mut(&egui::TextStyle::Button)
+                .unwrap()
+                .size = 10.0;
+        });
+    }
+
     pub fn load_media<P: AsRef<Path>>(&mut self, core: &Core, path: P) -> anyhow::Result<()> {
         let path_ref = path.as_ref();
         let extension = path_ref

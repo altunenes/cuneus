@@ -193,15 +193,7 @@ impl ShaderManager for MandelbulbShader {
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
-        let output = core.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = core
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
+        let mut frame = self.base.begin_frame(core)?;
 
         let current_mouse_pos = self.base.mouse_tracker.uniform.position;
         let mouse_wheel = self.base.mouse_tracker.uniform.wheel;
@@ -247,20 +239,7 @@ impl ShaderManager for MandelbulbShader {
 
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
-                ctx.style_mut(|style| {
-                    style.visuals.window_fill =
-                        egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
-                    style
-                        .text_styles
-                        .get_mut(&egui::TextStyle::Body)
-                        .unwrap()
-                        .size = 11.0;
-                    style
-                        .text_styles
-                        .get_mut(&egui::TextStyle::Button)
-                        .unwrap()
-                        .size = 10.0;
-                });
+                RenderKit::apply_default_style(ctx);
 
                 egui::Window::new("Mandelbulb PathTracer")
                     .collapsible(true)
@@ -600,14 +579,11 @@ impl ShaderManager for MandelbulbShader {
             self.base.export_manager.start_export();
         }
 
-        self.compute_shader.dispatch(&mut encoder, core);
+        self.compute_shader.dispatch(&mut frame.encoder, core);
 
-        self.base.renderer.render_to_view(&mut encoder, &view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
 
-        self.base
-            .handle_render_output(core, &view, full_output, &mut encoder);
-        core.queue.submit(Some(encoder.finish()));
-        output.present();
+        self.base.end_frame(core, frame, full_output);
 
         if self.current_params.accumulate > 0 {
             self.frame_count += 1;
