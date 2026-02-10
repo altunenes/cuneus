@@ -110,15 +110,7 @@ impl ShaderManager for FFTShader {
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
-        let output = core.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = core
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("FFT Render Encoder"),
-            });
+        let mut frame = self.base.begin_frame(core)?;
 
         // Handle UI and controls - using original transparent UI design
         let mut params = self.current_params;
@@ -140,20 +132,7 @@ impl ShaderManager for FFTShader {
         controls_request.current_fps = Some(self.base.fps_tracker.fps());
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
-                ctx.style_mut(|style| {
-                    style.visuals.window_fill =
-                        egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
-                    style
-                        .text_styles
-                        .get_mut(&egui::TextStyle::Body)
-                        .unwrap()
-                        .size = 11.0;
-                    style
-                        .text_styles
-                        .get_mut(&egui::TextStyle::Button)
-                        .unwrap()
-                        .size = 10.0;
-                });
+                RenderKit::apply_default_style(ctx);
 
                 egui::Window::new("fourier workflow")
                     .collapsible(true)
@@ -341,22 +320,22 @@ impl ShaderManager for FFTShader {
         if should_run_full_fft {
             // Stage 0: Initialize data from input texture (16x16 workgroups)
             self.compute_shader.dispatch_stage_with_workgroups(
-                &mut encoder,
+                &mut frame.encoder,
                 0,
                 [n.div_ceil(16), n.div_ceil(16), 1],
             );
 
             // Stage 1: FFT horizontal (Nx1 workgroups)
             self.compute_shader
-                .dispatch_stage_with_workgroups(&mut encoder, 1, [n, 1, 1]);
+                .dispatch_stage_with_workgroups(&mut frame.encoder, 1, [n, 1, 1]);
 
             // Stage 2: FFT vertical (Nx1 workgroups)
             self.compute_shader
-                .dispatch_stage_with_workgroups(&mut encoder, 2, [n, 1, 1]);
+                .dispatch_stage_with_workgroups(&mut frame.encoder, 2, [n, 1, 1]);
 
             // Stage 3: Modify frequencies - apply filter (16x16 workgroups)
             self.compute_shader.dispatch_stage_with_workgroups(
-                &mut encoder,
+                &mut frame.encoder,
                 3,
                 [n.div_ceil(16), n.div_ceil(16), 1],
             );
@@ -364,11 +343,11 @@ impl ShaderManager for FFTShader {
             if params.show_freqs == 0 {
                 // Stage 4: Inverse FFT horizontal
                 self.compute_shader
-                    .dispatch_stage_with_workgroups(&mut encoder, 4, [n, 1, 1]);
+                    .dispatch_stage_with_workgroups(&mut frame.encoder, 4, [n, 1, 1]);
 
                 // Stage 5: Inverse FFT vertical
                 self.compute_shader
-                    .dispatch_stage_with_workgroups(&mut encoder, 5, [n, 1, 1]);
+                    .dispatch_stage_with_workgroups(&mut frame.encoder, 5, [n, 1, 1]);
             }
 
             self.should_initialize = false;
@@ -378,14 +357,11 @@ impl ShaderManager for FFTShader {
         }
 
         // Stage 6: Main rendering - always run for display (uses screen size)
-        self.compute_shader.dispatch_stage(&mut encoder, core, 6);
+        self.compute_shader.dispatch_stage(&mut frame.encoder, core, 6);
 
-        self.base.renderer.render_to_view(&mut encoder, &view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
 
-        self.base
-            .handle_render_output(core, &view, full_output, &mut encoder);
-        core.queue.submit(Some(encoder.finish()));
-        output.present();
+        self.base.end_frame(core, frame, full_output);
 
         Ok(())
     }

@@ -222,11 +222,7 @@ impl ShaderManager for FluidSim {
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
-        let output = core.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = core.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Fluid Encoder"),
-        });
+        let mut frame = self.base.begin_frame(core)?;
 
         // Update params
         self.compute_shader.set_custom_params(self.params, &core.queue);
@@ -269,71 +265,71 @@ impl ShaderManager for FluidSim {
                 self.params.display_height.div_ceil(16),
                 1,
             ];
-            self.compute_shader.dispatch_stage_with_workgroups(&mut encoder, CLEAR_BUFFERS, max_workgroups);
-            encoder = core.flush_encoder(encoder);
+            self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, CLEAR_BUFFERS, max_workgroups);
+            frame.encoder = core.flush_encoder(frame.encoder);
             self.compute_shader.set_custom_params(self.params, &core.queue);
         }
 
         // Apply splat (additive, in-place on current read buffer)
         if self.params.do_splat == 1 {
-            self.compute_shader.dispatch_stage_with_workgroups(&mut encoder, SPLAT_VELOCITY, sim_workgroups);
-            self.compute_shader.dispatch_stage_with_workgroups(&mut encoder, SPLAT_DYE, display_workgroups);
+            self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, SPLAT_VELOCITY, sim_workgroups);
+            self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, SPLAT_DYE, display_workgroups);
         }
 
         // Curl: reads vel[vel_ping]
-        self.compute_shader.dispatch_stage_with_workgroups(&mut encoder, CURL_COMPUTE, sim_workgroups);
+        self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, CURL_COMPUTE, sim_workgroups);
 
         // Vorticity: reads vel[vel_ping], writes vel[1-vel_ping]
-        self.compute_shader.dispatch_stage_with_workgroups(&mut encoder, VORTICITY_APPLY, sim_workgroups);
+        self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, VORTICITY_APPLY, sim_workgroups);
 
         // Submit before changing ping
-        encoder = core.flush_encoder(encoder);
+        frame.encoder = core.flush_encoder(frame.encoder);
         self.params.vel_ping = 1 - self.params.vel_ping;
         self.compute_shader.set_custom_params(self.params, &core.queue);
 
         // Divergence: reads vel[vel_ping] (where vorticity wrote)
-        self.compute_shader.dispatch_stage_with_workgroups(&mut encoder, DIVERGENCE_COMPUTE, sim_workgroups);
+        self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, DIVERGENCE_COMPUTE, sim_workgroups);
 
         // Pressure clear: reads prs[prs_ping], writes prs[1-prs_ping]
-        self.compute_shader.dispatch_stage_with_workgroups(&mut encoder, PRESSURE_CLEAR, sim_workgroups);
+        self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, PRESSURE_CLEAR, sim_workgroups);
 
-        encoder = core.flush_encoder(encoder);
+        frame.encoder = core.flush_encoder(frame.encoder);
         self.params.prs_ping = 1 - self.params.prs_ping;
         self.compute_shader.set_custom_params(self.params, &core.queue);
 
         // Jacobi solver
         for _ in 0..PRESSURE_ITERATIONS {
-            self.compute_shader.dispatch_stage_with_workgroups(&mut encoder, PRESSURE_ITERATE, sim_workgroups);
-            encoder = core.flush_encoder(encoder);
+            self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, PRESSURE_ITERATE, sim_workgroups);
+            frame.encoder = core.flush_encoder(frame.encoder);
             self.params.prs_ping = 1 - self.params.prs_ping;
             self.compute_shader.set_custom_params(self.params, &core.queue);
         }
 
         // Gradient subtract: reads vel[vel_ping], prs[prs_ping], writes vel[1-vel_ping]
-        self.compute_shader.dispatch_stage_with_workgroups(&mut encoder, GRADIENT_SUBTRACT, sim_workgroups);
+        self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, GRADIENT_SUBTRACT, sim_workgroups);
 
-        encoder = core.flush_encoder(encoder);
+        frame.encoder = core.flush_encoder(frame.encoder);
         self.params.vel_ping = 1 - self.params.vel_ping;
         self.compute_shader.set_custom_params(self.params, &core.queue);
 
         // Advect velocity: reads vel[vel_ping], writes vel[1-vel_ping]
-        self.compute_shader.dispatch_stage_with_workgroups(&mut encoder, ADVECT_VELOCITY, sim_workgroups);
+        self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, ADVECT_VELOCITY, sim_workgroups);
 
-        encoder = core.flush_encoder(encoder);
+        frame.encoder = core.flush_encoder(frame.encoder);
         self.params.vel_ping = 1 - self.params.vel_ping;
         self.compute_shader.set_custom_params(self.params, &core.queue);
 
         // Advect dye: reads vel[vel_ping], dye[dye_ping], writes dye[1-dye_ping]
-        self.compute_shader.dispatch_stage_with_workgroups(&mut encoder, ADVECT_DYE, display_workgroups);
+        self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, ADVECT_DYE, display_workgroups);
 
-        encoder = core.flush_encoder(encoder);
+        frame.encoder = core.flush_encoder(frame.encoder);
         self.params.dye_ping = 1 - self.params.dye_ping;
         self.compute_shader.set_custom_params(self.params, &core.queue);
 
         // Display: reads dye[dye_ping]
-        self.compute_shader.dispatch_stage_with_workgroups(&mut encoder, MAIN_IMAGE, output_workgroups);
+        self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, MAIN_IMAGE, output_workgroups);
 
-        self.base.renderer.render_to_view(&mut encoder, &view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
 
         let mut params = self.params;
         let mut should_clear = false;
@@ -406,9 +402,7 @@ impl ShaderManager for FluidSim {
             self.base.export_manager.start_export();
         }
 
-        self.base.handle_render_output(core, &view, full_output, &mut encoder);
-        core.queue.submit(Some(encoder.finish()));
-        output.present();
+        self.base.end_frame(core, frame, full_output);
 
         Ok(())
     }

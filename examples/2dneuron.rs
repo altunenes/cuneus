@@ -94,15 +94,7 @@ impl ShaderManager for NeuronShader {
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
-        let output = core.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = core
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Neuron Render Encoder"),
-            });
+        let mut frame = self.base.begin_frame(core)?;
 
         let mut params = self.current_params;
         let mut changed = false;
@@ -116,20 +108,7 @@ impl ShaderManager for NeuronShader {
 
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
-                ctx.style_mut(|style| {
-                    style.visuals.window_fill =
-                        egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
-                    style
-                        .text_styles
-                        .get_mut(&egui::TextStyle::Body)
-                        .unwrap()
-                        .size = 11.0;
-                    style
-                        .text_styles
-                        .get_mut(&egui::TextStyle::Button)
-                        .unwrap()
-                        .size = 10.0;
-                });
+                RenderKit::apply_default_style(ctx);
 
                 egui::Window::new("2D Neuron")
                     .collapsible(true)
@@ -216,9 +195,9 @@ impl ShaderManager for NeuronShader {
         }
 
         // Execute multi-pass compute shader: buffer_a -> buffer_b -> buffer_c -> main_image
-        self.compute_shader.dispatch(&mut encoder, core);
+        self.compute_shader.dispatch(&mut frame.encoder, core);
 
-        self.base.renderer.render_to_view(&mut encoder, &view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
 
         self.base.apply_control_request(controls_request);
         self.base.export_manager.apply_ui_request(export_request);
@@ -232,10 +211,7 @@ impl ShaderManager for NeuronShader {
             self.base.export_manager.start_export();
         }
 
-        self.base
-            .handle_render_output(core, &view, full_output, &mut encoder);
-        core.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
+        self.base.end_frame(core, frame, full_output);
 
         Ok(())
     }
