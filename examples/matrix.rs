@@ -55,8 +55,7 @@ impl ShaderManager for MatrixShader {
             .with_custom_uniforms::<ShaderParams>()
             .build();
 
-        let compute_shader =
-            ComputeShader::from_builder(core, include_str!("shaders/matrix.wgsl"), config);
+        let compute_shader = cuneus::compute_shader!(core, "shaders/matrix.wgsl", config);
 
         compute_shader.set_custom_params(initial_params, &core.queue);
 

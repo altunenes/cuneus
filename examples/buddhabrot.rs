@@ -88,23 +88,8 @@ impl ShaderManager for BuddhabrotShader {
         // Add second entry point
         config.entry_points.push("main_image".to_string());
 
-        let mut compute_shader =
-            ComputeShader::from_builder(core, include_str!("shaders/buddhabrot.wgsl"), config);
+        let compute_shader = cuneus::compute_shader!(core, "shaders/buddhabrot.wgsl", config);
 
-        // Enable hot reload
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/buddhabrot.wgsl"),
-            core.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Buddhabrot Hot Reload"),
-                    source: wgpu::ShaderSource::Wgsl(
-                        include_str!("shaders/buddhabrot.wgsl").into(),
-                    ),
-                }),
-        ) {
-            eprintln!("Failed to enable hot reload for buddhabrot shader: {e}");
-        }
 
         compute_shader.set_custom_params(initial_params, &core.queue);
 

@@ -28,23 +28,7 @@ impl ShaderManager for DebugScreen {
             .with_label("Debug Screen")
             .build();
 
-        let mut compute_shader =
-            ComputeShader::from_builder(core, include_str!("shaders/debugscreen.wgsl"), config);
-
-        // Enable hot reload
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/debugscreen.wgsl"),
-            core.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Debug Screen Hot Reload"),
-                    source: wgpu::ShaderSource::Wgsl(
-                        include_str!("shaders/debugscreen.wgsl").into(),
-                    ),
-                }),
-        ) {
-            eprintln!("Failed to enable hot reload for debugscreen shader: {e}");
-        }
+        let compute_shader = cuneus::compute_shader!(core, "shaders/debugscreen.wgsl", config);
 
         // init audio synthesis system
         let audio_synthesis = match SynthesisManager::new() {

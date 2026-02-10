@@ -78,23 +78,7 @@ impl ShaderManager for ColorProjection {
             .with_label("Particle Splatting Multi-Pass")
             .build();
 
-        let mut compute_shader =
-            ComputeShader::from_builder(core, include_str!("shaders/computecolors.wgsl"), config);
-
-        // Enable hot reload
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/computecolors.wgsl"),
-            core.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("ComputeColors Compute Shader"),
-                    source: wgpu::ShaderSource::Wgsl(
-                        include_str!("shaders/computecolors.wgsl").into(),
-                    ),
-                }),
-        ) {
-            eprintln!("Failed to enable ComputeColors hot reload: {e}");
-        }
+        let compute_shader = cuneus::compute_shader!(core, "shaders/computecolors.wgsl", config);
 
         compute_shader.set_custom_params(initial_params, &core.queue);
 

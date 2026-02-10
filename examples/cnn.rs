@@ -82,21 +82,8 @@ impl ShaderManager for CNNDigitRecognizer {
             ))
             .build();
 
-        let mut compute_shader =
-            ComputeShader::from_builder(core, include_str!("shaders/cnn.wgsl"), compute_shader);
+        let compute_shader = cuneus::compute_shader!(core, "shaders/cnn.wgsl", compute_shader);
 
-        // Enable hot reload
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/cnn.wgsl"),
-            core.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("CNN Hot Reload"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/cnn.wgsl").into()),
-                }),
-        ) {
-            eprintln!("Failed to enable hot reload for cnn shader: {e}");
-        }
 
         let current_params = CNNParams {
             brush_size: 0.007,

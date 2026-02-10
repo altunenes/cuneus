@@ -108,21 +108,7 @@ impl ShaderManager for GaussianShader {
             .with_texture_format(COMPUTE_TEXTURE_FORMAT_RGBA16)
             .build();
 
-        let mut compute_shader =
-            ComputeShader::from_builder(core, include_str!("shaders/gaussian.wgsl"), config);
-
-        // Enable hot reload
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/gaussian.wgsl"),
-            core.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Gaussian Hot Reload"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gaussian.wgsl").into()),
-                }),
-        ) {
-            eprintln!("Failed to enable hot reload for gaussian shader: {e}");
-        }
+        let compute_shader = cuneus::compute_shader!(core, "shaders/gaussian.wgsl", config);
 
         let initial_params = GaussianParams::default();
         let shader = Self {

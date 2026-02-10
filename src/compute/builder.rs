@@ -1,4 +1,5 @@
 use crate::UniformProvider;
+use std::path::PathBuf;
 use wgpu;
 
 /// Pass description for multi-pass shaders
@@ -60,6 +61,7 @@ pub struct ComputeConfiguration {
     pub texture_format: wgpu::TextureFormat,
     pub label: String,
     pub num_channels: Option<u32>,
+    pub hot_reload_path: Option<PathBuf>,
 }
 
 /// Builder for compute shader configurations
@@ -92,6 +94,7 @@ impl ComputeShaderBuilder {
                 texture_format: wgpu::TextureFormat::Rgba16Float,
                 label: "Compute Shader".to_string(),
                 num_channels: None,
+                hot_reload_path: None,
             },
         }
     }
@@ -192,6 +195,12 @@ impl ComputeShaderBuilder {
     /// Set debug label
     pub fn with_label(mut self, label: &str) -> Self {
         self.config.label = label.to_string();
+        self
+    }
+
+    /// Enable hot reload by watching a shader file for changes
+    pub fn with_hot_reload(mut self, shader_path: &str) -> Self {
+        self.config.hot_reload_path = Some(PathBuf::from(shader_path));
         self
     }
 

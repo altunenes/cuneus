@@ -251,23 +251,7 @@ impl ShaderManager for PathTracingShader {
             .with_label("Path Tracing Unified")
             .build();
 
-        let mut compute_shader =
-            ComputeShader::from_builder(core, include_str!("shaders/pathtracing.wgsl"), config);
-
-        // Enable hot reload
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/pathtracing.wgsl"),
-            core.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Path Tracing Compute Shader"),
-                    source: wgpu::ShaderSource::Wgsl(
-                        include_str!("shaders/pathtracing.wgsl").into(),
-                    ),
-                }),
-        ) {
-            eprintln!("Failed to enable Path Tracing compute shader hot reload: {e}");
-        }
+        let compute_shader = cuneus::compute_shader!(core, "shaders/pathtracing.wgsl", config);
 
         compute_shader.set_custom_params(initial_params, &core.queue);
 

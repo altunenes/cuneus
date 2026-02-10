@@ -94,6 +94,41 @@ pub mod prelude {
     pub use winit::{dpi::PhysicalSize, event_loop::EventLoop, window::Window};
 }
 
+/// Create a compute shader with automatic hot reload.
+///
+/// Uses `file!()` at compile time to derive the correct hot reload path,
+/// so the shader file path is only specified once.
+///
+/// ```rust,no_run
+/// let config = ComputeShader::builder()
+///     .with_entry_point("main")
+///     .with_custom_uniforms::<MyParams>()
+///     .build();
+///
+/// let compute_shader = cuneus::compute_shader!(core, "shaders/my_shader.wgsl", config);
+/// ```
+#[macro_export]
+macro_rules! compute_shader {
+    ($core:expr, $shader_path:literal, $config:expr) => {{
+        let mut config = $config;
+        let caller_file = file!();
+        let caller_dir = match caller_file.rfind('/') {
+            Some(pos) => &caller_file[..pos],
+            None => match caller_file.rfind('\\') {
+                Some(pos) => &caller_file[..pos],
+                None => "",
+            },
+        };
+        let hot_reload_path = if caller_dir.is_empty() {
+            $shader_path.to_string()
+        } else {
+            format!("{}/{}", caller_dir, $shader_path)
+        };
+        config.hot_reload_path = Some(std::path::PathBuf::from(hot_reload_path));
+        $crate::compute::ComputeShader::from_builder($core, include_str!($shader_path), config)
+    }};
+}
+
 pub struct Core {
     pub surface: wgpu::Surface<'static>,
     pub device: Arc<wgpu::Device>,

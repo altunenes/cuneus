@@ -110,22 +110,7 @@ impl ShaderManager for FluidSim {
             .with_label("Fluid Simulation")
             .build();
 
-        let mut compute_shader = ComputeShader::from_builder(
-            core,
-            include_str!("shaders/fluidsim.wgsl"),
-            config,
-        );
-
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/fluidsim.wgsl"),
-            core.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Fluid Hot Reload"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fluidsim.wgsl").into()),
-            }),
-        ) {
-            eprintln!("Hot reload error: {e}");
-        }
+        let compute_shader = cuneus::compute_shader!(core, "shaders/fluidsim.wgsl", config);
 
         let params = FluidParams {
             sim_width,

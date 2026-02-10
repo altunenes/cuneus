@@ -25,7 +25,7 @@ In Cuneus, almost everything is a compute shader. Instead of writing traditional
 
 ### 2. The Builder Pattern (`ComputeShaderBuilder`)
 
-The `ComputeShader::builder()` is the single entry point for configuring your shader. API allows you to specify exactly what resources your shader needs, and Cuneus handles all the complex WGPU boilerplate for you.
+The `ComputeShader::builder()` is the single entry point for configuring your shader. It specifies exactly what resources your shader needs, and Cuneus handles all the complex WGPU boilerplate — including hot reload.
 
 ```rust
 let config = ComputeShader::builder()
@@ -34,6 +34,9 @@ let config = ComputeShader::builder()
     .with_mouse()                       // Enable mouse input
     .with_channels(1)                   // Enable one external texture (e.g., video)
     .build();
+
+// The compute_shader! macro embeds the shader source AND enables hot reload automatically.
+let compute_shader = cuneus::compute_shader!(core, "shaders/my_shader.wgsl", config);
 ```
 
 ### 3. The 4-Group Binding Convention
@@ -129,16 +132,9 @@ impl ShaderManager for MyShader {
             .with_label("My Shader")
             .build();
 
-        // Create the compute shader instance
-        let mut compute_shader = ComputeShader::from_builder(
-            core,
-            include_str!("shaders/my_shader.wgsl"),
-            config,
-        );
+        // Create the compute shader with automatic hot reload.
+        let compute_shader = cuneus::compute_shader!(core, "shaders/my_shader.wgsl", config);
 
-        // (Optional but recommended) Enable hot-reloading
-        compute_shader.enable_hot_reload(/* ... */).unwrap();
-        
         // Set initial parameters
         compute_shader.set_custom_params(initial_params, &core.queue);
 

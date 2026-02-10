@@ -46,21 +46,7 @@ impl ShaderManager for Voronoi {
             .with_custom_uniforms::<ShaderParams>()
             .build();
 
-        let mut compute_shader =
-            ComputeShader::from_builder(core, include_str!("shaders/voronoi.wgsl"), config);
-
-        // Enable hot reload
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/voronoi.wgsl"),
-            core.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Voronoi Hot Reload"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/voronoi.wgsl").into()),
-                }),
-        ) {
-            eprintln!("Failed to enable hot reload for voronoi shader: {e}");
-        }
+        let compute_shader = cuneus::compute_shader!(core, "shaders/voronoi.wgsl", config);
 
         compute_shader.set_custom_params(initial_params, &core.queue);
 

@@ -60,21 +60,8 @@ impl ShaderManager for AudioVisCompute {
             .with_label("Audio Visualizer Compute")
             .build();
 
-        let mut compute_shader =
-            ComputeShader::from_builder(core, include_str!("shaders/audiovis.wgsl"), config);
+        let compute_shader = cuneus::compute_shader!(core, "shaders/audiovis.wgsl", config);
 
-        // Enable hot reload
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/audiovis.wgsl"),
-            core.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("AudioVis Compute Shader"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/audiovis.wgsl").into()),
-                }),
-        ) {
-            eprintln!("Failed to enable audio visualizer compute shader hot reload: {e}");
-        }
 
         // Initialize custom uniform with initial parameters
         compute_shader.set_custom_params(initial_params, &core.queue);

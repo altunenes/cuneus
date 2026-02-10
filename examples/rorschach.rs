@@ -89,20 +89,7 @@ impl ShaderManager for RorschachShader {
             .with_label("Rorschach Unified")
             .build();
 
-        let mut compute_shader =
-            ComputeShader::from_builder(core, include_str!("shaders/rorschach.wgsl"), config);
-
-        if let Err(e) = compute_shader.enable_hot_reload(
-            core.device.clone(),
-            std::path::PathBuf::from("examples/shaders/rorschach.wgsl"),
-            core.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Rorschach Hot Reload"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/rorschach.wgsl").into()),
-                }),
-        ) {
-            eprintln!("Failed to enable hot reload for Rorschach shader: {e}");
-        }
+        let compute_shader = cuneus::compute_shader!(core, "shaders/rorschach.wgsl", config);
 
         compute_shader.set_custom_params(initial_params, &core.queue);
 
