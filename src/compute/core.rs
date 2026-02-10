@@ -82,7 +82,7 @@ pub struct ComputeShader {
 
 impl ComputeShader {
     /// Create a compute shader from builder configuration
-    pub fn from_builder(core: &Core, shader_source: &str, config: ComputeConfiguration) -> Self {
+    pub fn from_builder(core: &Core, shader_source: &str, mut config: ComputeConfiguration) -> Self {
         // Step 1: Create resource layout following 4-group convention
         let mut resource_layout = ResourceLayout::new();
 
@@ -313,7 +313,9 @@ impl ComputeShader {
             pipelines.push(pipeline);
         }
 
-        Self {
+        let hot_reload_path = config.hot_reload_path.take();
+
+        let mut shader = Self {
             pipelines,
             output_texture,
             time_uniform,
@@ -346,7 +348,21 @@ impl ComputeShader {
             hot_reload: None,
             label: config.label,
             has_input_texture: config.has_input_texture,
+        };
+
+        if let Some(path) = hot_reload_path {
+            let reload_module =
+                core.device
+                    .create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some("Hot Reload Module"),
+                        source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+                    });
+            if let Err(e) = shader.enable_hot_reload(core.device.clone(), path, reload_module) {
+                eprintln!("Failed to enable hot reload: {e}");
+            }
         }
+
+        shader
     }
 
     fn create_output_texture(
@@ -1431,6 +1447,7 @@ impl ComputeShader {
                 texture_format: wgpu::TextureFormat::Rgba16Float,
                 label: self.label.clone(),
                 num_channels: Some(self.num_channels),
+                hot_reload_path: None,
             },
             self.custom_uniform.as_ref(),
             self.placeholder_input_texture.as_ref().map(|t| &t.view),
