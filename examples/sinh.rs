@@ -341,20 +341,7 @@ impl ShaderManager for SinhShader {
 
         self.compute_shader.dispatch(&mut encoder, core);
 
-        {
-            let mut render_pass = cuneus::Renderer::begin_render_pass(
-                &mut encoder,
-                &view,
-                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                Some("Display Pass"),
-            );
-
-            render_pass.set_pipeline(&self.base.renderer.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
-            render_pass.set_bind_group(0, &self.compute_shader.output_texture.bind_group, &[]);
-
-            render_pass.draw(0..4, 0..1);
-        }
+        self.base.renderer.render_to_view(&mut encoder, &view, &self.compute_shader);
 
         self.base
             .handle_render_output(core, &view, full_output, &mut encoder);

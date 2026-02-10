@@ -218,21 +218,7 @@ impl ShaderManager for NeuronShader {
         // Execute multi-pass compute shader: buffer_a -> buffer_b -> buffer_c -> main_image
         self.compute_shader.dispatch(&mut encoder, core);
 
-        // Render compute output to screen
-        {
-            let compute_texture = self.compute_shader.get_output_texture();
-            let mut render_pass = cuneus::Renderer::begin_render_pass(
-                &mut encoder,
-                &view,
-                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                Some("Neuron Display Pass"),
-            );
-
-            render_pass.set_pipeline(&self.base.renderer.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.base.renderer.vertex_buffer.slice(..));
-            render_pass.set_bind_group(0, &compute_texture.bind_group, &[]);
-            render_pass.draw(0..4, 0..1);
-        }
+        self.base.renderer.render_to_view(&mut encoder, &view, &self.compute_shader);
 
         self.base.apply_control_request(controls_request);
         self.base.export_manager.apply_ui_request(export_request);
