@@ -213,28 +213,10 @@ impl ShaderManager for CNNDigitRecognizer {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self
-            .base
-            .egui_state
-            .on_window_event(core.window(), event)
-            .consumed
-        {
+        if self.base.default_handle_input(core, event) {
             return true;
         }
-
-        // Handle mouse input for drawing on canvas
-        if self.base.handle_mouse_input(core, event, false) {
-            return true;
-        }
-
-        if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self
-                .base
-                .key_handler
-                .handle_keyboard_input(core.window(), event);
-        }
-
-        false
+        self.base.handle_mouse_input(core, event, false)
     }
 }
 

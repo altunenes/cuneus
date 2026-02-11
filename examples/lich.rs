@@ -218,21 +218,7 @@ impl ShaderManager for LichShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self
-            .base
-            .egui_state
-            .on_window_event(core.window(), event)
-            .consumed
-        {
-            return true;
-        }
-        if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self
-                .base
-                .key_handler
-                .handle_keyboard_input(core.window(), event);
-        }
-        false
+        self.base.default_handle_input(core, event)
     }
 }
 

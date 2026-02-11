@@ -186,10 +186,8 @@ impl ShaderManager for MandelbulbShader {
     }
 
     fn resize(&mut self, core: &Core) {
+        self.base.default_resize(core, &mut self.compute_shader);
         println!("Resizing to {:?}", core.size);
-        self.base.update_resolution(&core.queue, core.size);
-        self.compute_shader
-            .resize(core, core.size.width, core.size.height);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {

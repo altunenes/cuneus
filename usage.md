@@ -162,6 +162,13 @@ impl ShaderManager for MyShader {
             self.base.render_ui(core, |_ctx| {})
         };
 
+        // Apply UI control requests after the UI closure:
+        // - Non-media examples: use apply_control_request (handles time reset + param updates)
+        //   self.base.apply_control_request(controls_request.clone());
+        // - Media examples (video/webcam/hdri): use apply_media_requests (bundles
+        //   apply_control_request + handle_video/webcam/hdri_requests in one call)
+        //   self.base.apply_media_requests(core, &controls_request);
+
         // Execute the entire compute pipeline.
         // This works for both single-pass and multi-pass shaders automatically.
         self.compute_shader.dispatch(&mut frame.encoder, core);
@@ -183,9 +190,16 @@ impl ShaderManager for MyShader {
         Ok(())
     }
     
-    fn handle_input(&mut self, _core: &Core, _event: &WindowEvent) -> bool {
-        // Handle keyboard/mouse events
-        false
+    fn resize(&mut self, core: &Core) {
+        // default_resize updates resolution uniform + resizes compute shader
+        self.base.default_resize(core, &mut self.compute_shader);
+    }
+
+    fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
+        // default_handle_input handles egui events + keyboard shortcuts (H to toggle UI, etc.)
+        // For DroppedFile support, check the event after this call.
+        // For mouse input, add: self.base.handle_mouse_input(core, event, false)
+        self.base.default_handle_input(core, event)
     }
 }
 ```

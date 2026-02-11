@@ -96,9 +96,7 @@ impl ShaderManager for FluidShader {
     }
 
     fn resize(&mut self, core: &Core) {
-        self.base.update_resolution(&core.queue, core.size);
-        self.compute_shader
-            .resize(core, core.size.width, core.size.height);
+        self.base.default_resize(core, &mut self.compute_shader);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
@@ -204,10 +202,7 @@ impl ShaderManager for FluidShader {
 
         self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
 
-        self.base.apply_control_request(controls_request.clone());
-        self.base.handle_video_requests(core, &controls_request);
-        self.base.handle_webcam_requests(core, &controls_request);
-        self.base.handle_hdri_requests(core, &controls_request);
+        self.base.apply_media_requests(core, &controls_request);
 
         self.base.export_manager.apply_ui_request(export_request);
         if should_start_export {
@@ -225,21 +220,7 @@ impl ShaderManager for FluidShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self
-            .base
-            .egui_state
-            .on_window_event(core.window(), event)
-            .consumed
-        {
-            return true;
-        }
-        if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self
-                .base
-                .key_handler
-                .handle_keyboard_input(core.window(), event);
-        }
-        false
+        self.base.default_handle_input(core, event)
     }
 }
 

@@ -95,9 +95,7 @@ impl ShaderManager for VolumeShader {
     }
 
     fn resize(&mut self, core: &Core) {
-        self.base.update_resolution(&core.queue, core.size);
-        self.compute_shader
-            .resize(core, core.size.width, core.size.height);
+        self.base.default_resize(core, &mut self.compute_shader);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
@@ -238,23 +236,7 @@ impl ShaderManager for VolumeShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self
-            .base
-            .egui_state
-            .on_window_event(core.window(), event)
-            .consumed
-        {
-            return true;
-        }
-
-        if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self
-                .base
-                .key_handler
-                .handle_keyboard_input(core.window(), event);
-        }
-
-        false
+        self.base.default_handle_input(core, event)
     }
 }
 

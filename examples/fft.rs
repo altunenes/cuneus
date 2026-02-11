@@ -280,9 +280,7 @@ impl ShaderManager for FFTShader {
         // The UI will modify 'params' directly, and we'll apply changes at the end
 
         // Apply controls
-        self.base.apply_control_request(controls_request.clone());
-        self.base.handle_video_requests(core, &controls_request);
-        self.base.handle_webcam_requests(core, &controls_request);
+        self.base.apply_media_requests(core, &controls_request);
 
         // Handle export requests
         self.base.export_manager.apply_ui_request(export_request);
@@ -367,22 +365,9 @@ impl ShaderManager for FFTShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self
-            .base
-            .egui_state
-            .on_window_event(core.window(), event)
-            .consumed
-        {
+        if self.base.default_handle_input(core, event) {
             return true;
         }
-
-        if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self
-                .base
-                .key_handler
-                .handle_keyboard_input(core.window(), event);
-        }
-
         if let WindowEvent::DroppedFile(path) = event {
             if let Err(e) = self.base.load_media(core, path) {
                 eprintln!("Failed to load dropped file: {e:?}");
@@ -391,7 +376,6 @@ impl ShaderManager for FFTShader {
             }
             return true;
         }
-
         false
     }
 }

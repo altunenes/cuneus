@@ -294,9 +294,7 @@ impl ShaderManager for PathTracingShader {
     }
 
     fn resize(&mut self, core: &Core) {
-        self.base.update_resolution(&core.queue, core.size);
-        self.compute_shader
-            .resize(core, core.size.width, core.size.height);
+        self.base.default_resize(core, &mut self.compute_shader);
         self.should_reset_accumulation = true;
     }
 
@@ -433,9 +431,7 @@ impl ShaderManager for PathTracingShader {
         if controls_request.should_clear_buffers || self.should_reset_accumulation {
             self.clear_buffers(core);
         }
-        self.base.apply_control_request(controls_request.clone());
-        self.base.handle_video_requests(core, &controls_request);
-        self.base.handle_webcam_requests(core, &controls_request);
+        self.base.apply_media_requests(core, &controls_request);
 
         if should_start_export {
             self.base.export_manager.start_export();

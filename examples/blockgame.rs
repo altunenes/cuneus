@@ -127,9 +127,7 @@ impl ShaderManager for BlockTowerGame {
     }
 
     fn resize(&mut self, core: &Core) {
-        self.base.update_resolution(&core.queue, core.size);
-        self.compute_shader
-            .resize(core, core.size.width, core.size.height);
+        self.base.default_resize(core, &mut self.compute_shader);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
