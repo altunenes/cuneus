@@ -408,8 +408,7 @@ impl ShaderManager for FluidSim {
     }
 
     fn resize(&mut self, core: &Core) {
-        self.compute_shader.resize(core, core.size.width, core.size.height);
-        self.base.update_resolution(&core.queue, core.size);
+        self.base.default_resize(core, &mut self.compute_shader);
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {

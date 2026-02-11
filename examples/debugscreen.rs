@@ -88,9 +88,7 @@ impl ShaderManager for DebugScreen {
     }
 
     fn resize(&mut self, core: &Core) {
-        self.base.update_resolution(&core.queue, core.size);
-        self.compute_shader
-            .resize(core, core.size.width, core.size.height);
+        self.base.default_resize(core, &mut self.compute_shader);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
@@ -187,27 +185,10 @@ impl ShaderManager for DebugScreen {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self
-            .base
-            .egui_state
-            .on_window_event(core.window(), event)
-            .consumed
-        {
+        if self.base.default_handle_input(core, event) {
             return true;
         }
-
-        if self.base.handle_mouse_input(core, event, false) {
-            return true;
-        }
-
-        if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self
-                .base
-                .key_handler
-                .handle_keyboard_input(core.window(), event);
-        }
-
-        false
+        self.base.handle_mouse_input(core, event, false)
     }
 }
 

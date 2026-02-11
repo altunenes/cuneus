@@ -154,9 +154,7 @@ impl ShaderManager for GaussianShader {
     }
 
     fn resize(&mut self, core: &Core) {
-        self.base.update_resolution(&core.queue, core.size);
-        self.compute_shader
-            .resize(core, core.size.width, core.size.height);
+        self.base.default_resize(core, &mut self.compute_shader);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
@@ -339,10 +337,7 @@ impl ShaderManager for GaussianShader {
         };
 
         self.base.export_manager.apply_ui_request(export_request);
-        self.base.apply_control_request(controls_request.clone());
-        self.base.handle_video_requests(core, &controls_request);
-        self.base.handle_webcam_requests(core, &controls_request);
-        self.base.handle_hdri_requests(core, &controls_request);
+        self.base.apply_media_requests(core, &controls_request);
 
         if controls_request.should_clear_buffers || params.reset_training != 0 {
             self.compute_shader.current_frame = 0;
@@ -374,22 +369,9 @@ impl ShaderManager for GaussianShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self
-            .base
-            .egui_state
-            .on_window_event(core.window(), event)
-            .consumed
-        {
+        if self.base.default_handle_input(core, event) {
             return true;
         }
-
-        if let WindowEvent::KeyboardInput { event, .. } = event {
-            return self
-                .base
-                .key_handler
-                .handle_keyboard_input(core.window(), event);
-        }
-
         if let WindowEvent::DroppedFile(path) = event {
             if let Err(e) = self.base.load_media(core, path) {
                 eprintln!("Failed to load dropped file: {e:?}");
@@ -399,7 +381,6 @@ impl ShaderManager for GaussianShader {
             self.compute_shader.set_custom_params(self.current_params, &core.queue);
             return true;
         }
-
         false
     }
 }
