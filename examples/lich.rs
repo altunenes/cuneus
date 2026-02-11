@@ -211,9 +211,6 @@ impl ShaderManager for LichShader {
 
         self.base.end_frame(core, frame, full_output);
 
-        // Flip ping-pong buffers for next frame (required for multi-pass)
-        self.compute_shader.flip_buffers();
-
         Ok(())
     }
 

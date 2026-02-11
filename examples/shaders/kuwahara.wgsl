@@ -34,9 +34,9 @@ struct KuwaharaParams {
     blur_slod: f32,
     filter_mode: i32,
     show_tensors: i32,
-    _pad1: u32,
-    _pad2: u32, 
-    _pad3: u32,
+    lic_length: f32,
+    lic_strength: f32,
+    lic_width: f32,
 }
 
 const PI: f32 = 3.14159265359;
@@ -374,14 +374,109 @@ fn kuwahara_filter(@builtin(global_invocation_id) id: vec3u) {
     textureStore(output, id.xy, result);
 }
 
+// hash for subtle brush noise
+fn hash_lic(p: vec2f) -> f32 {
+    var p3 = fract(vec3f(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// Line Integral Convolution along edges guided by the smoothed structure tensor.
+// input_texture0 = tensor_field (ori.x, ori.y, phi, anisotropy)
+// input_texture1 = kuwahara_filter output (filtered color)
+// Traces curved streamlines through the tensor field to create brush strokes.
+@compute @workgroup_size(16, 16, 1)
+fn lic_edges(@builtin(global_invocation_id) id: vec3u) {
+    let dims = textureDimensions(output);
+    if (id.x >= dims.x || id.y >= dims.y) { return; }
+
+    let uv = (vec2f(id.xy) + 0.5) / vec2f(dims);
+    let ts = 1.0 / vec2f(dims);
+
+    let kuwahara_color = textureSampleLevel(input_texture1, input_sampler1, uv, 0.0).rgb;
+
+    if (params.lic_strength <= 0.001) {
+        textureStore(output, id.xy, vec4f(kuwahara_color, 1.0));
+        return;
+    }
+
+    // Read smoothed tensor field: orientation and anisotropy
+    let tensor = textureSampleLevel(input_texture0, input_sampler0, uv, 0.0);
+    let ori = tensor.xy;
+    let anis = tensor.w;
+
+    // Blend factor: stronger LIC on edges (high anisotropy), preserve flat regions
+    let edge_blend = smoothstep(params.edge_threshold * 0.3, params.edge_threshold + 0.3, anis);
+    if (edge_blend < 0.01) {
+        textureStore(output, id.xy, vec4f(kuwahara_color, 1.0));
+        return;
+    }
+
+    let steps = i32(params.lic_length);
+    let step_size = params.lic_width;
+    let sigma = f32(steps) * 0.4;
+
+    // Center sample
+    var acc = kuwahara_color;
+    var weight_sum = 1.0;
+
+    // Per-pixel noise for natural brush variation
+    let noise_val = (hash_lic(vec2f(id.xy) * 0.37) - 0.5) * 0.4;
+
+    // Forward trace: follow edge tangent through the tensor field
+    var pos_uv = uv;
+    for (var i = 1; i <= steps; i++) {
+        // Read tensor at current streamline position
+        let local_tensor = textureSampleLevel(input_texture0, input_sampler0, pos_uv, 0.0);
+        let local_ori = local_tensor.xy;
+        // Tangent = perpendicular to gradient direction (along the edge)
+        let tangent = vec2f(-local_ori.y, local_ori.x);
+
+        pos_uv += tangent * ts * step_size + vec2f(noise_val) * ts * 0.3;
+        pos_uv = clamp(pos_uv, vec2f(0.0), vec2f(1.0));
+
+        let sample_color = textureSampleLevel(input_texture1, input_sampler1, pos_uv, 0.0).rgb;
+
+        let fi = f32(i);
+        let w = exp(-0.5 * fi * fi / (sigma * sigma));
+        acc += sample_color * w;
+        weight_sum += w;
+    }
+
+    // Backward trace (opposite direction along tangent)
+    pos_uv = uv;
+    for (var i = 1; i <= steps; i++) {
+        let local_tensor = textureSampleLevel(input_texture0, input_sampler0, pos_uv, 0.0);
+        let local_ori = local_tensor.xy;
+        let tangent = vec2f(-local_ori.y, local_ori.x);
+
+        pos_uv -= tangent * ts * step_size + vec2f(noise_val) * ts * 0.3;
+        pos_uv = clamp(pos_uv, vec2f(0.0), vec2f(1.0));
+
+        let sample_color = textureSampleLevel(input_texture1, input_sampler1, pos_uv, 0.0).rgb;
+
+        let fi = f32(i);
+        let w = exp(-0.5 * fi * fi / (sigma * sigma));
+        acc += sample_color * w;
+        weight_sum += w;
+    }
+
+    let lic_color = acc / weight_sum;
+
+    let blend = edge_blend * params.lic_strength;
+    let result = mix(kuwahara_color, lic_color, blend);
+
+    textureStore(output, id.xy, vec4f(result, 1.0));
+}
+
 // main image pass
 @compute @workgroup_size(16, 16, 1)
 fn main_image(@builtin(global_invocation_id) id: vec3u) {
     let dims = textureDimensions(output);
     if (id.x >= dims.x || id.y >= dims.y) { return; }
-    
+
     let uv = (vec2f(id.xy) + 0.5) / vec2f(dims);
     let result = textureSampleLevel(input_texture2, input_sampler2, uv, 0.0);
-    
+
     textureStore(output, id.xy, result);
 }

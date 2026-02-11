@@ -1296,10 +1296,10 @@ impl ComputeShader {
                 pass_workgroup_count[2],
             );
 
-            // Flip buffers after each pass (except the last one) so next pass can read what this pass wrote
+            // Mark this buffer as written so subsequent passes can read from it
             if pass_idx < num_passes - 1 {
                 if let Some(ref mut multipass_mut) = self.multipass_manager {
-                    multipass_mut.flip_buffers();
+                    multipass_mut.mark_written(entry_point);
                 }
             }
         }

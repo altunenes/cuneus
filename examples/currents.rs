@@ -397,9 +397,6 @@ impl ShaderManager for CurrentsShader {
 
         self.base.end_frame(core, frame, full_output);
 
-        // Flip ping-pong buffers for next frame
-        self.compute_shader.flip_buffers();
-
         Ok(())
     }
 
