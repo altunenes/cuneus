@@ -113,7 +113,7 @@ fn initialize_data(@builtin(global_invocation_id) id: vec3u) {
 }
 
 // FFT on rows
-@compute @workgroup_size(256, 1, 1)
+@compute @workgroup_size(64, 1, 1)
 fn fft_horizontal(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invocation_index) local_index: u32) {
     let LOG2_N = firstLeadingBit(params.resolution);
     let LOG4_N = LOG2_N / 2u;
@@ -124,8 +124,8 @@ fn fft_horizontal(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_inv
     
     for (var ch = 0u; ch < N_CHANNELS; ch++) {
         // Load data with bit-reversal permutation
-        for (var i = 0u; i < N / 256u; i++) {
-            let j = local_index + i * 256u;
+        for (var i = 0u; i < N / 64u; i++) {
+            let j = local_index + i * 64u;
             
             var k: u32;
             if (RADIX == 2) {
@@ -144,8 +144,8 @@ fn fft_horizontal(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_inv
         for (var p = 0u; RADIX == 4 && p < LOG4_N; p++) {
             let s = 1u << (2u * p);
             
-            for (var i = 0u; i < N / 256u / 4u; i++) {
-                let j = local_index + i * 256u;
+            for (var i = 0u; i < N / 64u / 4u; i++) {
+                let j = local_index + i * 64u;
                 let k = j & (s - 1u);
                 let t = -2.0 * PI / f32(s * 4u) * f32(k);
                 let k0 = ((j >> (2u * p)) << (2u * p + 2u)) + k;
@@ -170,8 +170,8 @@ fn fft_horizontal(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_inv
         for (var p = select(0u, 2u * LOG4_N, RADIX == 4); p < LOG2_N; p++) {
             let s = 1u << p;
             
-            for (var i = 0u; i < N / 256u / 2u; i++) {
-                let j = local_index + i * 256u;
+            for (var i = 0u; i < N / 64u / 2u; i++) {
+                let j = local_index + i * 64u;
                 let k = j & (s - 1u);
                 let k0 = ((j >> p) << (p + 1u)) + k;
                 let k1 = k0 + s;
@@ -187,15 +187,15 @@ fn fft_horizontal(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_inv
         }
         
         // Store results back to storage
-        for (var i = 0u; i < N / 256u; i++) {
-            let j = local_index + i * 256u;
+        for (var i = 0u; i < N / 64u; i++) {
+            let j = local_index + i * 64u;
             image_data[index(ch, row, j)] = X[j];
         }
     }
 }
 
 // FFT on columns
-@compute @workgroup_size(256, 1, 1)
+@compute @workgroup_size(64, 1, 1)
 fn fft_vertical(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invocation_index) local_index: u32) {
     let LOG2_N = firstLeadingBit(params.resolution);
     let LOG4_N = LOG2_N / 2u;
@@ -206,8 +206,8 @@ fn fft_vertical(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invoc
     
     for (var ch = 0u; ch < N_CHANNELS; ch++) {
         // Load data with bit-reversal permutation
-        for (var i = 0u; i < N / 256u; i++) {
-            let j = local_index + i * 256u;
+        for (var i = 0u; i < N / 64u; i++) {
+            let j = local_index + i * 64u;
             
             var k: u32;
             if (RADIX == 2) {
@@ -226,8 +226,8 @@ fn fft_vertical(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invoc
         for (var p = 0u; RADIX == 4 && p < LOG4_N; p++) {
             let s = 1u << (2u * p);
             
-            for (var i = 0u; i < N / 256u / 4u; i++) {
-                let j = local_index + i * 256u;
+            for (var i = 0u; i < N / 64u / 4u; i++) {
+                let j = local_index + i * 64u;
                 let k = j & (s - 1u);
                 let t = -2.0 * PI / f32(s * 4u) * f32(k);
                 let k0 = ((j >> (2u * p)) << (2u * p + 2u)) + k;
@@ -252,8 +252,8 @@ fn fft_vertical(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invoc
         for (var p = select(0u, 2u * LOG4_N, RADIX == 4); p < LOG2_N; p++) {
             let s = 1u << p;
             
-            for (var i = 0u; i < N / 256u / 2u; i++) {
-                let j = local_index + i * 256u;
+            for (var i = 0u; i < N / 64u / 2u; i++) {
+                let j = local_index + i * 64u;
                 let k = j & (s - 1u);
                 let k0 = ((j >> p) << (p + 1u)) + k;
                 let k1 = k0 + s;
@@ -269,8 +269,8 @@ fn fft_vertical(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invoc
         }
         
         // Store results back to storage
-        for (var i = 0u; i < N / 256u; i++) {
-            let j = local_index + i * 256u;
+        for (var i = 0u; i < N / 64u; i++) {
+            let j = local_index + i * 64u;
             image_data[index(ch, j, col)] = X[j];
         }
     }
@@ -310,31 +310,34 @@ fn modify_frequencies(@builtin(global_invocation_id) id: vec3u) {
     let freq_coords = vec2f(freq_x, freq_y);
     let f = length(freq_coords) / f32(N / 2u);
     
+    // No filtering when strength is zero
+    if (params.filter_strength <= 0.001) {
+        return;
+    }
+
     var scale = 1.0;
-    let t = 1.0 - params.filter_strength;
-    let order = 7.0; //I generally use 7.0 :-P
-    let safe_t = max(t, 0.01);
+    let strength = params.filter_strength;
+    let order = 7.0;
     switch params.filter_type {
-        // LSF
+        // LP
         case 0: {
-            // Butterworth low-pass
-            let cutoff = 0.3 * safe_t;
+            // Butterworth low-pass: strength 0 → cutoff 1.0 (pass all), strength 1 → cutoff 0.01 (strong)
+            let cutoff = mix(1.0, 0.01, strength);
             scale = butterworth(f, cutoff, order, false);
             break;
         }
-        // HSF
+        // HP
         case 1: {
-            // Butterworth high-pass
-            let cutoff = 0.05 + 0.3 * (1.0 - safe_t);
+            // Butterworth high-pass: strength 0 → cutoff 0.001 (pass all), strength 1 → cutoff 0.5 (strong)
+            let cutoff = mix(0.001, 0.5, strength);
             scale = butterworth(f, cutoff, order, true);
             break;
         }
         // Band-pass filter
         case 2: {
-            // Center frequency (radius) and bandwidth
             let center = params.filter_radius / 6.28;
-            let bandwidth = 0.05 + 0.2 * safe_t;
-            // Gaussian band-pass
+            // Bandwidth: strength 0 → wide (0.3), strength 1 → narrow (0.02)
+            let bandwidth = mix(0.3, 0.02, strength);
             scale = exp(-pow((f - center) / bandwidth, 2.0));
             break;
         }
@@ -342,7 +345,8 @@ fn modify_frequencies(@builtin(global_invocation_id) id: vec3u) {
         case 3: {
             let angle = atan2(freq_coords.y, freq_coords.x);
             let direction = params.filter_direction;
-             let angular_width = 0.1 + 1.0 * safe_t;
+            // Angular width: strength 0 → wide (1.5), strength 1 → narrow (0.1)
+            let angular_width = mix(1.5, 0.1, strength);
             scale = exp(-pow(sin(angle - direction) / angular_width, 2.0));
             break;
         }
@@ -359,7 +363,7 @@ fn modify_frequencies(@builtin(global_invocation_id) id: vec3u) {
 }
 
 // inverse FFT on rows
-@compute @workgroup_size(256, 1, 1)
+@compute @workgroup_size(64, 1, 1)
 fn ifft_horizontal(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invocation_index) local_index: u32) {
     let LOG2_N = firstLeadingBit(params.resolution);
     let LOG4_N = LOG2_N / 2u;
@@ -370,8 +374,8 @@ fn ifft_horizontal(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_in
     
     for (var ch = 0u; ch < N_CHANNELS; ch++) {
         // Load data with bit-reversal permutation
-        for (var i = 0u; i < N / 256u; i++) {
-            let j = local_index + i * 256u;
+        for (var i = 0u; i < N / 64u; i++) {
+            let j = local_index + i * 64u;
             
             var k: u32;
             if (RADIX == 2) {
@@ -389,8 +393,8 @@ fn ifft_horizontal(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_in
         for (var p = 0u; RADIX == 4 && p < LOG4_N; p++) {
             let s = 1u << (2u * p);
             
-            for (var i = 0u; i < N / 256u / 4u; i++) {
-                let j = local_index + i * 256u;
+            for (var i = 0u; i < N / 64u / 4u; i++) {
+                let j = local_index + i * 64u;
                 let k = j & (s - 1u);
                 let t = 2.0 * PI / f32(s * 4u) * f32(k);
                 let k0 = ((j >> (2u * p)) << (2u * p + 2u)) + k;
@@ -415,8 +419,8 @@ fn ifft_horizontal(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_in
         for (var p = select(0u, 2u * LOG4_N, RADIX == 4); p < LOG2_N; p++) {
             let s = 1u << p;
             
-            for (var i = 0u; i < N / 256u / 2u; i++) {
-                let j = local_index + i * 256u;
+            for (var i = 0u; i < N / 64u / 2u; i++) {
+                let j = local_index + i * 64u;
                 let k = j & (s - 1u);
                 let k0 = ((j >> p) << (p + 1u)) + k;
                 let k1 = k0 + s;
@@ -431,15 +435,15 @@ fn ifft_horizontal(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_in
             workgroupBarrier();
         }
         
-        for (var i = 0u; i < N / 256u; i++) {
-            let j = local_index + i * 256u;
+        for (var i = 0u; i < N / 64u; i++) {
+            let j = local_index + i * 64u;
             image_data[index(ch, row, j)] = X[j] / f32(N);
         }
     }
 }
 
 // now on columns inverse... 
-@compute @workgroup_size(256, 1, 1)
+@compute @workgroup_size(64, 1, 1)
 fn ifft_vertical(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invocation_index) local_index: u32) {
     let LOG2_N = firstLeadingBit(params.resolution);
     let LOG4_N = LOG2_N / 2u;
@@ -449,8 +453,8 @@ fn ifft_vertical(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invo
     if (col >= N) { return; }
     
     for (var ch = 0u; ch < N_CHANNELS; ch++) {
-        for (var i = 0u; i < N / 256u; i++) {
-            let j = local_index + i * 256u;
+        for (var i = 0u; i < N / 64u; i++) {
+            let j = local_index + i * 64u;
             
             var k: u32;
             if (RADIX == 2) {
@@ -468,8 +472,8 @@ fn ifft_vertical(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invo
         for (var p = 0u; RADIX == 4 && p < LOG4_N; p++) {
             let s = 1u << (2u * p);
             
-            for (var i = 0u; i < N / 256u / 4u; i++) {
-                let j = local_index + i * 256u;
+            for (var i = 0u; i < N / 64u / 4u; i++) {
+                let j = local_index + i * 64u;
                 let k = j & (s - 1u);
                 let t = 2.0 * PI / f32(s * 4u) * f32(k);
                 let k0 = ((j >> (2u * p)) << (2u * p + 2u)) + k;
@@ -494,8 +498,8 @@ fn ifft_vertical(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invo
         for (var p = select(0u, 2u * LOG4_N, RADIX == 4); p < LOG2_N; p++) {
             let s = 1u << p;
             
-            for (var i = 0u; i < N / 256u / 2u; i++) {
-                let j = local_index + i * 256u;
+            for (var i = 0u; i < N / 64u / 2u; i++) {
+                let j = local_index + i * 64u;
                 let k = j & (s - 1u);
                 let k0 = ((j >> p) << (p + 1u)) + k;
                 let k1 = k0 + s;
@@ -510,8 +514,8 @@ fn ifft_vertical(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invo
             workgroupBarrier();
         }
         
-        for (var i = 0u; i < N / 256u; i++) {
-            let j = local_index + i * 256u;
+        for (var i = 0u; i < N / 64u; i++) {
+            let j = local_index + i * 64u;
             image_data[index(ch, j, col)] = X[j] / f32(N);
         }
     }
