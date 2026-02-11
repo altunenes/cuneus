@@ -2,15 +2,22 @@ use crate::Core;
 use std::collections::HashMap;
 use wgpu;
 
-/// Manages ping-pong buffers for multi-pass compute shaders
+/// Manages ping-pong buffers for multi-pass compute shaders.
+///
+/// Each buffer independently tracks which side (.0 or .1) was last written.
+/// This means any pass can read from any previous pass's output, regardless of
+/// how many passes have elapsed. The old global-flip approach only allowed
+/// reading from the immediately preceding pass.
 pub struct MultiPassManager {
     buffers: HashMap<String, (wgpu::Texture, wgpu::Texture)>,
     bind_groups: HashMap<String, (wgpu::BindGroup, wgpu::BindGroup)>,
+    /// Per-buffer write-side tracking. `true` means the last write went to `.0`,
+    /// so the next write goes to `.1` and reads return `.0`.
+    write_side: HashMap<String, bool>,
     output_texture: wgpu::Texture,
     output_bind_group: wgpu::BindGroup,
     storage_layout: wgpu::BindGroupLayout,
     input_layout: wgpu::BindGroupLayout,
-    frame_flip: bool,
     width: u32,
     height: u32,
     texture_format: wgpu::TextureFormat,
@@ -99,14 +106,19 @@ impl MultiPassManager {
             "output_bind",
         );
 
+        let mut write_side = HashMap::new();
+        for name in buffer_names {
+            write_side.insert(name.clone(), false);
+        }
+
         Self {
             buffers,
             bind_groups,
+            write_side,
             output_texture,
             output_bind_group,
             storage_layout,
             input_layout,
-            frame_flip: false,
             width,
             height,
             texture_format,
@@ -212,33 +224,36 @@ impl MultiPassManager {
         })
     }
 
-    /// Get the write bind group for current frame
+    /// Get the write bind group for a buffer (writes to the side not last written)
     pub fn get_write_bind_group(&self, buffer_name: &str) -> &wgpu::BindGroup {
         let bind_groups = self.bind_groups.get(buffer_name).expect("Buffer not found");
-        if self.frame_flip {
-            &bind_groups.1
+        let last_wrote_0 = self.write_side.get(buffer_name).copied().unwrap_or(false);
+        if last_wrote_0 {
+            &bind_groups.1 // Last write was .0, next write goes to .1
         } else {
-            &bind_groups.0
+            &bind_groups.0 // Last write was .1 (or never), next write goes to .0
         }
     }
 
-    /// Get the write texture for current frame
+    /// Get the write texture for a buffer (writes to the side not last written)
     pub fn get_write_texture(&self, buffer_name: &str) -> &wgpu::Texture {
         let textures = self.buffers.get(buffer_name).expect("Buffer not found");
-        if self.frame_flip {
+        let last_wrote_0 = self.write_side.get(buffer_name).copied().unwrap_or(false);
+        if last_wrote_0 {
             &textures.1
         } else {
             &textures.0
         }
     }
 
-    /// Get the read texture for previous frame
+    /// Get the read texture for a buffer (returns the side that was last written)
     pub fn get_read_texture(&self, buffer_name: &str) -> &wgpu::Texture {
         let textures = self.buffers.get(buffer_name).expect("Buffer not found");
-        if self.frame_flip {
-            &textures.0
+        let last_wrote_0 = self.write_side.get(buffer_name).copied().unwrap_or(false);
+        if last_wrote_0 {
+            &textures.0 // Last write was to .0, read from .0
         } else {
-            &textures.1
+            &textures.1 // Last write was to .1, read from .1
         }
     }
 
@@ -312,9 +327,21 @@ impl MultiPassManager {
         &self.output_texture
     }
 
-    /// Flip ping-pong buffers
+    /// Mark a specific buffer as having been written to.
+    /// Flips that buffer's write side so the next read returns what was just written,
+    /// and the next write goes to the other side.
+    pub fn mark_written(&mut self, buffer_name: &str) {
+        if let Some(side) = self.write_side.get_mut(buffer_name) {
+            *side = !*side;
+        }
+    }
+
+    /// Flip all buffers (for cross-frame feedback in temporal effects).
+    /// Call this after frame presentation to preserve state for the next frame.
     pub fn flip_buffers(&mut self) {
-        self.frame_flip = !self.frame_flip;
+        for side in self.write_side.values_mut() {
+            *side = !*side;
+        }
     }
 
     /// Clear all buffers
@@ -369,7 +396,9 @@ impl MultiPassManager {
             "output_bind",
         );
 
-        self.frame_flip = false;
+        for side in self.write_side.values_mut() {
+            *side = false;
+        }
     }
 
     /// Resize all buffers
