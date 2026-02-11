@@ -59,13 +59,11 @@ Cuneus enforces a standard bind group layout to create a stable and predictable 
 
 The framework elegantly handles two types of multi-pass computation:
 
-1. **Texture-Based (Ping-Pong):** Ideal for image processing and feedback effects. Intermediate results are stored in textures.
-   - **Within-Frame**: The backend **automatically flips buffers between passes** during `.dispatch()`. Most multi-pass shaders use this.
-   - **Across-Frame (Temporal)**: For effects that accumulate over time, call `.flip_buffers()` after `output.present()` to preserve state for the next frame.
-   - *Examples with cross-frame feedback: `lich.rs`, `currents.rs`* - use flip_buffers()
-   - *Examples with within-frame only: `kuwahara.rs`, `fluid.rs`, `jfa.rs`, `2dneuron.rs`* - no flip_buffers()
+1. **Texture-Based (Ping-Pong):** Ideal for image processing and feedback effects. Intermediate results are stored in textures. Each buffer independently tracks its write state, so any pass can read from any previous pass's output — and cross-frame feedback (self-referencing passes) works automatically.
+   - *Examples with cross-frame feedback: `lich.rs`, `currents.rs`, `rorschach.rs`*
+   - *Examples with within-frame only: `kuwahara.rs`, `fluid.rs`, `jfa.rs`, `2dneuron.rs`*
 
-2. **Storage-Buffer-Based (Shared Memory):** Ideal for GPU algorithms like FFT or simulations like CNNs. All passes read from and write to the same large, user-defined storage buffers. This is enabled by using `.with_multi_pass()` *and* `.with_storage_buffer()`. No flip_buffers() needed.
+2. **Storage-Buffer-Based (Shared Memory):** Ideal for GPU algorithms like FFT or simulations like CNNs. All passes read from and write to the same large, user-defined storage buffers. This is enabled by using `.with_multi_pass()` *and* `.with_storage_buffer()`.
    - *Examples: `fft.rs`, `cnn.rs`*
 
 ## Getting Started: Shader Structure
@@ -118,7 +116,7 @@ impl ShaderManager for MyShader {
         ];
         // For cross-frame feedback (temporal effects), add self to inputs:
         // PassDescription::new("buffer_b", &["buffer_a", "buffer_b"])
-        // Then input_texture1 = buffer_b's PREVIOUS frame (requires flip_buffers())
+        // Then input_texture1 = buffer_b's PREVIOUS frame output (automatic)
         */
 
         // Configure the compute shader using the builder
@@ -179,13 +177,8 @@ impl ShaderManager for MyShader {
         // end_frame() handles UI overlay + submit + present in one call
         self.base.end_frame(core, frame, full_output);
 
-        // 3. (Multi-Pass with Cross-Frame Feedback ONLY) If your effect needs to accumulate
-        //    or preserve state across frames (like reaction-diffusion or temporal effects),
-        //    call flip_buffers() here to save the current frame's output for the next frame.
-        //    Most multi-pass shaders DON'T need this - the backend auto-flips within each frame.
-        /*
-        self.compute_shader.flip_buffers();  // Only for lich.rs, currents.rs style effects
-        */
+        // Cross-frame feedback (self-referencing passes like buffer_a reading buffer_a)
+        // works automatically
 
         Ok(())
     }
@@ -252,6 +245,30 @@ struct TimeUniform { time: f32, delta: f32, frame: u32, _padding: u32 };
 ```
 
 ## Advanced Topics
+
+### Multi-Pass Texture Dependencies
+
+When using `.with_multi_pass()`, the framework uses **ping-pong double-buffering** with per-buffer write tracking. Each buffer independently remembers which side was last written, so **any pass can read from any previous pass's output** — no adjacency restrictions.
+
+**How dependencies map to input textures:**
+
+The `&["dep1", "dep2"]` array in `PassDescription::new()` maps directly by position:
+
+- `deps[0]` → `input_texture0` in WGSL
+- `deps[1]` → `input_texture1` in WGSL
+- `deps[2]` → `input_texture2` in WGSL (max 3)
+
+If fewer than 3 dependencies are listed, the remaining slots repeat the first dependency.
+
+```rust
+// Each pass reads from any previous pass — order doesn't matter
+PassDescription::new("structure_tensor", &[]),
+PassDescription::new("tensor_field", &["structure_tensor"]),     // input_texture0 = structure_tensor
+PassDescription::new("kuwahara", &["tensor_field"]),             // input_texture0 = tensor_field
+// Reading from non-adjacent passes is fine:
+PassDescription::new("lic_edges", &["tensor_field", "kuwahara"]), // input_texture0 = tensor_field, 1 = kuwahara
+PassDescription::new("main_image", &["lic_edges"]),
+```
 
 ### Workgroup Sizes
 
