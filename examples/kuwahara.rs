@@ -23,7 +23,9 @@ struct KuwaharaParams {
     filter_mode: i32,
     show_tensors: i32,
 
-    _padding: [u32; 3],
+    lic_length: f32,
+    lic_strength: f32,
+    lic_width: f32,
 }
 
 impl UniformProvider for KuwaharaParams {
@@ -54,7 +56,9 @@ impl ShaderManager for KuwaharaShader {
             blur_slod: 4.0,
             filter_mode: 1,
             show_tensors: 0,
-            _padding: [0; 3],
+            lic_length: 15.0,
+            lic_strength: 0.5,
+            lic_width: 1.5,
         };
 
         let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
@@ -64,7 +68,8 @@ impl ShaderManager for KuwaharaShader {
             PassDescription::new("structure_tensor", &[]),
             PassDescription::new("tensor_field", &["structure_tensor"]),
             PassDescription::new("kuwahara_filter", &["tensor_field"]),
-            PassDescription::new("main_image", &["kuwahara_filter"]),
+            PassDescription::new("lic_edges", &["tensor_field", "kuwahara_filter"]),
+            PassDescription::new("main_image", &["lic_edges"]),
         ];
 
         let config = ComputeShader::builder()
@@ -219,6 +224,29 @@ impl ShaderManager for KuwaharaShader {
                                     .changed();
                             });
 
+                        egui::CollapsingHeader::new("Brush Strokes (LIC)")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.lic_strength, 0.0..=1.0)
+                                            .text("Strength"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.lic_length, 3.0..=40.0)
+                                            .text("Stroke Length"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut params.lic_width, 0.5..=4.0)
+                                            .text("Stroke Width"),
+                                    )
+                                    .changed();
+                            });
+
                         egui::CollapsingHeader::new("Post-Processing")
                             .default_open(false)
                             .show(ui, |ui| {
@@ -245,7 +273,9 @@ impl ShaderManager for KuwaharaShader {
                                         blur_slod: 4.0,
                                         filter_mode: params.filter_mode,
                                         show_tensors: 0,
-                                        _padding: [0; 3],
+                                        lic_length: 15.0,
+                                        lic_strength: 0.5,
+                                        lic_width: 1.5,
                                     };
                                     changed = true;
                                 }
