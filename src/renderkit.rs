@@ -670,6 +670,31 @@ impl RenderKit {
         });
         (capture_texture, output_buffer)
     }
+    pub fn default_handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
+        if self.egui_state.on_window_event(core.window(), event).consumed {
+            return true;
+        }
+        if let WindowEvent::KeyboardInput { event, .. } = event {
+            return self.key_handler.handle_keyboard_input(core.window(), event);
+        }
+        false
+    }
+
+    pub fn default_resize(&mut self, core: &Core, compute_shader: &mut ComputeShader) {
+        self.update_resolution(&core.queue, core.size);
+        compute_shader.resize(core, core.size.width, core.size.height);
+    }
+
+    pub fn apply_media_requests(&mut self, core: &Core, controls_request: &ControlsRequest) {
+        self.apply_control_request(controls_request.clone());
+        #[cfg(feature = "media")]
+        {
+            self.handle_video_requests(core, controls_request);
+            self.handle_webcam_requests(core, controls_request);
+        }
+        self.handle_hdri_requests(core, controls_request);
+    }
+
     pub fn apply_control_request(&mut self, request: ControlsRequest) {
         if request.should_reset {
             self.start_time = Instant::now();
