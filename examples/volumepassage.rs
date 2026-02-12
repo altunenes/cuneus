@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct VolumeParams {
+cuneus::uniform_params! {
+    struct VolumeParams {
     speed: f32,
     intensity: f32,
     color1_r: f32,
@@ -20,20 +19,13 @@ struct VolumeParams {
     zoom: f32,
     _padding1: f32,
     _padding2: f32,
-    _padding3: f32,
-}
-
-impl UniformProvider for VolumeParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    _padding3: f32}
 }
 
 struct VolumeShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: VolumeParams,
-}
+    current_params: VolumeParams}
 
 impl VolumeShader {
     fn clear_buffers(&mut self, core: &Core) {
@@ -43,8 +35,6 @@ impl VolumeShader {
 
 impl ShaderManager for VolumeShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-
         let initial_params = VolumeParams {
             speed: 1.0,
             intensity: 0.001,
@@ -61,10 +51,9 @@ impl ShaderManager for VolumeShader {
             zoom: 1.0,
             _padding1: 0.0,
             _padding2: 0.0,
-            _padding3: 0.0,
-        };
+            _padding3: 0.0};
 
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let config = ComputeShader::builder()
             .with_entry_point("main")
@@ -81,17 +70,12 @@ impl ShaderManager for VolumeShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
-
-        self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {

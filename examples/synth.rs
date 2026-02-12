@@ -3,9 +3,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct SynthParams {
+cuneus::uniform_params! {
+    struct SynthParams {
     tempo: f32,
     waveform_type: u32,
     octave: f32,
@@ -27,13 +26,7 @@ struct SynthParams {
     _padding2: u32,
     _padding3: u32,
     key_states: [[f32; 4]; 3],
-    key_decay: [[f32; 4]; 3],
-}
-
-impl UniformProvider for SynthParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    key_decay: [[f32; 4]; 3]}
 }
 
 struct SynthManager {
@@ -42,8 +35,7 @@ struct SynthManager {
     current_params: SynthParams,
     gpu_synthesis: Option<SynthesisManager>,
     // Track which keys are currently held down
-    keys_held: [bool; 9],
-}
+    keys_held: [bool; 9]}
 
 impl SynthManager {
     fn set_key_state(&mut self, key_index: usize, state: f32) {
@@ -84,8 +76,7 @@ impl SynthManager {
 
 impl ShaderManager for SynthManager {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let initial_params = SynthParams {
             tempo: 120.0,
@@ -109,8 +100,7 @@ impl ShaderManager for SynthManager {
             _padding2: 0,
             _padding3: 0,
             key_states: [[0.0; 4]; 3],
-            key_decay: [[0.0; 4]; 3],
-        };
+            key_decay: [[0.0; 4]; 3]};
 
         let config = ComputeShader::builder()
             .with_entry_point("main")
@@ -133,8 +123,7 @@ impl ShaderManager for SynthManager {
                     attack_time: initial_params.attack_time,
                     decay_time: initial_params.decay_time,
                     sustain_level: initial_params.sustain_level,
-                    release_time: initial_params.release_time,
-                });
+                    release_time: initial_params.release_time});
 
                 if let Err(_e) = synth.start_gpu_synthesis() {
                     None
@@ -142,21 +131,17 @@ impl ShaderManager for SynthManager {
                     Some(synth)
                 }
             }
-            Err(_e) => None,
-        };
+            Err(_e) => None};
 
         Self {
             base,
             compute_shader,
             current_params: initial_params,
             gpu_synthesis,
-            keys_held: [false; 9],
-        }
+            keys_held: [false; 9]}
     }
 
     fn update(&mut self, core: &Core) {
-        self.base.fps_tracker.update();
-        self.compute_shader.check_hot_reload(&core.device);
 
         let current_time = self.base.controls.get_time(&self.base.start_time);
         let delta = 1.0 / 60.0;

@@ -83,8 +83,7 @@ struct BlockTowerGame {
 
 impl ShaderManager for BlockTowerGame {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         // Create single-pass compute shader with mouse, fonts, and game storage
         let config = ComputeShader::builder()
@@ -115,10 +114,6 @@ impl ShaderManager for BlockTowerGame {
             .set_time(current_time, delta, &core.queue);
         self.compute_shader
             .update_mouse_uniform(&self.base.mouse_tracker.uniform, &core.queue);
-        self.base.fps_tracker.update();
-
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
 
         self.update_camera_in_shader(&core.queue);
         let mouse_buttons = self.base.mouse_tracker.uniform.buttons[0];

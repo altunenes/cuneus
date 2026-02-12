@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct LichParams {
+cuneus::uniform_params! {
+    struct LichParams {
     cloud_density: f32,
     lightning_intensity: f32,
     branch_count: f32,
@@ -13,20 +12,13 @@ struct LichParams {
     _pad1: f32,
     color_shift: f32,
     spectrum_mix: f32,
-    _pad2: [f32; 2],
-}
-
-impl UniformProvider for LichParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    _pad2: [f32; 2]}
 }
 
 struct LichShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: LichParams,
-}
+    current_params: LichParams}
 
 impl LichShader {
     fn clear_buffers(&mut self, core: &Core) {
@@ -37,8 +29,7 @@ impl LichShader {
 
 impl ShaderManager for LichShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let passes = vec![
             PassDescription::new("buffer_a", &[]),
@@ -65,8 +56,7 @@ impl ShaderManager for LichShader {
             _pad1: 0.0,
             color_shift: 2.0,
             spectrum_mix: 0.5,
-            _pad2: [0.0; 2],
-        };
+            _pad2: [0.0; 2]};
 
         // Initialize custom uniform with initial parameters
         compute_shader.set_custom_params(initial_params, &core.queue);
@@ -74,13 +64,10 @@ impl ShaderManager for LichShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
 
@@ -89,8 +76,6 @@ impl ShaderManager for LichShader {
         let delta = 1.0 / 60.0;
         self.compute_shader
             .set_time(current_time, delta, &core.queue);
-
-        self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {

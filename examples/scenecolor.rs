@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct SceneColorParams {
+cuneus::uniform_params! {
+    struct SceneColorParams {
     num_segments: f32,
     palette_height: f32,
     samples_x: i32,
@@ -13,20 +12,13 @@ struct SceneColorParams {
     _pad1: f32,
     _pad2: f32,
     _pad3: f32,
-    _pad4: f32,
-}
-
-impl UniformProvider for SceneColorParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    _pad4: f32}
 }
 
 struct SceneColorShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: SceneColorParams,
-}
+    current_params: SceneColorParams}
 
 impl SceneColorShader {
     fn clear_buffers(&mut self, core: &Core) {
@@ -36,8 +28,6 @@ impl SceneColorShader {
 
 impl ShaderManager for SceneColorShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-
         let initial_params = SceneColorParams {
             num_segments: 16.0,
             palette_height: 0.2,
@@ -46,10 +36,9 @@ impl ShaderManager for SceneColorShader {
             _pad1: 0.0,
             _pad2: 0.0,
             _pad3: 0.0,
-            _pad4: 0.0,
-        };
+            _pad4: 0.0};
 
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let config = ComputeShader::builder()
             .with_entry_point("main")
@@ -67,8 +56,7 @@ impl ShaderManager for SceneColorShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
@@ -87,8 +75,6 @@ impl ShaderManager for SceneColorShader {
                 &core.device,
             );
         }
-
-        self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {
@@ -198,9 +184,6 @@ impl ShaderManager for SceneColorShader {
         if should_start_export {
             self.base.export_manager.start_export();
         }
-
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
 
         // Single stage dispatch
         self.compute_shader.dispatch(&mut frame.encoder, core);

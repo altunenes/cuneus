@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct KuwaharaParams {
+cuneus::uniform_params! {
+    struct KuwaharaParams {
     radius: f32,
     q: f32,
     alpha: f32,
@@ -25,20 +24,13 @@ struct KuwaharaParams {
 
     lic_length: f32,
     lic_strength: f32,
-    lic_width: f32,
-}
-
-impl UniformProvider for KuwaharaParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    lic_width: f32}
 }
 
 struct KuwaharaShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: KuwaharaParams,
-}
+    current_params: KuwaharaParams}
 
 impl ShaderManager for KuwaharaShader {
     fn init(core: &Core) -> Self {
@@ -58,11 +50,8 @@ impl ShaderManager for KuwaharaShader {
             show_tensors: 0,
             lic_length: 15.0,
             lic_strength: 0.5,
-            lic_width: 1.5,
-        };
-
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+            lic_width: 1.5};
+        let base = RenderKit::new(core);
 
         let passes = vec![
             PassDescription::new("structure_tensor", &[]),
@@ -89,8 +78,7 @@ impl ShaderManager for KuwaharaShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
@@ -109,10 +97,6 @@ impl ShaderManager for KuwaharaShader {
                 &core.queue,
             );
         }
-
-        self.base.fps_tracker.update();
-
-        self.compute_shader.check_hot_reload(&core.device);
 
         self.compute_shader.handle_export(core, &mut self.base);
     }
@@ -275,8 +259,7 @@ impl ShaderManager for KuwaharaShader {
                                         show_tensors: 0,
                                         lic_length: 15.0,
                                         lic_strength: 0.5,
-                                        lic_width: 1.5,
-                                    };
+                                        lic_width: 1.5};
                                     changed = true;
                                 }
                             });

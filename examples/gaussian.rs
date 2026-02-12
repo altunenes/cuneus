@@ -74,8 +74,7 @@ struct GaussianShader {
 
 impl ShaderManager for GaussianShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         // 1. init_gaussians: Initialize/reset Gaussian parameters
         // 2. clear_gradients: Clear gradient buffer before each iteration
@@ -147,9 +146,6 @@ impl ShaderManager for GaussianShader {
             self.current_params.iteration = self.current_params.iteration.wrapping_add(1);
             self.compute_shader.set_custom_params(self.current_params, &core.queue);
         }
-
-        self.base.fps_tracker.update();
-        self.compute_shader.check_hot_reload(&core.device);
         self.compute_shader.handle_export(core, &mut self.base);
     }
 

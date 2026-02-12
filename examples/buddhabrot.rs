@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct BuddhabrotParams {
+cuneus::uniform_params! {
+    struct BuddhabrotParams {
     max_iterations: u32,
     escape_radius: f32,
     zoom: f32,
@@ -23,11 +22,8 @@ struct BuddhabrotParams {
     color2_b: f32,
     sample_density: f32,
     dithering: f32,
-}
-
-impl UniformProvider for BuddhabrotParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
+    _pad_m1: f32,
+    _pad_m2: f32,
     }
 }
 
@@ -36,8 +32,7 @@ struct BuddhabrotShader {
     compute_shader: ComputeShader,
     frame_count: u32,
     accumulated_rendering: bool,
-    current_params: BuddhabrotParams,
-}
+    current_params: BuddhabrotParams}
 
 impl BuddhabrotShader {
     fn clear_buffers(&mut self, core: &Core) {
@@ -52,8 +47,7 @@ impl BuddhabrotShader {
 
 impl ShaderManager for BuddhabrotShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let initial_params = BuddhabrotParams {
             max_iterations: 500,
@@ -74,6 +68,8 @@ impl ShaderManager for BuddhabrotShader {
             color2_b: 1.0,
             sample_density: 0.5,
             dithering: 0.2,
+            _pad_m1: 0.0,
+            _pad_m2: 0.0,
         };
 
         let mut config = ComputeShader::builder()
@@ -98,15 +94,10 @@ impl ShaderManager for BuddhabrotShader {
             compute_shader,
             frame_count: 0,
             accumulated_rendering: false,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
-        self.base.fps_tracker.update();
-
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export
         self.compute_shader.handle_export_dispatch(
             core,

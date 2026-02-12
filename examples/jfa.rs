@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct JfaParams {
+cuneus::uniform_params! {
+    struct JfaParams {
     a: f32,
     b: f32,
     c: f32,
@@ -28,19 +27,14 @@ struct JfaParams {
     _padding0: f32,
     _padding1: f32,
     _padding2: f32,
-}
-
-impl UniformProvider for JfaParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
+    _pad_m: f32,
     }
 }
 
 struct JfaShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: JfaParams,
-}
+    current_params: JfaParams}
 
 impl ShaderManager for JfaShader {
     fn init(core: &Core) -> Self {
@@ -68,10 +62,9 @@ impl ShaderManager for JfaShader {
             _padding0: 0.0,
             _padding1: 0.0,
             _padding2: 0.0,
+            _pad_m: 0.0,
         };
-
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         // Create multipass system: buffer_a -> buffer_b -> buffer_c -> main_image
         let passes = vec![
@@ -97,13 +90,10 @@ impl ShaderManager for JfaShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
 
@@ -111,8 +101,6 @@ impl ShaderManager for JfaShader {
         let delta = 1.0 / 60.0;
         self.compute_shader
             .set_time(current_time, delta, &core.queue);
-
-        self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {

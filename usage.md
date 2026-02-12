@@ -74,17 +74,14 @@ Every shader application follows a similar pattern implementing the `ShaderManag
 use cuneus::prelude::*;
 use cuneus::compute::*;
 
-// 1. Define custom parameters for the UI
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct MyParams {
-    strength: f32,
-    color: [f32; 3],
-    _padding: f32,
-}
-
-impl UniformProvider for MyParams {
-    fn as_bytes(&self) -> &[u8] { bytemuck::bytes_of(self) }
+// 1. Define custom parameters for the UI using the uniform_params! macro
+// This adds #[repr(C)], derives, UniformProvider impl, and a compile-time
+// assert that the struct size is a multiple of 16 bytes (catches padding errors).
+cuneus::uniform_params! {
+    struct MyParams {
+        strength: f32,
+        color: [f32; 3],
+    }
 }
 
 // 2. Define the main application struct
@@ -98,8 +95,7 @@ struct MyShader {
 impl ShaderManager for MyShader {
     fn init(core: &Core) -> Self {
         // RenderKit handles the final blit to screen and UI (vertex/blit shaders built-in)
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
         let initial_params = MyParams { /* ... */ };
 
         // --- To convert this to a Multi-Pass shader, make the following changes: ---
@@ -139,11 +135,9 @@ impl ShaderManager for MyShader {
         Self { base, compute_shader, current_params: initial_params }
     }
 
-    fn update(&mut self, core: &Core) {
-        // Update time uniform, check for hot-reloads, etc.
-        let time = self.base.controls.get_time(&self.base.start_time);
-        self.compute_shader.set_time(time, 1.0/60.0, &core.queue);
-        self.compute_shader.check_hot_reload(&core.device);
+    fn update(&mut self, _core: &Core) {
+        // Hot-reload is checked automatically by dispatch()/dispatch_stage().
+        // FPS tracking is updated automatically by end_frame().
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {

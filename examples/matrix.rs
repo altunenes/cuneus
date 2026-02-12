@@ -1,24 +1,19 @@
 use cuneus::prelude::ComputeShader;
 use cuneus::{
-    Core, ExportManager, RenderKit, ShaderApp, ShaderControls, ShaderManager, UniformProvider,
+    Core, ExportManager, RenderKit, ShaderApp, ShaderControls, ShaderManager,
 };
 use winit::event::*;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct ShaderParams {
-    red_power: f32,
-    green_power: f32,
-    blue_power: f32,
-    green_boost: f32,
-    contrast: f32,
-    gamma: f32,
-    glow: f32,
-}
-
-impl UniformProvider for ShaderParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
+cuneus::uniform_params! {
+    struct ShaderParams {
+        red_power: f32,
+        green_power: f32,
+        blue_power: f32,
+        green_boost: f32,
+        contrast: f32,
+        gamma: f32,
+        glow: f32,
+        _pad_m: f32,
     }
 }
 
@@ -36,8 +31,7 @@ struct MatrixShader {
 }
 impl ShaderManager for MatrixShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let initial_params = ShaderParams {
             red_power: 0.98,
@@ -47,6 +41,7 @@ impl ShaderManager for MatrixShader {
             contrast: 1.0,
             gamma: 1.0,
             glow: 0.05,
+            _pad_m: 0.0,
         };
 
         let config = ComputeShader::builder()
@@ -82,9 +77,6 @@ impl ShaderManager for MatrixShader {
                 &core.device,
             );
         }
-
-        self.base.fps_tracker.update();
-        self.compute_shader.check_hot_reload(&core.device);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {

@@ -1,19 +1,16 @@
 use cuneus::prelude::ComputeShader;
-use cuneus::{Core, RenderKit, ShaderApp, ShaderManager, UniformProvider};
+use cuneus::{Core, RenderKit, ShaderApp, ShaderManager};
 use winit::event::*;
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct ShaderParams {
+cuneus::uniform_params! {
+    struct ShaderParams {
     scale: f32,
     offset_value: f32,
     cell_index: f32,
     edge_width: f32,
     highlight: f32,
-}
-
-impl UniformProvider for ShaderParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
+    _pad_m1: f32,
+    _pad_m2: f32,
+    _pad_m3: f32,
     }
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,12 +22,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct Voronoi {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: ShaderParams,
-}
+    current_params: ShaderParams}
 impl ShaderManager for Voronoi {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let initial_params = ShaderParams {
             scale: 24.0,
@@ -38,6 +33,9 @@ impl ShaderManager for Voronoi {
             cell_index: 0.0,
             edge_width: 0.1,
             highlight: 0.15,
+            _pad_m1: 0.0,
+            _pad_m2: 0.0,
+            _pad_m3: 0.0,
         };
 
         let config = ComputeShader::builder()
@@ -53,8 +51,7 @@ impl ShaderManager for Voronoi {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
@@ -73,11 +70,8 @@ impl ShaderManager for Voronoi {
                 &core.device,
             );
         }
-
-        self.base.fps_tracker.update();
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
-        self.compute_shader.check_hot_reload(&core.device);
     }
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;

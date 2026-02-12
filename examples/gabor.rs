@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct GaborParams {
+cuneus::uniform_params! {
+    struct GaborParams {
     frequency: f32,
     orientation: f32,
     phase: f32,
@@ -26,19 +25,16 @@ struct GaborParams {
     color2_b: f32,
     dof_amount: f32,
     dof_focal_dist: f32,
-}
-
-impl UniformProvider for GaborParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
+    _pad_m1: f32,
+    _pad_m2: f32,
+    _pad_m3: f32,
     }
 }
 
 struct GaborShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: GaborParams,
-}
+    current_params: GaborParams}
 
 impl GaborShader {
     fn clear_buffers(&mut self, core: &Core) {
@@ -48,8 +44,6 @@ impl GaborShader {
 
 impl ShaderManager for GaborShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-
         let initial_params = GaborParams {
             frequency: 5.0,
             orientation: 0.0,
@@ -72,9 +66,12 @@ impl ShaderManager for GaborShader {
             color2_b: 0.0,
             dof_amount: 1.0,
             dof_focal_dist: 0.5,
+            _pad_m1: 0.0,
+            _pad_m2: 0.0,
+            _pad_m3: 0.0,
         };
 
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let mut config = ComputeShader::builder()
             .with_entry_point("Splat")
@@ -95,15 +92,10 @@ impl ShaderManager for GaborShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
-        self.base.fps_tracker.update();
-
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
     }

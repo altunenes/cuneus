@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct SystemParams {
+cuneus::uniform_params! {
+    struct SystemParams {
     a: f32,
     b: f32,
     c: f32,
@@ -18,19 +17,16 @@ struct SystemParams {
     color2_g: f32,
     color2_b: f32,
     zoom: f32,
-}
-
-impl UniformProvider for SystemParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
+    _pad_m1: f32,
+    _pad_m2: f32,
+    _pad_m3: f32,
     }
 }
 
 struct SystemShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: SystemParams,
-}
+    current_params: SystemParams}
 
 impl SystemShader {
     fn clear_buffers(&mut self, core: &Core) {
@@ -40,8 +36,6 @@ impl SystemShader {
 
 impl ShaderManager for SystemShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-
         let initial_params = SystemParams {
             a: 0.0,
             b: 0.0,
@@ -56,9 +50,12 @@ impl ShaderManager for SystemShader {
             color2_g: 0.4,
             color2_b: 0.1,
             zoom: 1.0,
+            _pad_m1: 0.0,
+            _pad_m2: 0.0,
+            _pad_m3: 0.0,
         };
 
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let mut config = ComputeShader::builder()
             .with_entry_point("Splat")
@@ -79,13 +76,10 @@ impl ShaderManager for SystemShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export with custom dispatch pattern for system
         self.compute_shader.handle_export_dispatch(
             core,
@@ -95,8 +89,6 @@ impl ShaderManager for SystemShader {
                 shader.dispatch_stage(encoder, core, 1);
             },
         );
-
-        self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {

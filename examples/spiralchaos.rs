@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct SpiralParams {
+cuneus::uniform_params! {
+    struct SpiralParams {
     a: f32,
     b: f32,
     c: f32,
@@ -20,20 +19,13 @@ struct SpiralParams {
     color2_r: f32,
     color2_g: f32,
     color2_b: f32,
-    _padding: u32,
-}
-
-impl UniformProvider for SpiralParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    _padding: u32}
 }
 
 struct SpiralShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: SpiralParams,
-}
+    current_params: SpiralParams}
 
 impl SpiralShader {
     fn clear_buffers(&mut self, core: &Core) {
@@ -43,8 +35,6 @@ impl SpiralShader {
 
 impl ShaderManager for SpiralShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-
         let initial_params = SpiralParams {
             a: 1.0,
             b: 1.0,
@@ -61,10 +51,9 @@ impl ShaderManager for SpiralShader {
             color2_r: 1.0,
             color2_g: 0.3,
             color2_b: 0.5,
-            _padding: 0,
-        };
+            _padding: 0};
 
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let mut config = ComputeShader::builder()
             .with_entry_point("Splat")
@@ -85,13 +74,10 @@ impl ShaderManager for SpiralShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export with custom dispatch pattern
         self.compute_shader.handle_export_dispatch(
             core,
@@ -101,8 +87,6 @@ impl ShaderManager for SpiralShader {
                 shader.dispatch_stage(encoder, core, 1);
             },
         );
-
-        self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {

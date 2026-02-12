@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct LorenzParams {
+cuneus::uniform_params! {
+    struct LorenzParams {
     sigma: f32,
     rho: f32,
     beta: f32,
@@ -28,11 +27,7 @@ struct LorenzParams {
     exposure: f32,
     particle_count: f32,
     decay_speed: f32,
-}
-
-impl UniformProvider for LorenzParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
+    _pad_m: f32,
     }
 }
 
@@ -40,8 +35,7 @@ struct LorenzShader {
     base: RenderKit,
     compute_shader: ComputeShader,
     current_params: LorenzParams,
-    mouse_look_enabled: bool,
-}
+    mouse_look_enabled: bool}
 
 impl LorenzShader {
     fn clear_buffers(&mut self, core: &Core) {
@@ -51,7 +45,6 @@ impl LorenzShader {
 
 impl ShaderManager for LorenzShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
         let initial_params = LorenzParams {
             sigma: 40.0,
             rho: 33.0,
@@ -76,9 +69,10 @@ impl ShaderManager for LorenzShader {
             exposure: 1.0,
             particle_count: 1000.0,
             decay_speed: 8.0,
+            _pad_m: 0.0,
         };
 
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let mut config = ComputeShader::builder()
             .with_entry_point("Splat")
@@ -99,13 +93,10 @@ impl ShaderManager for LorenzShader {
             base,
             compute_shader,
             current_params: initial_params,
-            mouse_look_enabled: false,
-        }
+            mouse_look_enabled: false}
     }
 
     fn update(&mut self, core: &Core) {
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export
         self.compute_shader.handle_export_dispatch(
             core,
@@ -116,8 +107,6 @@ impl ShaderManager for LorenzShader {
                 shader.dispatch_stage(encoder, core, 1);
             },
         );
-
-        self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {

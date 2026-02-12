@@ -1,11 +1,10 @@
 use cuneus::compute::{ComputeShader, COMPUTE_TEXTURE_FORMAT_RGBA16};
 use cuneus::{Core, RenderKit, ShaderApp, ShaderControls, ShaderManager};
-use cuneus::{ExportManager, UniformProvider};
+use cuneus::{ExportManager};
 use winit::event::*;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct ShaderParams {
+cuneus::uniform_params! {
+    struct ShaderParams {
     background_color: f32,
     _pad0: f32,
     _pad00: f32,
@@ -34,19 +33,15 @@ struct ShaderParams {
     _pad8: f32,
     _pad9: f32,
     _pad10: f32,
-}
-
-impl UniformProvider for ShaderParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
+    _pad_align1: f32,
+    _pad_align2: f32,
     }
 }
 
 struct Shader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: ShaderParams,
-}
+    current_params: ShaderParams}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
@@ -62,8 +57,7 @@ impl Shader {
 
 impl ShaderManager for Shader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let initial_params = ShaderParams {
             background_color: 0.4,
@@ -94,6 +88,8 @@ impl ShaderManager for Shader {
             _pad8: 0.0,
             _pad9: 0.0,
             _pad10: 0.0,
+            _pad_align1: 0.0,
+            _pad_align2: 0.0,
         };
 
         // Entry point configuration
@@ -113,17 +109,12 @@ impl ShaderManager for Shader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
-
-        self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {

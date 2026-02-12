@@ -1,9 +1,8 @@
 use cuneus::prelude::ComputeShader;
-use cuneus::{Core, RenderKit, ShaderApp, ShaderManager, UniformProvider};
+use cuneus::{Core, RenderKit, ShaderApp, ShaderManager};
 use winit::event::*;
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct ShaderParams {
+cuneus::uniform_params! {
+    struct ShaderParams {
     lambda: f32,
     theta: f32,
     alpha: f32,
@@ -23,20 +22,13 @@ struct ShaderParams {
     background_b: f32,
     gamma_correction: f32,
     aces_tonemapping: f32,
-    _padding: f32,
-}
-
-impl UniformProvider for ShaderParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    _padding: f32}
 }
 
 struct Shader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: ShaderParams,
-}
+    current_params: ShaderParams}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let (app, event_loop) = ShaderApp::new("sdvert", 800, 600);
@@ -45,8 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 impl ShaderManager for Shader {
     fn init(core: &Core) -> Self {
         // Create texture display layout
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let initial_params = ShaderParams {
             sigma: 0.07,
@@ -68,8 +59,7 @@ impl ShaderManager for Shader {
             background_b: 0.9,
             gamma_correction: 0.41,
             aces_tonemapping: 0.4,
-            _padding: 0.0,
-        };
+            _padding: 0.0};
 
         let config = ComputeShader::builder()
             .with_entry_point("main")
@@ -83,8 +73,7 @@ impl ShaderManager for Shader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
@@ -93,11 +82,8 @@ impl ShaderManager for Shader {
         let delta = 1.0 / 60.0;
         self.compute_shader
             .set_time(current_time, delta, &core.queue);
-
-        self.base.fps_tracker.update();
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
-        self.compute_shader.check_hot_reload(&core.device);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
