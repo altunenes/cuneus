@@ -2,23 +2,17 @@ use wgpu::util::DeviceExt;
 pub trait UniformProvider {
     fn as_bytes(&self) -> &[u8];
 }
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct ResolutionUniform {
-    pub dimensions: [f32; 2],
-    pub _padding: [f32; 2],
-    pub audio_data: [[f32; 4]; 32],
-    pub bpm: f32,
-    pub bass_energy: f32,
-    pub mid_energy: f32,
-    pub high_energy: f32,
-    pub total_energy: f32,
-    pub _energy_padding: [f32; 3],
-}
-
-impl UniformProvider for ResolutionUniform {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
+crate::uniform_params! {
+    pub struct ResolutionUniform {
+        pub dimensions: [f32; 2],
+        pub _padding: [f32; 2],
+        pub audio_data: [[f32; 4]; 32],
+        pub bpm: f32,
+        pub bass_energy: f32,
+        pub mid_energy: f32,
+        pub high_energy: f32,
+        pub total_energy: f32,
+        pub _energy_padding: [f32; 3],
     }
 }
 
