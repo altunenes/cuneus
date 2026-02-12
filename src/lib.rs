@@ -95,6 +95,54 @@ pub mod prelude {
     pub use winit::{dpi::PhysicalSize, event_loop::EventLoop, window::Window};
 }
 
+/// a macro for defining GPU uniform parameter structs.
+///
+/// Automatically adds `#[repr(C)]`, `Copy`, `Clone`, `Debug`, `Pod`, `Zeroable`,
+/// implements `UniformProvider`, and asserts 16-byte alignment at compile time.
+///
+/// ```rust,no_run
+/// cuneus::uniform_params! {
+///     pub struct MyParams {
+///         field1: f32,
+///         field2: f32,
+///         _padding: [f32; 2],
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! uniform_params {
+    (
+        $(#[$meta:meta])*
+        $vis:vis struct $name:ident {
+            $($field_vis:vis $field:ident : $ty:ty),* $(,)?
+        }
+    ) => {
+        #[repr(C)]
+        #[derive(Copy, Clone, Debug, $crate::bytemuck::Pod, $crate::bytemuck::Zeroable)]
+        $(#[$meta])*
+        $vis struct $name {
+            $($field_vis $field : $ty),*
+        }
+
+        impl $crate::UniformProvider for $name {
+            fn as_bytes(&self) -> &[u8] {
+                $crate::bytemuck::bytes_of(self)
+            }
+        }
+
+        const _: () = {
+            assert!(
+                ::core::mem::size_of::<$name>() % 16 == 0,
+                concat!(
+                    "uniform_params!: struct `",
+                    stringify!($name),
+                    "` size must be a multiple of 16 bytes (add padding fields)"
+                )
+            );
+        };
+    };
+}
+
 /// Create a compute shader with automatic hot reload.
 ///
 /// Uses `file!()` at compile time to derive the correct hot reload path,
