@@ -103,13 +103,14 @@ impl RenderKit {
         })
     }
 
-    /// Create RenderKit with standard texture layout
-    pub fn new_with_standard_layout(core: &Core) -> Self {
+    /// Create RenderKit with the standard texture layout (texture + sampler).
+    pub fn new(core: &Core) -> Self {
         let layout = Self::create_standard_texture_layout(&core.device);
-        Self::new(core, &layout, None)
+        Self::new_with_layout(core, &layout, None)
     }
 
-    pub fn new(core: &Core, layout: &wgpu::BindGroupLayout, fragment_entry: Option<&str>) -> Self {
+    /// Create RenderKit with a custom bind group layout and optional fragment entry point.
+    pub fn new_with_layout(core: &Core, layout: &wgpu::BindGroupLayout, fragment_entry: Option<&str>) -> Self {
         let bind_group_layouts = &[layout];
         let time_bind_group_layout =
             core.device
@@ -411,6 +412,7 @@ impl RenderKit {
         self.handle_render_output(core, &frame.view, full_output, &mut encoder);
         core.queue.submit(std::iter::once(encoder.finish()));
         frame.output.present();
+        self.fps_tracker.update();
     }
 
     pub fn apply_default_style(ctx: &egui::Context) {
