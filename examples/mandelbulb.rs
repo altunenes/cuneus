@@ -1,12 +1,11 @@
 use cuneus::compute::ComputeShader;
 use cuneus::{
-    Core, ExportManager, RenderKit, ShaderControls, ShaderManager, UniformProvider,
+    Core, ExportManager, RenderKit, ShaderControls, ShaderManager,
 };
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct MandelbulbParams {
+cuneus::uniform_params! {
+    struct MandelbulbParams {
     power: f32,
     max_bounces: u32,
     samples_per_pixel: u32,
@@ -54,11 +53,6 @@ struct MandelbulbParams {
     rotation_z: f32,
     _pad: f32,
 }
-
-impl UniformProvider for MandelbulbParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
 }
 
 struct MandelbulbShader {
@@ -135,8 +129,7 @@ impl ShaderManager for MandelbulbShader {
             rotation_z: 0.0,
             _pad: 0.0,
         };
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         // multipass system: buffer_a (self-feedback) -> main_image (in shadertoy term)
         // buffa: self-feedback for accumulation
@@ -176,10 +169,6 @@ impl ShaderManager for MandelbulbShader {
     }
 
     fn update(&mut self, core: &Core) {
-        self.base.fps_tracker.update();
-
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
 
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);

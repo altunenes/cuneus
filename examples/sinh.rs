@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct SinhParams {
+cuneus::uniform_params! {
+    struct SinhParams {
     aa: i32,
     camera_x: f32,
     camera_y: f32,
@@ -28,20 +27,13 @@ struct SinhParams {
     iterations: i32,
     bound: f32,
     fractal_scale: f32,
-    vignette_offset: f32,
-}
-
-impl UniformProvider for SinhParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    vignette_offset: f32}
 }
 
 struct SinhShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: SinhParams,
-}
+    current_params: SinhParams}
 
 impl SinhShader {
     fn clear_buffers(&mut self, core: &Core) {
@@ -52,8 +44,7 @@ impl SinhShader {
 impl ShaderManager for SinhShader {
     fn init(core: &Core) -> Self {
         // Create texture bind group layout for displaying compute shader output
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let initial_params = SinhParams {
             aa: 2,
@@ -79,8 +70,7 @@ impl ShaderManager for SinhShader {
             iterations: 65,
             bound: 12.25,
             fractal_scale: 0.05,
-            vignette_offset: 0.0,
-        };
+            vignette_offset: 0.0};
 
         let config = ComputeShader::builder()
             .with_entry_point("main")
@@ -98,17 +88,12 @@ impl ShaderManager for SinhShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
-
-        self.base.fps_tracker.update();
     }
     fn resize(&mut self, core: &Core) {
         self.base.default_resize(core, &mut self.compute_shader);

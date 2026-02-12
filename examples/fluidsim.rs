@@ -16,9 +16,8 @@ const PRESSURE_ITERATIONS: u32 = 20;
 const INTERNAL_WIDTH: u32 = 2048;
 const INTERNAL_HEIGHT: u32 = 1152;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct FluidParams {
+cuneus::uniform_params! {
+    struct FluidParams {
     sim_width: u32,
     sim_height: u32,
     display_width: u32,
@@ -43,13 +42,7 @@ struct FluidParams {
     prs_ping: u32, // which pressure buffer to READ from
     dye_ping: u32, // which dye buffer to READ from
     do_splat: u32,
-    _pad: u32,
-}
-
-impl UniformProvider for FluidParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    _pad: u32}
 }
 
 struct FluidSim {
@@ -62,13 +55,11 @@ struct FluidSim {
     color_timer: f32,
     last_time: std::time::Instant,
     first_frame: bool,
-    needs_clear: bool,
-}
+    needs_clear: bool}
 
 impl ShaderManager for FluidSim {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
 
         let sim_width = INTERNAL_WIDTH / SIM_SCALE;
@@ -136,8 +127,7 @@ impl ShaderManager for FluidSim {
             prs_ping: 0,
             dye_ping: 0,
             do_splat: 0,
-            _pad: 0,
-        };
+            _pad: 0};
 
         compute_shader.set_custom_params(params, &core.queue);
 
@@ -151,8 +141,7 @@ impl ShaderManager for FluidSim {
             color_timer: 0.0,
             last_time: std::time::Instant::now(),
             first_frame: true,
-            needs_clear: true,
-        }
+            needs_clear: true}
     }
 
     fn update(&mut self, core: &Core) {
@@ -215,10 +204,7 @@ impl ShaderManager for FluidSim {
             self.params.do_splat = 0;
             self.mouse_initialized = false;
         }
-
-        self.compute_shader.check_hot_reload(&core.device);
         self.compute_shader.handle_export(core, &mut self.base);
-        self.base.fps_tracker.update();
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
@@ -455,8 +441,7 @@ impl FluidSim {
             2 => (0.0, 1.0, t),
             3 => (0.0, q, 1.0),
             4 => (t, 0.0, 1.0),
-            _ => (1.0, 0.0, q),
-        };
+            _ => (1.0, 0.0, q)};
 
         [r * 0.2, g * 0.2, b * 0.2]
     }

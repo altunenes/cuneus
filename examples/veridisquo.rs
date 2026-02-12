@@ -3,9 +3,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct SongParams {
+cuneus::uniform_params! {
+    struct SongParams {
     volume: f32,
     octave_shift: f32,
     tempo_multiplier: f32,
@@ -13,26 +12,18 @@ struct SongParams {
     crossfade: f32,
     reverb_mix: f32,
     chorus_rate: f32,
-    _padding: f32,
-}
-
-impl UniformProvider for SongParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    _padding: f32}
 }
 
 struct VeridisQuo {
     base: RenderKit,
     compute_shader: ComputeShader,
     current_params: SongParams,
-    audio_synthesis: Option<SynthesisManager>,
-}
+    audio_synthesis: Option<SynthesisManager>}
 
 impl ShaderManager for VeridisQuo {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let initial_params = SongParams {
             volume: 0.5,
@@ -42,8 +33,7 @@ impl ShaderManager for VeridisQuo {
             crossfade: 0.0,
             reverb_mix: 0.0,
             chorus_rate: 0.0,
-            _padding: 0.0,
-        };
+            _padding: 0.0};
 
         let config = ComputeShader::builder()
             .with_entry_point("main")
@@ -88,18 +78,15 @@ impl ShaderManager for VeridisQuo {
             base,
             compute_shader,
             current_params: initial_params,
-            audio_synthesis,
-        }
+            audio_synthesis}
     }
 
     fn update(&mut self, core: &Core) {
-        self.compute_shader.check_hot_reload(&core.device);
 
         let current_time = self.base.controls.get_time(&self.base.start_time);
         let delta = 1.0 / 60.0;
         self.compute_shader
             .set_time(current_time, delta, &core.queue);
-        self.base.fps_tracker.update();
 
         // Read GPU audio parameters and update synthesis
         if let Some(ref mut synth) = self.audio_synthesis {

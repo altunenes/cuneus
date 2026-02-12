@@ -47,9 +47,7 @@ struct AudioVisCompute {
 impl ShaderManager for AudioVisCompute {
     fn init(core: &Core) -> Self {
         let initial_params = AudioVisParams::default();
-
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let config = ComputeShader::builder()
             .with_entry_point("main")
@@ -85,11 +83,6 @@ impl ShaderManager for AudioVisCompute {
         self.base.update_audio_spectrum(&core.queue);
         self.compute_shader
             .update_audio_spectrum(&self.base.resolution_uniform.data, &core.queue);
-
-        self.base.fps_tracker.update();
-
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
     }

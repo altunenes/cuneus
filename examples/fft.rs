@@ -1,12 +1,10 @@
 use cuneus::compute::{
-    ComputeShader, PassDescription, StorageBufferSpec, COMPUTE_TEXTURE_FORMAT_RGBA16,
-};
-use cuneus::{Core, ExportManager, RenderKit, ShaderControls, ShaderManager, UniformProvider};
+    ComputeShader, PassDescription, StorageBufferSpec, COMPUTE_TEXTURE_FORMAT_RGBA16};
+use cuneus::{Core, ExportManager, RenderKit, ShaderControls, ShaderManager};
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct FFTParams {
+cuneus::uniform_params! {
+    struct FFTParams {
     filter_type: i32,
     filter_strength: f32,
     filter_direction: f32,
@@ -14,13 +12,7 @@ struct FFTParams {
     show_freqs: i32,
     resolution: u32,
     is_bw: i32,
-    _padding: u32,
-}
-
-impl UniformProvider for FFTParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    _padding: u32}
 }
 
 struct FFTShader {
@@ -40,11 +32,8 @@ impl ShaderManager for FFTShader {
             show_freqs: 0,
             resolution: 1024,
             is_bw: 0,
-            _padding: 0,
-        };
-
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+            _padding: 0};
+        let base = RenderKit::new(core);
 
         // Define the FFT multi-pass pipeline
         let passes = vec![
@@ -77,8 +66,7 @@ impl ShaderManager for FFTShader {
             base,
             compute_shader,
             should_initialize: true,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
@@ -98,8 +86,6 @@ impl ShaderManager for FFTShader {
                 &core.device,
             );
         }
-
-        self.base.fps_tracker.update();
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
     }
@@ -206,8 +192,7 @@ impl ShaderManager for FFTShader {
                                         1 => "HP",
                                         2 => "BP",
                                         3 => "Directional",
-                                        _ => "None",
-                                    })
+                                        _ => "None"})
                                     .show_ui(ui, |ui| {
                                         ui.selectable_value(&mut params.filter_type, 0, "LP")
                                             .changed()

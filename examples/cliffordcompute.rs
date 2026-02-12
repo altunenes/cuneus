@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct CliffordParams {
+cuneus::uniform_params! {
+    struct CliffordParams {
     a: f32,
     b: f32,
     c: f32,
@@ -23,19 +22,14 @@ struct CliffordParams {
     scale: f32,
     dof_amount: f32,
     dof_focal_dist: f32,
-}
-
-impl UniformProvider for CliffordParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
+    _pad_m: [f32; 2],
     }
 }
 
 struct CliffordShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: CliffordParams,
-}
+    current_params: CliffordParams}
 
 impl CliffordShader {
     fn clear_buffers(&mut self, core: &Core) {
@@ -45,8 +39,7 @@ impl CliffordShader {
 
 impl ShaderManager for CliffordShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let initial_params = CliffordParams {
             a: 1.7,
@@ -67,6 +60,7 @@ impl ShaderManager for CliffordShader {
             scale: 0.6,
             dof_amount: 1.0,
             dof_focal_dist: 0.5,
+            _pad_m: [0.0; 2],
         };
 
         let mut config = ComputeShader::builder()
@@ -88,15 +82,10 @@ impl ShaderManager for CliffordShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
-        self.base.fps_tracker.update();
-
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export with custom dispatch pattern for cliffordcompute
         self.compute_shader.handle_export_dispatch(
             core,

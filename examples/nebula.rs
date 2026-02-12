@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct NebulaParams {
+cuneus::uniform_params! {
+    struct NebulaParams {
     iterations: i32,
     formuparam: f32,
     volsteps: i32,
@@ -42,11 +41,9 @@ struct NebulaParams {
     visual_mode: i32,
     _padding2: f32,
     _padding3: f32,
-}
-
-impl UniformProvider for NebulaParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
+    _pad_m1: f32,
+    _pad_m2: f32,
+    _pad_m3: f32,
     }
 }
 
@@ -54,8 +51,7 @@ struct NebulaShader {
     base: RenderKit,
     compute_shader: ComputeShader,
     current_params: NebulaParams,
-    frame_count: u32,
-}
+    frame_count: u32}
 
 impl NebulaShader {
     fn clear_buffers(&mut self, core: &Core) {
@@ -66,8 +62,7 @@ impl NebulaShader {
 
 impl ShaderManager for NebulaShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let initial_params = NebulaParams {
             iterations: 17,
@@ -107,6 +102,9 @@ impl ShaderManager for NebulaShader {
             visual_mode: 0,
             _padding2: 0.0,
             _padding3: 0.0,
+            _pad_m1: 0.0,
+            _pad_m2: 0.0,
+            _pad_m3: 0.0,
         };
 
         let mut config = ComputeShader::builder()
@@ -129,17 +127,12 @@ impl ShaderManager for NebulaShader {
             base,
             compute_shader,
             current_params: initial_params,
-            frame_count: 0,
-        }
+            frame_count: 0}
     }
 
     fn update(&mut self, core: &Core) {
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
-
-        self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {

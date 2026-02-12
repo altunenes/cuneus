@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct RorschachParams {
+cuneus::uniform_params! {
+    struct RorschachParams {
     seed: f32,
     zoom: f32,
     threshold: f32,
@@ -28,20 +27,13 @@ struct RorschachParams {
     tint_z: f32,
     _pad_final1: f32,
     _pad_final2: f32,
-    _pad_final3: f32,
-}
-
-impl UniformProvider for RorschachParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    _pad_final3: f32}
 }
 
 struct RorschachShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: RorschachParams,
-}
+    current_params: RorschachParams}
 
 impl ShaderManager for RorschachShader {
     fn init(core: &Core) -> Self {
@@ -67,11 +59,8 @@ impl ShaderManager for RorschachShader {
 
             _pad_final1: 0.0,
             _pad_final2: 0.0,
-            _pad_final3: 0.0,
-        };
-
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+            _pad_final3: 0.0};
+        let base = RenderKit::new(core);
 
         let passes = vec![
             PassDescription::new("buffer_a", &[]), 
@@ -96,18 +85,15 @@ impl ShaderManager for RorschachShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
-        self.compute_shader.check_hot_reload(&core.device);
         self.compute_shader.handle_export(core, &mut self.base);
 
         let current_time = self.base.controls.get_time(&self.base.start_time);
         let delta = 1.0 / 60.0;
         self.compute_shader.set_time(current_time, delta, &core.queue);
-        self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {

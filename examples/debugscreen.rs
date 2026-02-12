@@ -7,15 +7,13 @@ struct DebugScreen {
     base: RenderKit,
     compute_shader: ComputeShader,
     audio_synthesis: Option<SynthesisManager>,
-    generate_note: bool,
-}
+    generate_note: bool}
 
 impl ShaderManager for DebugScreen {
     fn init(core: &Core) -> Self {
         // Create texture display layout - needed to show compute shader output on screen
         // This layout defines how to bind the texture (binding 0) and sampler (binding 1) for rendering
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         // Entry point configuration
         let config = ComputeShader::builder()
@@ -39,15 +37,13 @@ impl ShaderManager for DebugScreen {
                     Some(synth)
                 }
             }
-            Err(_e) => None,
-        };
+            Err(_e) => None};
 
         Self {
             base,
             compute_shader,
             audio_synthesis,
-            generate_note: false,
-        }
+            generate_note: false}
     }
 
     fn update(&mut self, core: &Core) {
@@ -62,11 +58,6 @@ impl ShaderManager for DebugScreen {
             mouse_uniform.data = self.base.mouse_tracker.uniform;
             mouse_uniform.update(&core.queue);
         }
-
-        self.base.fps_tracker.update();
-
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
 
         // Handle audio generation
         if self.generate_note {

@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct CNNParams {
+cuneus::uniform_params! {
+    struct CNNParams {
     brush_size: f32,
     input_resolution: f32,
     clear_canvas: i32,
@@ -23,11 +22,8 @@ struct CNNParams {
     _padding4: f32,
     _padding5: f32,
     _padding6: f32,
-}
-
-impl UniformProvider for CNNParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
+    _pad_m1: f32,
+    _pad_m2: f32,
     }
 }
 
@@ -35,15 +31,13 @@ struct CNNDigitRecognizer {
     base: RenderKit,
     compute_shader: ComputeShader,
     current_params: CNNParams,
-    first_frame: bool,
-}
+    first_frame: bool}
 
 impl CNNDigitRecognizer {}
 
 impl ShaderManager for CNNDigitRecognizer {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         // Configure multi-pass CNN with 5 stages: canvas_update -> conv_layer1 -> conv_layer2 -> fully_connected -> main_image
         let passes = vec![
@@ -104,21 +98,18 @@ impl ShaderManager for CNNDigitRecognizer {
             _padding4: 0.0,
             _padding5: 0.0,
             _padding6: 0.0,
+            _pad_m1: 0.0,
+            _pad_m2: 0.0,
         };
 
         Self {
             base,
             compute_shader,
             current_params,
-            first_frame: true,
-        }
+            first_frame: true}
     }
 
-    fn update(&mut self, core: &Core) {
-        self.base.fps_tracker.update();
-
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
+    fn update(&mut self, _core: &Core) {
     }
 
     fn resize(&mut self, core: &Core) {

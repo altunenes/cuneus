@@ -20,8 +20,7 @@ struct CameraMovement {
     last_mouse_y: f32,
     mouse_initialized: bool,
     mouse_look_enabled: bool,
-    look_changed: bool,
-}
+    look_changed: bool}
 
 impl Default for CameraMovement {
     fn default() -> Self {
@@ -43,8 +42,7 @@ impl Default for CameraMovement {
             last_mouse_y: 0.0,
             mouse_initialized: false,
             mouse_look_enabled: true,
-            look_changed: false,
-        }
+            look_changed: false}
     }
 }
 
@@ -165,9 +163,8 @@ impl CameraMovement {
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct PathTracingParams {
+cuneus::uniform_params! {
+    struct PathTracingParams {
     camera_pos_x: f32,
     camera_pos_y: f32,
     camera_pos_z: f32,
@@ -187,13 +184,7 @@ struct PathTracingParams {
 
     rotation_speed: f32,
 
-    exposure: f32,
-}
-
-impl UniformProvider for PathTracingParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    exposure: f32}
 }
 
 struct PathTracingShader {
@@ -202,8 +193,7 @@ struct PathTracingShader {
     current_params: PathTracingParams,
     camera_movement: CameraMovement,
     frame_count: u32,
-    should_reset_accumulation: bool,
-}
+    should_reset_accumulation: bool}
 
 impl PathTracingShader {
     fn clear_buffers(&mut self, core: &Core) {
@@ -215,8 +205,7 @@ impl PathTracingShader {
 
 impl ShaderManager for PathTracingShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let initial_params = PathTracingParams {
             camera_pos_x: 0.0,
@@ -234,8 +223,7 @@ impl ShaderManager for PathTracingShader {
             _padding1: 0.0,
             _padding2: 0.0,
             rotation_speed: 0.2,
-            exposure: 1.5,
-        };
+            exposure: 1.5};
 
         let config = ComputeShader::builder()
             .with_entry_point("main")
@@ -261,8 +249,7 @@ impl ShaderManager for PathTracingShader {
             current_params: initial_params,
             camera_movement: CameraMovement::default(),
             frame_count: 0,
-            should_reset_accumulation: true,
-        }
+            should_reset_accumulation: true}
     }
 
     fn update(&mut self, core: &Core) {
@@ -287,8 +274,6 @@ impl ShaderManager for PathTracingShader {
                 .set_custom_params(self.current_params, &core.queue);
             self.should_reset_accumulation = true;
         }
-
-        self.base.fps_tracker.update();
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
     }
@@ -445,9 +430,6 @@ impl ShaderManager for PathTracingShader {
             self.current_params = params;
             self.compute_shader.set_custom_params(params, &core.queue);
         }
-
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
 
         // Set frame count for random number generation
         self.compute_shader.time_uniform.data.frame = self.frame_count;

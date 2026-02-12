@@ -51,8 +51,7 @@ impl ShaderManager for Shader {
         let initial_y = 2.14278;
 
         // Create texture display layout
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let config = ComputeShader::builder()
             .with_entry_point("main")
@@ -97,8 +96,6 @@ impl ShaderManager for Shader {
     }
 
     fn update(&mut self, core: &Core) {
-        self.base.fps_tracker.update();
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
     }

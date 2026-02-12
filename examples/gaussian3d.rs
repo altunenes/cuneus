@@ -7,9 +7,8 @@ use winit::event::WindowEvent;
 const MAX_GAUSSIANS: u32 = 2_000_000;
 
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct GaussianParams {
+cuneus::uniform_params! {
+    struct GaussianParams {
     num_gaussians: u32,
     gaussian_size: f32,
     scene_scale: f32,
@@ -17,13 +16,7 @@ struct GaussianParams {
     depth_shift: u32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
-}
-
-impl UniformProvider for GaussianParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    _pad2: u32}
 }
 
 impl Default for GaussianParams {
@@ -36,8 +29,7 @@ impl Default for GaussianParams {
             depth_shift: 16,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
-        }
+            _pad2: 0}
     }
 }
 
@@ -49,8 +41,7 @@ struct CameraState {
     target: [f32; 3],
     is_dragging: bool,
     last_mouse: [f32; 2],
-    keys_held: HashSet<String>,
-}
+    keys_held: HashSet<String>}
 
 impl Default for CameraState {
     fn default() -> Self {
@@ -62,8 +53,7 @@ impl Default for CameraState {
             target: [0.0; 3],
             is_dragging: false,
             last_mouse: [0.0; 2],
-            keys_held: HashSet::new(),
-        }
+            keys_held: HashSet::new()}
     }
 }
 
@@ -118,8 +108,7 @@ struct Gaussian3DShader {
     params_buffer: wgpu::Buffer,
     params: GaussianParams,
     camera: CameraState,
-    surface_format: wgpu::TextureFormat,
-}
+    surface_format: wgpu::TextureFormat}
 
 impl Gaussian3DShader {
     fn load_ply(&mut self, core: &Core, path: &std::path::Path) {
@@ -154,8 +143,7 @@ impl Gaussian3DShader {
                 self.sorter.force_sort();
                 self.camera.reset();
             }
-            Err(e) => eprintln!("Load error: {:?}", e),
-        }
+            Err(e) => eprintln!("Load error: {:?}", e)}
     }
 
     fn sync_params(&self, core: &Core) {
@@ -198,8 +186,7 @@ impl Gaussian3DShader {
 
 impl ShaderManager for Gaussian3DShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let gaussian_size = (MAX_GAUSSIANS as u64) * 64;
         let gaussian_2d_size = (MAX_GAUSSIANS as u64) * 48;
@@ -225,15 +212,13 @@ impl ShaderManager for Gaussian3DShader {
             label: Some("Gaussian Camera"),
             size: std::mem::size_of::<GaussianCamera>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+            mapped_at_creation: false});
 
         let params_buffer = core.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Gaussian Params"),
             size: std::mem::size_of::<GaussianParams>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+            mapped_at_creation: false});
 
         let sorter = GaussianSorter::new_16bit(&core.device);
         let renderer = GaussianRenderer::new(
@@ -252,8 +237,7 @@ impl ShaderManager for Gaussian3DShader {
             params_buffer,
             params: GaussianParams::default(),
             camera: CameraState::new(),
-            surface_format: core.config.format,
-        }
+            surface_format: core.config.format}
     }
 
     fn update(&mut self, core: &Core) {
@@ -271,8 +255,6 @@ impl ShaderManager for Gaussian3DShader {
 
         let current_time = self.base.controls.get_time(&self.base.start_time);
         self.preprocess.set_time(current_time, dt, &core.queue);
-
-        self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {
@@ -380,8 +362,7 @@ impl ShaderManager for Gaussian3DShader {
         }
 
         let mut encoder = core.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Gaussian3D"),
-        });
+            label: Some("Gaussian3D")});
 
         let count = self.params.num_gaussians;
         if count > 0 && self.render_bind_group.is_some() {
@@ -406,10 +387,8 @@ impl ShaderManager for Gaussian3DShader {
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
+                            store: wgpu::StoreOp::Store},
+                        depth_slice: None})],
                     ..Default::default()
                 });
                 self.renderer.render(&mut pass, self.render_bind_group.as_ref().unwrap(), count);
@@ -422,10 +401,8 @@ impl ShaderManager for Gaussian3DShader {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
+                        store: wgpu::StoreOp::Store},
+                    depth_slice: None})],
                 ..Default::default()
             });
         }
@@ -489,8 +466,7 @@ impl ShaderManager for Gaussian3DShader {
         if let WindowEvent::MouseWheel { delta, .. } = event {
             let d = match delta {
                 winit::event::MouseScrollDelta::LineDelta(_, y) => *y,
-                winit::event::MouseScrollDelta::PixelDelta(p) => (p.y as f32 / 100.0).clamp(-3.0, 3.0),
-            };
+                winit::event::MouseScrollDelta::PixelDelta(p) => (p.y as f32 / 100.0).clamp(-3.0, 3.0)};
             let factor = (1.0 + d * 0.1).clamp(0.5, 2.0);
             self.camera.distance = (self.camera.distance * factor).clamp(0.1, 500.0);
             return true;

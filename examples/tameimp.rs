@@ -98,8 +98,7 @@ struct ExperimentShader {
 
 impl ShaderManager for ExperimentShader {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
         let initial_params = ExperimentParams::default();
 
         let config = ComputeShader::builder()
@@ -123,9 +122,7 @@ impl ShaderManager for ExperimentShader {
     }
 
     fn update(&mut self, core: &Core) {
-        self.compute_shader.check_hot_reload(&core.device);
         self.compute_shader.handle_export(core, &mut self.base);
-        self.base.fps_tracker.update();
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {

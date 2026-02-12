@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct SplattingParams {
+cuneus::uniform_params! {
+    struct SplattingParams {
     animation_speed: f32,
     splat_size: f32,
     particle_spread: f32,
@@ -16,20 +15,13 @@ struct SplattingParams {
     trail_decay: f32,
     flow_strength: f32,
     _padding1: f32,
-    _padding2: u32,
-}
-
-impl UniformProvider for SplattingParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    _padding2: u32}
 }
 
 struct ColorProjection {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: SplattingParams,
-}
+    current_params: SplattingParams}
 
 impl ColorProjection {
     fn clear_buffers(&mut self, core: &Core) {
@@ -39,8 +31,7 @@ impl ColorProjection {
 
 impl ShaderManager for ColorProjection {
     fn init(core: &Core) -> Self {
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+        let base = RenderKit::new(core);
 
         let initial_params = SplattingParams {
             animation_speed: 1.0,
@@ -54,8 +45,7 @@ impl ShaderManager for ColorProjection {
             trail_decay: 0.95,
             flow_strength: 1.0,
             _padding1: 0.0,
-            _padding2: 0,
-        };
+            _padding2: 0};
 
         // Define the multi-stage passes
         let passes = vec![
@@ -85,8 +75,7 @@ impl ShaderManager for ColorProjection {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
@@ -105,8 +94,6 @@ impl ShaderManager for ColorProjection {
                 &core.device,
             );
         }
-
-        self.base.fps_tracker.update();
     }
 
     fn resize(&mut self, core: &Core) {
@@ -260,9 +247,6 @@ impl ShaderManager for ColorProjection {
             self.current_params = params;
             self.compute_shader.set_custom_params(params, &core.queue);
         }
-
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
 

@@ -2,28 +2,20 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C, align(16))]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct FluidParams {
+cuneus::uniform_params! {
+    struct FluidParams {
     rotation_speed: f32,
     motor_strength: f32,
     distortion: f32,
     feedback: f32,
     particle_size: f32,
-    _padding: [f32; 7],
-}
-
-impl UniformProvider for FluidParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    _padding: [f32; 7]}
 }
 
 struct FluidShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: FluidParams,
-}
+    current_params: FluidParams}
 
 impl ShaderManager for FluidShader {
     fn init(core: &Core) -> Self {
@@ -33,11 +25,8 @@ impl ShaderManager for FluidShader {
             distortion: 10.0,
             feedback: 0.95,
             particle_size: 1.0,
-            _padding: [0.0; 7],
-        };
-
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+            _padding: [0.0; 7]};
+        let base = RenderKit::new(core);
 
         // Create multipass system: buffer_a (simulation) -> main_image (display)
         let passes = vec![
@@ -63,8 +52,7 @@ impl ShaderManager for FluidShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
@@ -86,11 +74,6 @@ impl ShaderManager for FluidShader {
         let delta = 1.0 / 60.0;
         self.compute_shader
             .set_time(current_time, delta, &core.queue);
-
-        self.base.fps_tracker.update();
-
-        // Check for hot reload updates
-        self.compute_shader.check_hot_reload(&core.device);
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
     }

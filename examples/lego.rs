@@ -2,9 +2,8 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::WindowEvent;
 
-#[repr(C, align(16))]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct LegoParams {
+cuneus::uniform_params! {
+    struct LegoParams {
     brick_scale: f32,
     lightdir_x: f32,
     lightdir_y: f32,
@@ -28,20 +27,13 @@ struct LegoParams {
     edge_blend: f32,
     _pad: f32,
     _pad2: f32,
-    _pad3: f32,
-}
-
-impl UniformProvider for LegoParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
+    _pad3: f32}
 }
 
 struct LegoShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: LegoParams,
-}
+    current_params: LegoParams}
 
 impl ShaderManager for LegoShader {
     fn init(core: &Core) -> Self {
@@ -69,11 +61,8 @@ impl ShaderManager for LegoShader {
             edge_blend: 0.3,
             _pad: 0.0,
             _pad2: 0.0,
-            _pad3: 0.0,
-        };
-
-        let texture_bind_group_layout = RenderKit::create_standard_texture_layout(&core.device);
-        let base = RenderKit::new(core, &texture_bind_group_layout, None);
+            _pad3: 0.0};
+        let base = RenderKit::new(core);
 
         let config = ComputeShader::builder()
             .with_entry_point("main_image")
@@ -91,8 +80,7 @@ impl ShaderManager for LegoShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params,
-        }
+            current_params: initial_params}
     }
 
     fn update(&mut self, core: &Core) {
@@ -112,9 +100,6 @@ impl ShaderManager for LegoShader {
         let delta = 1.0 / 60.0;
         self.compute_shader
             .set_time(current_time, delta, &core.queue);
-
-        self.base.fps_tracker.update();
-        self.compute_shader.check_hot_reload(&core.device);
         self.compute_shader.handle_export(core, &mut self.base);
     }
 
