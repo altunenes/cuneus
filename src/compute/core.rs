@@ -7,20 +7,14 @@ use wgpu;
 use super::builder::ComputeConfiguration;
 use super::multipass::MultiPassManager;
 use super::resource::ResourceLayout;
-use crate::{Core, FontSystem, ShaderHotReload, TextureManager, UniformBinding, UniformProvider};
+use crate::{Core, FontSystem, ShaderHotReload, TextureManager, UniformBinding};
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct ComputeTimeUniform {
-    pub time: f32,
-    pub delta: f32,
-    pub frame: u32,
-    pub _padding: u32,
-}
-
-impl UniformProvider for ComputeTimeUniform {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
+crate::uniform_params! {
+    pub struct ComputeTimeUniform {
+        pub time: f32,
+        pub delta: f32,
+        pub frame: u32,
+        pub _padding: u32,
     }
 }
 
@@ -962,6 +956,8 @@ impl ComputeShader {
         core: &Core,
         stage_index: usize,
     ) {
+        self.check_hot_reload(&core.device);
+
         let workgroup_count = [
             core.size.width.div_ceil(self.workgroup_size[0]),
             core.size.height.div_ceil(self.workgroup_size[1]),
@@ -971,6 +967,8 @@ impl ComputeShader {
     }
 
     pub fn dispatch(&mut self, encoder: &mut wgpu::CommandEncoder, core: &Core) {
+        self.check_hot_reload(&core.device);
+
         if self.dispatch_once && self.current_frame > 0 {
             return;
         }
