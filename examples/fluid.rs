@@ -92,8 +92,7 @@ impl ShaderManager for FluidShader {
         let mut controls_request = self
             .base
             .controls
-            .get_ui_request(&self.base.start_time, &core.size);
-        controls_request.current_fps = Some(self.base.fps_tracker.fps());
+            .get_ui_request(&self.base.start_time, &core.size, self.base.fps_tracker.fps());
 
         let using_video_texture = self.base.using_video_texture;
         let using_hdri_texture = self.base.using_hdri_texture;

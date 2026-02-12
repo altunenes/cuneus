@@ -219,8 +219,7 @@ impl ShaderManager for MandelbulbShader {
         let mut controls_request = self
             .base
             .controls
-            .get_ui_request(&self.base.start_time, &core.size);
-        controls_request.current_fps = Some(self.base.fps_tracker.fps());
+            .get_ui_request(&self.base.start_time, &core.size, self.base.fps_tracker.fps());
 
         let current_fps = self.base.fps_tracker.fps();
 

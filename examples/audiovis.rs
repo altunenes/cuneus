@@ -113,7 +113,7 @@ impl ShaderManager for AudioVisCompute {
         let mut controls_request = self
             .base
             .controls
-            .get_ui_request(&self.base.start_time, &core.size);
+            .get_ui_request(&self.base.start_time, &core.size, self.base.fps_tracker.fps());
 
         let using_video_texture = self.base.using_video_texture;
         let using_hdri_texture = self.base.using_hdri_texture;
@@ -121,8 +121,6 @@ impl ShaderManager for AudioVisCompute {
         let video_info = self.base.get_video_info();
         let hdri_info = self.base.get_hdri_info();
         let webcam_info = self.base.get_webcam_info();
-
-        controls_request.current_fps = Some(self.base.fps_tracker.fps());
 
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
