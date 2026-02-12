@@ -321,8 +321,7 @@ impl ShaderManager for FluidSim {
         let mut should_clear = false;
         let mut should_start_export = false;
         let mut export_request = self.base.export_manager.get_ui_request();
-        let mut controls_request = self.base.controls.get_ui_request(&self.base.start_time, &core.size);
-        controls_request.current_fps = Some(self.base.fps_tracker.fps());
+        let mut controls_request = self.base.controls.get_ui_request(&self.base.start_time, &core.size, self.base.fps_tracker.fps());
 
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {

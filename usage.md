@@ -144,6 +144,10 @@ impl ShaderManager for MyShader {
         // begin_frame() bundles surface texture + view + encoder into a FrameContext
         let mut frame = self.base.begin_frame(core)?;
 
+        // get_ui_request() returns a ControlsRequest with time, window size, and FPS auto-populated
+        let mut controls_request = self.base.controls
+            .get_ui_request(&self.base.start_time, &core.size, self.base.fps_tracker.fps());
+
         // Build the UI (apply_default_style sets the standard theme)
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {

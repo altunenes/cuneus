@@ -144,6 +144,7 @@ impl ShaderControls {
         &mut self,
         start_time: &std::time::Instant,
         size: &winit::dpi::PhysicalSize<u32>,
+        fps: f32,
     ) -> ControlsRequest {
         let mut load_media_path = None;
         let mut play_video = false;
@@ -166,7 +167,7 @@ impl ShaderControls {
             should_clear_buffers: false,
             current_time: Some(self.get_time(start_time)),
             window_size: Some((size.width, size.height)),
-            current_fps: None,
+            current_fps: Some(fps),
 
             load_media_path,
             play_video,
