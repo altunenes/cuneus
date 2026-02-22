@@ -965,9 +965,11 @@ impl ComputeShader {
     ) {
         self.check_hot_reload(&core.device);
 
+        let width = self.output_texture.texture.width();
+        let height = self.output_texture.texture.height();
         let workgroup_count = [
-            core.size.width.div_ceil(self.workgroup_size[0]),
-            core.size.height.div_ceil(self.workgroup_size[1]),
+            width.div_ceil(self.workgroup_size[0]),
+            height.div_ceil(self.workgroup_size[1]),
             1,
         ];
         self.dispatch_stage_with_workgroups(encoder, stage_index, workgroup_count);
@@ -980,9 +982,11 @@ impl ComputeShader {
             return;
         }
 
+        let width = self.output_texture.texture.width();
+        let height = self.output_texture.texture.height();
         let workgroup_count = [
-            core.size.width.div_ceil(self.workgroup_size[0]),
-            core.size.height.div_ceil(self.workgroup_size[1]),
+            width.div_ceil(self.workgroup_size[0]),
+            height.div_ceil(self.workgroup_size[1]),
             1,
         ];
 
