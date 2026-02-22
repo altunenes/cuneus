@@ -72,6 +72,7 @@ pub struct RenderKit {
     pub using_hdri_texture: bool,
     pub hdri_metadata: Option<HdriMetadata>,
     pub hdri_file_data: Option<Vec<u8>>,
+    initial_logical_height: f32,
 }
 
 impl RenderKit {
@@ -270,6 +271,7 @@ impl RenderKit {
             using_hdri_texture: false,
             hdri_metadata: None,
             hdri_file_data: None,
+            initial_logical_height: core.size.height as f32 / core.window().scale_factor() as f32,
         }
     }
 
@@ -336,6 +338,12 @@ impl RenderKit {
     where
         F: FnMut(&egui::Context),
     {
+        // Auto-scale egui proportionally to window size
+        let scale_factor = core.window().scale_factor() as f32;
+        let logical_height = core.size.height as f32 / scale_factor;
+        let zoom = (logical_height / self.initial_logical_height).clamp(0.5, 3.0);
+        self.context.set_zoom_factor(zoom);
+
         let raw_input = self.egui_state.take_egui_input(core.window());
         self.context.run(raw_input, |ctx| ui_builder(ctx))
     }
@@ -349,7 +357,7 @@ impl RenderKit {
     ) {
         let screen_descriptor = ScreenDescriptor {
             size_in_pixels: [core.config.width, core.config.height],
-            pixels_per_point: core.window().scale_factor() as f32,
+            pixels_per_point: self.context.pixels_per_point(),
         };
 
         let clipped_primitives = self
@@ -423,12 +431,12 @@ impl RenderKit {
                 .text_styles
                 .get_mut(&egui::TextStyle::Body)
                 .unwrap()
-                .size = 11.0;
+                .size = 12.0;
             style
                 .text_styles
                 .get_mut(&egui::TextStyle::Button)
                 .unwrap()
-                .size = 10.0;
+                .size = 11.0;
         });
     }
 
