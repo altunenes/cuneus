@@ -17,7 +17,7 @@ cuneus::uniform_params! {
     color_vibrancy: f32,
     mixing: f32,
     gamma: f32,
-    _pad1: f32,
+    feedback: f32,
     _pad2: f32}
 }
 struct FluidShader {
@@ -35,20 +35,20 @@ impl ShaderManager for FluidShader {
             turbulence: 0.003,
             flow_speed: 2.0,
             pos_diffusion: 0.3,
-            texture_influence: 1.0,
+            texture_influence: 1.3,
             light_intensity: 1.3,
             spec_power: 36.0,
             spec_intensity: 2.0,
             color_vibrancy: 1.3,
             mixing: 0.0,
             gamma: 1.1,
-            _pad1: 0.0,
+            feedback: 0.0,
             _pad2: 0.0};
         let base = RenderKit::new(core);
         let passes = vec![
             PassDescription::new("fluid_sim", &["fluid_sim", "color_map"]),
             PassDescription::new("position_field", &["fluid_sim", "position_field", "color_map"]),
-            PassDescription::new("color_map", &["position_field"]),
+            PassDescription::new("color_map", &["position_field", "color_map"]),
             PassDescription::new("main_image", &["color_map", "fluid_sim"]),
         ];
         let config = ComputeShader::builder()
@@ -113,10 +113,12 @@ impl ShaderManager for FluidShader {
                             changed |= ui.add(egui::Slider::new(&mut params.turbulence, 0.0..=0.02).text("Turbulence")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.viscosity, 0.0..=5.0).text("Viscosity")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.mixing, 0.0..=1.0).text("Mixing")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.feedback, 0.0..=1.01).text("Feedback")).changed();
                         });
                         egui::CollapsingHeader::new("Physics").default_open(false).show(ui, |ui| {
                             changed |= ui.add(egui::Slider::new(&mut params.pressure_scale, 0.0..=2.0).text("Pressure")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.gravity, 0.0..=0.2).text("Gravity")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.texture_influence, 0.0..=1.3).text("texture inf")).changed();
                         });
                         egui::CollapsingHeader::new("Display").default_open(false).show(ui, |ui| {
                             changed |= ui.add(egui::Slider::new(&mut params.light_intensity, 0.8..=2.0).text("Light")).changed();

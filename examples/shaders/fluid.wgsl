@@ -18,7 +18,7 @@ struct FluidParams {
     color_vibrancy: f32,
     mixing: f32,
     gamma: f32,
-    _pad1: f32,
+    feedback: f32,
     _pad2: f32,
 };
 @group(1) @binding(0) var output: texture_storage_2d<rgba16float, write>;
@@ -328,21 +328,40 @@ fn position_field(@builtin(global_invocation_id) id: vec3<u32>) {
     // Aggressive reseed for shattered regions
     let reseed = broken * 0.08;
     Q = mix(Q, vec4<f32>(U, 0.0, 0.0), reseed);
-    Q = vec4<f32>(Q.x - R.x * floor(Q.x / R.x), Q.y - R.y * floor(Q.y / R.y), Q.zw);
+    // Store per-frame velocity in .zw for color_map feedback advection
+    Q = vec4<f32>(Q.x - R.x * floor(Q.x / R.x), Q.y - R.y * floor(Q.y / R.y), total_vel.x, total_vel.y);
     if (time_data.frame < 2u) {
         Q = vec4<f32>(U, 0.0, 0.0);
     }
     textureStore(output, id.xy, Q);
 }
-// input_texture0 = position_field
+// input_texture0 = position_field (current frame) — .xy = position, .zw = velocity
+// input_texture1 = color_map (previous frame) — self-feedback
 @compute @workgroup_size(16, 16, 1)
 fn color_map(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
     if (id.x >= dims.x || id.y >= dims.y) { return; }
     let R = vec2<f32>(dims);
     let U = vec2<f32>(id.xy);
-    let pos = bilerp0(U);
-    let Q = textureSampleLevel(channel0, channel0_sampler, pos.xy / R, 0.0);
+    // Position field: .xy = where to sample original, .zw = per-frame velocity
+    let pos_data = bilerp0(U);
+    // Original texture at the advected position
+    let original = textureSampleLevel(channel0, channel0_sampler, pos_data.xy / R, 0.0);
+    // semi-Lagrangian trace-back
+    let v = pos_data.zw;
+    let trace = U - v;
+    let trace_wrapped = trace - R * floor(trace / R);
+    let prev_bilinear = bilerp1(trace_wrapped);
+    let ipx = vec2<i32>(floor(trace_wrapped));
+    let prev_nearest = textureLoad(input_texture1, clamp(ipx, vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1)), 0);
+    let prev = mix(prev_bilinear, prev_nearest, smoothstep(params.texture_influence, 0.8, params.feedback));
+    if (time_data.frame < 4u) {
+        textureStore(output, id.xy, original);
+        return;
+    }
+    let fb = clamp(params.feedback, 0.0, 1.0);
+    var Q = mix(original, prev, fb);
+    Q = clamp(Q, vec4<f32>(0.0), vec4<f32>(1.0));
     textureStore(output, id.xy, Q);
 }
 
@@ -356,12 +375,25 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     let U = vec2<f32>(id.xy);
     let uv = U / R;
     let base = bilerp0(U);
-    // surface normal from color_map gradients
-    let vn = length(bilerp0(U + vec2<f32>(0.0, 1.0)).xyz);
-    let ve = length(bilerp0(U + vec2<f32>(1.0, 0.0)).xyz);
-    let vs = length(bilerp0(U - vec2<f32>(0.0, 1.0)).xyz);
-    let vw = length(bilerp0(U - vec2<f32>(1.0, 0.0)).xyz);
-    let normal = normalize(vec3<f32>(ve - vw, vn - vs, 0.3));
+    // Surface normal from color_map gradients at two scales
+    // Fine (1px) captures sharp detail, coarse (3px) survives feedback blur
+    let vn1 = length(bilerp0(U + vec2<f32>(0.0, 1.0)).xyz);
+    let ve1 = length(bilerp0(U + vec2<f32>(1.0, 0.0)).xyz);
+    let vs1 = length(bilerp0(U - vec2<f32>(0.0, 1.0)).xyz);
+    let vw1 = length(bilerp0(U - vec2<f32>(1.0, 0.0)).xyz);
+    let grad_fine = vec2<f32>(ve1 - vw1, vn1 - vs1);
+    let vn3 = length(bilerp0(U + vec2<f32>(0.0, 3.0)).xyz);
+    let ve3 = length(bilerp0(U + vec2<f32>(3.0, 0.0)).xyz);
+    let vs3 = length(bilerp0(U - vec2<f32>(0.0, 3.0)).xyz);
+    let vw3 = length(bilerp0(U - vec2<f32>(3.0, 0.0)).xyz);
+    let grad_coarse = vec2<f32>(ve3 - vw3, vn3 - vs3) / 3.0;
+    let fine_strength = length(grad_fine);
+    let coarse_strength = length(grad_coarse);
+    let blend = smoothstep(0.0, 0.02, fine_strength);
+    let grad = mix(grad_coarse, grad_fine, blend);
+    let grad_mag = length(grad);
+    let z = mix(0.08, 0.3, smoothstep(0.0, 0.05, grad_mag));
+    let normal = normalize(vec3<f32>(grad, z));
     let light = normalize(vec3<f32>(
         3.0 + 0.2 * sin(time_data.time * 0.5),
         3.0 + 0.2 * cos(time_data.time * 0.5),
