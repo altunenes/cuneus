@@ -382,7 +382,14 @@ impl ComputeShader {
         });
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
 
         // Create a dummy bind group for display purposes - this is only used by the display renderer
         let dummy_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -989,6 +996,35 @@ impl ComputeShader {
         self.current_frame += 1;
     }
 
+    /// Dispatch at a specific resolution (used by export to compute at export resolution)
+    pub fn dispatch_at_resolution(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        core: &Core,
+        width: u32,
+        height: u32,
+    ) {
+        self.check_hot_reload(&core.device);
+
+        if self.dispatch_once && self.current_frame > 0 {
+            return;
+        }
+
+        let workgroup_count = [
+            width.div_ceil(self.workgroup_size[0]),
+            height.div_ceil(self.workgroup_size[1]),
+            1,
+        ];
+
+        if self.multipass_manager.is_some() {
+            self.dispatch_multipass(encoder, core, workgroup_count);
+        } else {
+            self.dispatch_single_pass(encoder, core, workgroup_count);
+        }
+
+        self.current_frame += 1;
+    }
+
     /// Flip ping-pong buffers for multi-pass rendering (call after render)
     pub fn flip_buffers(&mut self) {
         if let Some(ref mut multipass) = self.multipass_manager {
@@ -1190,7 +1226,14 @@ impl ComputeShader {
 
         let sampler = core
             .device
-            .create_sampler(&wgpu::SamplerDescriptor::default());
+            .create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::Repeat,
+                address_mode_w: wgpu::AddressMode::Repeat,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            });
 
         // Execute each pass in order with proper dependencies
         for pass_idx in 0..num_passes {
@@ -1605,6 +1648,21 @@ impl ComputeShader {
     /// Automatic export - call from shader update() method
     pub fn handle_export(&mut self, core: &Core, render_kit: &mut crate::RenderKit) {
         if let Some((frame, time)) = render_kit.export_manager.try_get_next_frame() {
+            let settings = render_kit.export_manager.settings();
+            let export_w = settings.width;
+            let export_h = settings.height;
+
+            // Resize compute to export resolution on first frame
+            if frame == 0 {
+                self.current_frame = 0;
+                let current_w = self.output_texture.texture.width();
+                let current_h = self.output_texture.texture.height();
+                if current_w != export_w || current_h != export_h {
+                    info!("Export: resizing compute from {}x{} to {}x{}", current_w, current_h, export_w, export_h);
+                    self.resize(core, export_w, export_h);
+                }
+            }
+
             match self.capture_export_frame(
                 core,
                 time,
@@ -1622,6 +1680,13 @@ impl ComputeShader {
                 }
             }
         } else {
+            // Export complete — resize back to window resolution
+            let current_w = self.output_texture.texture.width();
+            let current_h = self.output_texture.texture.height();
+            if current_w != core.size.width || current_h != core.size.height {
+                info!("Export complete: resizing compute back to {}x{}", core.size.width, core.size.height);
+                self.resize(core, core.size.width, core.size.height);
+            }
             render_kit.export_manager.complete_export();
         }
     }
@@ -1634,6 +1699,21 @@ impl ComputeShader {
         custom_dispatch: impl FnOnce(&mut Self, &mut wgpu::CommandEncoder, &Core),
     ) {
         if let Some((frame, time)) = render_kit.export_manager.try_get_next_frame() {
+            let settings = render_kit.export_manager.settings();
+            let export_w = settings.width;
+            let export_h = settings.height;
+
+            // Resize compute to export resolution on first frame
+            if frame == 0 {
+                self.current_frame = 0;
+                let current_w = self.output_texture.texture.width();
+                let current_h = self.output_texture.texture.height();
+                if current_w != export_w || current_h != export_h {
+                    info!("Export: resizing compute from {}x{} to {}x{}", current_w, current_h, export_w, export_h);
+                    self.resize(core, export_w, export_h);
+                }
+            }
+
             match self.capture_export_frame(core, time, render_kit, Some(custom_dispatch)) {
                 Ok(data) => {
                     let settings = render_kit.export_manager.settings();
@@ -1646,6 +1726,13 @@ impl ComputeShader {
                 }
             }
         } else {
+            // Export complete — resize back to window resolution
+            let current_w = self.output_texture.texture.width();
+            let current_h = self.output_texture.texture.height();
+            if current_w != core.size.width || current_h != core.size.height {
+                info!("Export complete: resizing compute back to {}x{}", core.size.width, core.size.height);
+                self.resize(core, core.size.width, core.size.height);
+            }
             render_kit.export_manager.complete_export();
         }
     }
@@ -1673,13 +1760,14 @@ impl ComputeShader {
                 label: Some("Export Encoder"),
             });
 
-        self.set_time(time, 0.0, &core.queue);
+        let delta = 1.0 / settings.fps as f32;
+        self.set_time(time, delta, &core.queue);
 
-        // Use custom dispatch if provided, otherwise use default
+        // Dispatch at export resolution
         if let Some(custom_dispatch) = custom_dispatch {
             custom_dispatch(self, &mut encoder, core);
         } else {
-            self.dispatch(&mut encoder, core);
+            self.dispatch_at_resolution(&mut encoder, core, settings.width, settings.height);
         }
 
         {
