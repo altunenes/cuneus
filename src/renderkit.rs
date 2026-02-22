@@ -431,12 +431,12 @@ impl RenderKit {
                 .text_styles
                 .get_mut(&egui::TextStyle::Body)
                 .unwrap()
-                .size = 12.0;
+                .size = 11.0;
             style
                 .text_styles
                 .get_mut(&egui::TextStyle::Button)
                 .unwrap()
-                .size = 11.0;
+                .size = 10.0;
         });
     }
 
