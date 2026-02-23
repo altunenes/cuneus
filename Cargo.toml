@@ -22,10 +22,10 @@ env_logger = "0.11.6"
 pollster = "0.4.0"
 rfd = "0.15.1"
 notify = "8.2.0"
-gstreamer = { version = "0.24.4", optional = true }
-gstreamer-video = { version = "0.24.4", optional = true }
-gstreamer-app = { version = "0.24.4", optional = true }
-gstreamer-pbutils = { version = "0.24.4", optional = true }
+gstreamer = { version = "0.25.0", optional = true }
+gstreamer-video = { version = "0.25.0", optional = true }
+gstreamer-app = { version = "0.25.0", optional = true }
+gstreamer-pbutils = { version = "0.25.0", optional = true }
 anyhow = "1.0.96"
 log = "0.4.25"
 ply-rs-bw = "=2.0.3"
