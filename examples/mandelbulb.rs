@@ -2,6 +2,7 @@ use cuneus::compute::ComputeShader;
 use cuneus::{
     Core, ExportManager, RenderKit, ShaderControls, ShaderManager,
 };
+use log::debug;
 use winit::event::WindowEvent;
 
 cuneus::uniform_params! {
@@ -176,7 +177,7 @@ impl ShaderManager for MandelbulbShader {
 
     fn resize(&mut self, core: &Core) {
         self.base.default_resize(core, &mut self.compute_shader);
-        println!("Resizing to {:?}", core.size);
+        debug!("Resizing to {:?}", core.size);
     }
 
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {

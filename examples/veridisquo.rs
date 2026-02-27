@@ -1,6 +1,7 @@
 use cuneus::audio::{EnvelopeConfig, SynthesisManager};
 use cuneus::compute::*;
 use cuneus::prelude::*;
+use log::{error, info};
 use winit::event::WindowEvent;
 
 cuneus::uniform_params! {
@@ -61,15 +62,15 @@ impl ShaderManager for VeridisQuo {
                 });
 
                 if let Err(e) = synth.start_gpu_synthesis() {
-                    eprintln!("Failed to start audio synthesis: {e}");
+                    error!("Failed to start audio synthesis: {e}");
                     None
                 } else {
-                    println!("Audio synthesis started.");
+                    info!("Audio synthesis started.");
                     Some(synth)
                 }
             }
             Err(e) => {
-                eprintln!("Failed to create audio synthesis: {e}");
+                error!("Failed to create audio synthesis: {e}");
                 None
             }
         };

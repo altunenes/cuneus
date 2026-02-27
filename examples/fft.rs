@@ -1,6 +1,7 @@
 use cuneus::compute::{
     ComputeShader, PassDescription, StorageBufferSpec, COMPUTE_TEXTURE_FORMAT_RGBA16};
 use cuneus::{Core, ExportManager, RenderKit, ShaderControls, ShaderManager};
+use log::error;
 use winit::event::WindowEvent;
 
 cuneus::uniform_params! {
@@ -353,7 +354,7 @@ impl ShaderManager for FFTShader {
         }
         if let WindowEvent::DroppedFile(path) = event {
             if let Err(e) = self.base.load_media(core, path) {
-                eprintln!("Failed to load dropped file: {e:?}");
+                error!("Failed to load dropped file: {e:?}");
             } else {
                 self.should_initialize = true;
             }

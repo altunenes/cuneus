@@ -1,3 +1,4 @@
+use log::debug;
 use std::sync::Arc;
 use winit::window::Window;
 
@@ -258,13 +259,13 @@ impl Core {
         &self.window
     }
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        println!("Core resize called with size: {new_size:?}");
+        debug!("Core resize: {new_size:?}");
         if new_size.width > 0 && new_size.height > 0 {
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            println!("Surface reconfigured");
+            debug!("Surface reconfigured");
         }
     }
 

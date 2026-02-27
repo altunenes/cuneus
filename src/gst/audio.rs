@@ -980,7 +980,7 @@ impl SynthesisManager {
         let audio_manager = match AudioSynthManager::new(Some(44100)) {
             Ok(manager) => Some(manager),
             Err(e) => {
-                eprintln!("Failed to create GStreamer audio manager: {e}");
+                warn!("Failed to create GStreamer audio manager: {e}");
                 None
             }
         };

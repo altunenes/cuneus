@@ -1,6 +1,7 @@
 use crate::compute::ComputeShader;
 use crate::radix_sort::RadixSorter;
 use crate::{Core, ExportSettings};
+use log::error;
 
 /// GPU Sorter for Gaussian depth ordering
 pub struct GaussianSorter {
@@ -465,10 +466,10 @@ impl GaussianExporter {
         ) {
             Ok(data) => {
                 if let Err(e) = crate::save_frame(data, frame, settings) {
-                    eprintln!("Error saving gaussian export frame {frame}: {e:?}");
+                    error!("Error saving gaussian export frame {frame}: {e:?}");
                 }
             }
-            Err(e) => eprintln!("Error capturing gaussian export frame {frame}: {e}"),
+            Err(e) => error!("Error capturing gaussian export frame {frame}: {e}"),
         }
     }
 }

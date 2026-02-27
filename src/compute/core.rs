@@ -1,4 +1,4 @@
-use log::info;
+use log::{error, info, warn};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -365,7 +365,7 @@ impl ComputeShader {
                         source: wgpu::ShaderSource::Wgsl(shader_source.into()),
                     });
             if let Err(e) = shader.enable_hot_reload(core.device.clone(), path, reload_module) {
-                eprintln!("Failed to enable hot reload: {e}");
+                warn!("Failed to enable hot reload: {e}");
             }
         }
 
@@ -1678,11 +1678,11 @@ impl ComputeShader {
                 Ok(data) => {
                     let settings = render_kit.export_manager.settings();
                     if let Err(e) = crate::save_frame(data, frame, settings) {
-                        eprintln!("Error saving frame: {e:?}");
+                        error!("Error saving frame: {e:?}");
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error capturing export frame: {e:?}");
+                    error!("Error capturing export frame: {e:?}");
                 }
             }
         } else {
@@ -1724,11 +1724,11 @@ impl ComputeShader {
                 Ok(data) => {
                     let settings = render_kit.export_manager.settings();
                     if let Err(e) = crate::save_frame(data, frame, settings) {
-                        eprintln!("Error saving frame: {e:?}");
+                        error!("Error saving frame: {e:?}");
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error capturing export frame: {e:?}");
+                    error!("Error capturing export frame: {e:?}");
                 }
             }
         } else {

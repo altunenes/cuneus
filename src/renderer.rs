@@ -1,4 +1,5 @@
 use crate::compute::ComputeShader;
+use log::info;
 use wgpu::util::DeviceExt;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -57,7 +58,7 @@ impl Renderer {
                 position: [1.0, 1.0],
             },
         ];
-        println!("Creating vertex buffer");
+        info!("Creating vertex buffer");
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(VERTICES),
@@ -71,7 +72,7 @@ impl Renderer {
             }),
             write_mask: wgpu::ColorWrites::ALL,
         })];
-        println!("Creating render pipeline");
+        info!("Creating render pipeline");
         let pipeline_desc = wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(layout),
