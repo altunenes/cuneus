@@ -1,4 +1,5 @@
 use crate::{Core, ShaderManager};
+use log::error;
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -116,7 +117,7 @@ impl<S: ShaderManager> ApplicationHandler for ShaderAppHandler<S> {
                                 }
                             }
                             Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
-                            Err(e) => eprintln!("Render error: {e:?}"),
+                            Err(e) => error!("Render error: {e:?}"),
                         }
                     }
                     _ => {}

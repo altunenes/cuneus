@@ -1,6 +1,7 @@
 #[cfg(feature = "media")]
 use crate::gst::video::VideoTextureManager;
 use crate::hdri::HdriMetadata;
+use log::info;
 use std::path::PathBuf;
 #[derive(Clone)]
 pub struct ControlsRequest {
@@ -39,7 +40,7 @@ impl Default for ControlsRequest {
         let mut default_media = None;
         let mut should_play_video = false;
         if let Ok(media_dir) = std::env::var("CUNEUS_MEDIA") {
-            println!("CUNEUS_MEDIA: {media_dir}");
+            info!("CUNEUS_MEDIA: {media_dir}");
             if media_dir.starts_with('"') && media_dir.ends_with('"') {
                 let unquoted = &media_dir[1..media_dir.len() - 1];
                 default_media = Some(PathBuf::from(unquoted));
@@ -150,7 +151,7 @@ impl ShaderControls {
         let mut play_video = false;
         if !self.media_loaded_once {
             if let Ok(media_dir) = std::env::var("CUNEUS_MEDIA") {
-                println!("CUNEUS_MEDIA: {media_dir}");
+                info!("CUNEUS_MEDIA: {media_dir}");
                 if media_dir.starts_with('"') && media_dir.ends_with('"') {
                     let unquoted = &media_dir[1..media_dir.len() - 1];
                     load_media_path = Some(PathBuf::from(unquoted));

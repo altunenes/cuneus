@@ -1,3 +1,4 @@
+use log::{error, warn};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::fs;
@@ -61,19 +62,19 @@ impl ShaderHotReload {
             if let Some(parent) = path.parent() {
                 if !parent.exists() {
                     fs::create_dir_all(parent).unwrap_or_else(|e| {
-                        println!("Failed to create shader directory: {e}");
+                        warn!("Failed to create shader directory: {e}");
                     });
                 }
 
                 if let Err(e) = watcher.watch(parent, RecursiveMode::Recursive) {
-                    println!(
-                        "Warning: Could not watch shader directory {}: {}",
+                    warn!(
+                        "Could not watch shader directory {}: {}",
                         parent.display(),
                         e
                     );
                     if cfg!(windows) {
                         if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
-                            println!("Fallback watch failed: {e}");
+                            warn!("Fallback watch failed: {e}");
                         }
                     }
                 }
@@ -127,19 +128,19 @@ impl ShaderHotReload {
         if let Some(parent) = normalized_path.parent() {
             if !parent.exists() {
                 fs::create_dir_all(parent).unwrap_or_else(|e| {
-                    println!("Failed to create shader directory: {e}");
+                    warn!("Failed to create shader directory: {e}");
                 });
             }
 
             if let Err(e) = watcher.watch(parent, RecursiveMode::Recursive) {
-                println!(
-                    "Warning: Could not watch shader directory {}: {}",
+                warn!(
+                    "Could not watch shader directory {}: {}",
                     parent.display(),
                     e
                 );
                 if cfg!(windows) {
                     if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
-                        println!("Fallback watch failed: {e}");
+                        warn!("Fallback watch failed: {e}");
                     }
                 }
             }
@@ -217,7 +218,7 @@ impl ShaderHotReload {
         let vs_content = match fs::read_to_string(&self.shader_paths[0]) {
             Ok(content) => content,
             Err(e) => {
-                eprintln!("Failed to read vertex shader: {e}");
+                error!("Failed to read vertex shader: {e}");
                 return None;
             }
         };
@@ -225,7 +226,7 @@ impl ShaderHotReload {
         let fs_content = match fs::read_to_string(&self.shader_paths[1]) {
             Ok(content) => content,
             Err(e) => {
-                eprintln!("Failed to read fragment shader: {e}");
+                error!("Failed to read fragment shader: {e}");
                 return None;
             }
         };
@@ -268,7 +269,7 @@ impl ShaderHotReload {
         let compute_content = match fs::read_to_string(&self.shader_paths[0]) {
             Ok(content) => content,
             Err(e) => {
-                eprintln!("Failed to read compute shader: {e}");
+                error!("Failed to read compute shader: {e}");
                 return None;
             }
         };
@@ -301,9 +302,9 @@ impl ShaderHotReload {
             Ok(module) => Some(module),
             Err(e) => {
                 if let Some(error_msg) = e.downcast_ref::<String>() {
-                    eprintln!("Shader compilation error in {label}: {error_msg}");
+                    error!("Shader compilation error in {label}: {error_msg}");
                 } else {
-                    eprintln!("Shader compilation error in {label}");
+                    error!("Shader compilation error in {label}");
                 }
                 None
             }

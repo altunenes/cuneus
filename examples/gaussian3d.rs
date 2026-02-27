@@ -1,6 +1,7 @@
 use cuneus::compute::{ComputeShader, ComputeShaderBuilder, StorageBufferSpec};
 use cuneus::prelude::*;
 use cuneus::{GaussianCamera, GaussianCloud, GaussianExporter, GaussianRenderer, GaussianSorter};
+use log::{error, info};
 use std::collections::HashSet;
 use winit::event::WindowEvent;
 
@@ -112,11 +113,11 @@ struct Gaussian3DShader {
 
 impl Gaussian3DShader {
     fn load_ply(&mut self, core: &Core, path: &std::path::Path) {
-        println!("Loading: {:?}", path);
+        info!("Loading: {:?}", path);
         match GaussianCloud::from_ply(path) {
             Ok(cloud) => {
                 let count = cloud.metadata.num_gaussians.min(MAX_GAUSSIANS);
-                println!("Loaded {} Gaussians", count);
+                info!("Loaded {} Gaussians", count);
 
                 let bytes = cloud.as_bytes();
                 let size = (count as usize * 64).min(bytes.len());
@@ -143,7 +144,7 @@ impl Gaussian3DShader {
                 self.sorter.force_sort();
                 self.camera.reset();
             }
-            Err(e) => eprintln!("Load error: {:?}", e)}
+            Err(e) => error!("Load error: {:?}", e)}
     }
 
     fn sync_params(&self, core: &Core) {

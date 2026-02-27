@@ -1,6 +1,7 @@
 use cuneus::compute::{ComputeShader, ComputeShaderBuilder, PassDescription, StorageBufferSpec, COMPUTE_TEXTURE_FORMAT_RGBA16};
 use cuneus::{Core, RenderKit, ShaderApp, ShaderControls, ShaderManager};
 use cuneus::{ExportManager, UniformProvider};
+use log::error;
 use winit::event::*;
 
 #[repr(C)]
@@ -369,7 +370,7 @@ impl ShaderManager for GaussianShader {
         }
         if let WindowEvent::DroppedFile(path) = event {
             if let Err(e) = self.base.load_media(core, path) {
-                eprintln!("Failed to load dropped file: {e:?}");
+                error!("Failed to load dropped file: {e:?}");
             }
             self.current_params.reset_training = 1;
             self.current_params.iteration = 0;

@@ -2,6 +2,7 @@ use cuneus::compute::{ComputeShader, COMPUTE_TEXTURE_FORMAT_RGBA16};
 use cuneus::{
     Core, ExportManager, RenderKit, ShaderApp, ShaderControls, ShaderManager, UniformProvider,
 };
+use log::error;
 use winit::event::WindowEvent;
 
 #[repr(C)]
@@ -243,7 +244,7 @@ impl ShaderManager for AudioVisCompute {
         }
         if let WindowEvent::DroppedFile(path) = event {
             if let Err(e) = self.base.load_media(core, path) {
-                eprintln!("Failed to load dropped file: {e:?}");
+                error!("Failed to load dropped file: {e:?}");
             }
             return true;
         }

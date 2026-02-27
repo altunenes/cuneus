@@ -1,3 +1,5 @@
+use log::warn;
+
 pub struct AtomicBuffer {
     pub buffer: wgpu::Buffer,
     pub bind_group: wgpu::BindGroup,
@@ -11,7 +13,7 @@ impl AtomicBuffer {
         let max_size = (max_binding_size / (4 * 4)) as u32;
 
         let (actual_size, actual_buffer_size) = if buffer_size > max_binding_size {
-            println!(
+            warn!(
                 "Requested buffer size {buffer_size} exceeds device max_storage_buffer_binding_size {max_binding_size}. Reducing size to {max_size}."
             );
             (max_size, max_binding_size)

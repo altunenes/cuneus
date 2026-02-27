@@ -1,5 +1,6 @@
 use cuneus::compute::*;
 use cuneus::prelude::*;
+use log::error;
 use winit::event::WindowEvent;
 
 struct CameraMovement {
@@ -537,7 +538,7 @@ impl ShaderManager for PathTracingShader {
 
         if let WindowEvent::DroppedFile(path) = event {
             if let Err(e) = self.base.load_media(core, path) {
-                eprintln!("Failed to load dropped file: {e:?}");
+                error!("Failed to load dropped file: {e:?}");
             }
             return true;
         }

@@ -1,4 +1,5 @@
 use image::ImageError;
+use log::error;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
@@ -275,11 +276,11 @@ impl ExportManager {
                 Ok(data) => {
                     let settings = self.settings();
                     if let Err(e) = save_frame(data, frame, settings) {
-                        eprintln!("Error saving frame: {e:?}");
+                        error!("Error saving frame: {e:?}");
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error capturing frame: {e:?}");
+                    error!("Error capturing frame: {e:?}");
                 }
             }
         } else {

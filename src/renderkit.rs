@@ -865,7 +865,7 @@ impl RenderKit {
                 shader_module,
             )?;
 
-            println!(
+            info!(
                 "Compute shader hot reload enabled for: {}",
                 shader_path.display()
             );
