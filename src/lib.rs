@@ -63,6 +63,8 @@ pub mod audio {
 pub mod prelude {
     pub use crate::{
         compute::ComputeShader, compute::ComputeShaderBuilder, compute::MultiPassManager,
+        compute::PassDescription, compute::StorageBufferSpec,
+        compute::COMPUTE_TEXTURE_FORMAT_RGBA16, compute::COMPUTE_TEXTURE_FORMAT_RGBA8,
         save_frame, AtomicBuffer, CharInfo, ControlsRequest, Core, ExportManager, FontSystem,
         FontUniforms, KeyInputHandler, RenderKit, Renderer, ShaderApp, ShaderControls,
         FrameContext, ShaderHotReload, ShaderManager, TextureManager, UniformBinding,
