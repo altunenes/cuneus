@@ -67,6 +67,9 @@ pub struct ComputeShader {
     // Empty bind groups for contiguous layout requirement
     pub empty_bind_groups: std::collections::HashMap<u32, wgpu::BindGroup>,
 
+    // Cached sampler for multi-pass dispatch
+    pub multipass_sampler: wgpu::Sampler,
+
     // Configuration and hot reload
     pub entry_points: Vec<String>,
     pub hot_reload: Option<ShaderHotReload>,
@@ -307,6 +310,15 @@ impl ComputeShader {
             pipelines.push(pipeline);
         }
 
+        let multipass_sampler = core.device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         let hot_reload_path = config.hot_reload_path.take();
 
         let mut shader = Self {
@@ -338,6 +350,7 @@ impl ComputeShader {
             placeholder_input_texture,
             channel_textures: Self::initialize_channel_textures(config.num_channels.unwrap_or(0)),
             num_channels: config.num_channels.unwrap_or(0),
+            multipass_sampler,
             entry_points: config.entry_points,
             hot_reload: None,
             label: config.label,
@@ -1228,17 +1241,6 @@ impl ComputeShader {
     ) {
         let num_passes = self.pipelines.len();
 
-        let sampler = core
-            .device
-            .create_sampler(&wgpu::SamplerDescriptor {
-                address_mode_u: wgpu::AddressMode::Repeat,
-                address_mode_v: wgpu::AddressMode::Repeat,
-                address_mode_w: wgpu::AddressMode::Repeat,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            });
-
         // Execute each pass in order with proper dependencies
         for pass_idx in 0..num_passes {
             let pipeline = &self.pipelines[pass_idx];
@@ -1265,7 +1267,7 @@ impl ComputeShader {
             {
                 let empty_deps = Vec::new();
                 let pass_dependencies = dependencies.get(entry_point).unwrap_or(&empty_deps);
-                multipass.create_input_bind_group(&core.device, &sampler, pass_dependencies)
+                multipass.create_input_bind_group(&core.device, &self.multipass_sampler, pass_dependencies)
             } else {
                 // Fallback for safety
                 continue;
