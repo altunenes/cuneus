@@ -71,6 +71,12 @@ pub struct ComputeShader {
     // Cached sampler for multi-pass dispatch
     pub multipass_sampler: wgpu::Sampler,
 
+    // Pre-cached bind groups for multipass 
+    // Group 1: [write_side=false, write_side=true] per intermediate pass
+    cached_intermediate_group1: HashMap<String, [wgpu::BindGroup; 2]>,
+    // Group 3: indexed by write_side bit pattern (0..8) per pass
+    cached_input_group3: HashMap<String, Vec<wgpu::BindGroup>>,
+
     // Configuration and hot reload
     pub entry_points: Vec<String>,
     pub hot_reload: Option<ShaderHotReload>,
@@ -353,12 +359,16 @@ impl ComputeShader {
             channel_textures: Self::initialize_channel_textures(config.num_channels.unwrap_or(0)),
             num_channels: config.num_channels.unwrap_or(0),
             multipass_sampler,
+            cached_intermediate_group1: HashMap::new(),
+            cached_input_group3: HashMap::new(),
             entry_points: config.entry_points,
             hot_reload: None,
             label: config.label,
             has_input_texture: config.has_input_texture,
             texture_format: config.texture_format,
         };
+
+        shader.rebuild_multipass_caches(&core.device);
 
         if let Some(path) = hot_reload_path {
             let reload_module =
@@ -1009,7 +1019,7 @@ impl ComputeShader {
 
         // Handle multi-pass execution
         if self.multipass_manager.is_some() {
-            self.dispatch_multipass(encoder, core, workgroup_count);
+            self.dispatch_multipass(encoder, workgroup_count);
         } else {
             self.dispatch_single_pass(encoder, core, workgroup_count);
         }
@@ -1034,7 +1044,7 @@ impl ComputeShader {
         let workgroup_count = self.workgroup_count_for(width, height);
 
         if self.multipass_manager.is_some() {
-            self.dispatch_multipass(encoder, core, workgroup_count);
+            self.dispatch_multipass(encoder, workgroup_count);
         } else {
             self.dispatch_single_pass(encoder, core, workgroup_count);
         }
@@ -1236,7 +1246,6 @@ impl ComputeShader {
     fn dispatch_multipass(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
-        core: &Core,
         workgroup_count: [u32; 3],
     ) {
         let num_passes = self.pipelines.len();
@@ -1261,17 +1270,48 @@ impl ComputeShader {
                 workgroup_count // Fall back to default if no pass descriptions
             };
 
-            // Create input bind group for this pass based on its dependencies
-            let input_bind_group = if let (Some(multipass), Some(dependencies)) =
+            // Compute Group 3 cache key from current write_side state
+            let group3_key = if let (Some(multipass), Some(dependencies)) =
                 (&self.multipass_manager, &self.pass_dependencies)
             {
                 let empty_deps = Vec::new();
-                let pass_dependencies = dependencies.get(entry_point).unwrap_or(&empty_deps);
-                multipass.create_input_bind_group(&core.device, &self.multipass_sampler, pass_dependencies)
+                let deps = dependencies.get(entry_point).unwrap_or(&empty_deps);
+                let first_buf = multipass
+                    .first_buffer_name()
+                    .cloned()
+                    .unwrap_or_else(|| "buffer_a".to_string());
+                let mut key = 0usize;
+                for i in 0..3 {
+                    let buf_name = if deps.is_empty() {
+                        &first_buf
+                    } else {
+                        deps.get(i).unwrap_or(&deps[0])
+                    };
+                    if multipass.get_write_side(buf_name) {
+                        key |= 1 << i;
+                    }
+                }
+                key
             } else {
                 log::warn!("Skipping pass '{entry_point}': multipass manager or dependencies missing");
                 continue;
             };
+
+            // Look up cached Group 3 input bind group
+            let input_bind_group = match self.cached_input_group3.get(entry_point) {
+                Some(cached) => &cached[group3_key],
+                None => {
+                    log::warn!("No cached input bind group for pass '{entry_point}'");
+                    continue;
+                }
+            };
+
+            // Compute Group 1 write side for intermediate passes
+            let write_side = self
+                .multipass_manager
+                .as_ref()
+                .map(|m| m.get_write_side(entry_point))
+                .unwrap_or(false);
 
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some(&format!("{} Multi-Pass - {}", self.label, entry_point)),
@@ -1283,46 +1323,15 @@ impl ComputeShader {
 
             // Group 1: Output texture binding - different for each pass type
             if entry_point == "main_image" {
-                // main_image writes to the final output texture - use main Group 1
                 compute_pass.set_bind_group(1, &self.group1_bind_group, &[]);
+            } else if let Some(cached) = self.cached_intermediate_group1.get(entry_point) {
+                compute_pass.set_bind_group(1, &cached[write_side as usize], &[]);
             } else {
-                // Intermediate passes write to their ping-pong buffers
-                // Create a Group 1 compatible bind group with both storage texture and custom uniform
-                if let Some(multipass) = &self.multipass_manager {
-                    let write_texture = multipass.get_write_texture(entry_point);
-                    let write_view =
-                        write_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-                    let mut entries = vec![wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&write_view),
-                    }];
-
-                    // Add custom uniform if present (to match Group 1 layout)
-                    if let Some(ref uniform_buffer) = self.custom_uniform {
-                        entries.push(wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: uniform_buffer.as_entire_binding(),
-                        });
-                    }
-
-                    let group1_layout = self.bind_group_layouts.get(&1).unwrap();
-                    let intermediate_bind_group =
-                        core.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some(&format!("{entry_point} Intermediate Group 1")),
-                            layout: group1_layout,
-                            entries: &entries,
-                        });
-
-                    compute_pass.set_bind_group(1, &intermediate_bind_group, &[]);
-                } else {
-                    // Fallback to main group if no multipass (shouldn't happen)
-                    compute_pass.set_bind_group(1, &self.group1_bind_group, &[]);
-                    log::warn!("No multipass manager for intermediate pass {entry_point}");
-                }
+                compute_pass.set_bind_group(1, &self.group1_bind_group, &[]);
+                log::warn!("No cached Group1 for intermediate pass {entry_point}");
             }
 
-            // Group 2: Engine resources (required - use empty bind group if not available)
+            // Group 2: Engine resources
             if let Some(ref group2) = self.group2_bind_group {
                 compute_pass.set_bind_group(2, group2, &[]);
             } else if let Some(empty_group2) = self.empty_bind_groups.get(&2) {
@@ -1334,8 +1343,8 @@ impl ComputeShader {
                 log::error!("No Group 2 bind group available - this shouldn't happen with contiguous layout");
             }
 
-            // Group 3: Multi-pass input textures (dynamically created per pass)
-            compute_pass.set_bind_group(3, &input_bind_group, &[]);
+            // Group 3: Multi-pass input textures (cached)
+            compute_pass.set_bind_group(3, input_bind_group, &[]);
 
             compute_pass.dispatch_workgroups(
                 pass_workgroup_count[0],
@@ -1459,6 +1468,139 @@ impl ComputeShader {
         &self.output_texture
     }
 
+    /// Rebuild cached bind groups for multipass dispatch.
+    /// Called at init, after resize, and after clear_all_buffers.
+    fn rebuild_multipass_caches(&mut self, device: &wgpu::Device) {
+        self.cached_intermediate_group1.clear();
+        self.cached_input_group3.clear();
+
+        let multipass = match &self.multipass_manager {
+            Some(m) => m,
+            None => return,
+        };
+        let dependencies = match &self.pass_dependencies {
+            Some(d) => d,
+            None => return,
+        };
+
+        let group1_layout = self.bind_group_layouts.get(&1).unwrap();
+        let first_buf = multipass
+            .first_buffer_name()
+            .cloned()
+            .unwrap_or_else(|| "buffer_a".to_string());
+
+        for entry_point in &self.entry_points {
+            // --- Group 1: intermediate pass write targets (2 per pass) ---
+            if entry_point != "main_image" {
+                if let Some(textures) = multipass.get_buffer_pair(entry_point) {
+                    // Index 0 = bind group for write_side==false (writes to .0)
+                    // Index 1 = bind group for write_side==true  (writes to .1)
+                    let make_bg = |texture: &wgpu::Texture, idx: usize| {
+                        let view =
+                            texture.create_view(&wgpu::TextureViewDescriptor::default());
+                        let mut entries = vec![wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&view),
+                        }];
+                        if let Some(ref uniform_buffer) = self.custom_uniform {
+                            entries.push(wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: uniform_buffer.as_entire_binding(),
+                            });
+                        }
+                        device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some(&format!(
+                                "{entry_point} Cached Group1 (side={idx})"
+                            )),
+                            layout: group1_layout,
+                            entries: &entries,
+                        })
+                    };
+                    self.cached_intermediate_group1.insert(
+                        entry_point.clone(),
+                        [make_bg(&textures.0, 0), make_bg(&textures.1, 1)],
+                    );
+                }
+            }
+
+            // --- Group 3: input textures (up to 8 combinations per pass) ---
+            let empty_deps = Vec::new();
+            let deps = dependencies.get(entry_point).unwrap_or(&empty_deps);
+
+            // Resolve which buffer each of the 3 input slots references
+            let slot_buffers: [&str; 3] = [
+                if deps.is_empty() {
+                    first_buf.as_str()
+                } else {
+                    deps.first().unwrap().as_str()
+                },
+                if deps.is_empty() {
+                    first_buf.as_str()
+                } else {
+                    deps.get(1).unwrap_or(&deps[0]).as_str()
+                },
+                if deps.is_empty() {
+                    first_buf.as_str()
+                } else {
+                    deps.get(2).unwrap_or(&deps[0]).as_str()
+                },
+            ];
+
+            let input_layout = multipass.get_input_layout();
+            let mut cached = Vec::with_capacity(8);
+
+            for key in 0u8..8 {
+                let views: Vec<wgpu::TextureView> = (0..3)
+                    .map(|i| {
+                        let write_side_val = (key >> i) & 1 == 1;
+                        // Replicate get_read_texture: write_side==true → read .0
+                        let textures = multipass.get_buffer_pair(slot_buffers[i]).unwrap();
+                        let texture = if write_side_val {
+                            &textures.0
+                        } else {
+                            &textures.1
+                        };
+                        texture.create_view(&wgpu::TextureViewDescriptor::default())
+                    })
+                    .collect();
+
+                cached.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: input_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&views[0]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.multipass_sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(&views[1]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Sampler(&self.multipass_sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: wgpu::BindingResource::TextureView(&views[2]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: wgpu::BindingResource::Sampler(&self.multipass_sampler),
+                        },
+                    ],
+                    label: Some(&format!("{entry_point} Cached Input (key={key})")),
+                }));
+            }
+
+            self.cached_input_group3
+                .insert(entry_point.clone(), cached);
+        }
+    }
+
     /// Resize resources
     pub fn resize(&mut self, core: &Core, width: u32, height: u32) {
         // Recreate output texture
@@ -1487,6 +1629,7 @@ impl ComputeShader {
         if let Some(multipass) = &mut self.multipass_manager {
             multipass.resize(core, width, height);
         }
+        self.rebuild_multipass_caches(&core.device);
 
         // Recreate atomic buffer if present
         if let Some(atomic_buffer) = &mut self.atomic_buffer_raw {
@@ -1525,6 +1668,7 @@ impl ComputeShader {
         if let Some(multipass) = &mut self.multipass_manager {
             multipass.clear_all(core);
         }
+        self.rebuild_multipass_caches(&core.device);
 
         // Clear atomic buffer if present
         self.clear_atomic_buffer(core);
