@@ -417,4 +417,19 @@ impl MultiPassManager {
     pub fn get_storage_layout(&self) -> &wgpu::BindGroupLayout {
         &self.storage_layout
     }
+
+    /// Get the write_side state for a buffer
+    pub fn get_write_side(&self, buffer_name: &str) -> bool {
+        self.write_side.get(buffer_name).copied().unwrap_or(false)
+    }
+
+    /// Get both ping-pong textures for a buffer
+    pub fn get_buffer_pair(&self, buffer_name: &str) -> Option<&(wgpu::Texture, wgpu::Texture)> {
+        self.buffers.get(buffer_name)
+    }
+
+    /// Get the first buffer name (for passes with no dependencies)
+    pub fn first_buffer_name(&self) -> Option<&String> {
+        self.buffers.keys().next()
+    }
 }
