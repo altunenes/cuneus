@@ -973,6 +973,15 @@ impl ComputeShader {
         );
     }
 
+    /// Compute workgroup count for a given resolution
+    fn workgroup_count_for(&self, width: u32, height: u32) -> [u32; 3] {
+        [
+            width.div_ceil(self.workgroup_size[0]),
+            height.div_ceil(self.workgroup_size[1]),
+            1,
+        ]
+    }
+
     /// Dispatch single stage of compute shader (for fine-grained control like old system)
     pub fn dispatch_stage(
         &mut self,
@@ -984,11 +993,7 @@ impl ComputeShader {
 
         let width = self.output_texture.texture.width();
         let height = self.output_texture.texture.height();
-        let workgroup_count = [
-            width.div_ceil(self.workgroup_size[0]),
-            height.div_ceil(self.workgroup_size[1]),
-            1,
-        ];
+        let workgroup_count = self.workgroup_count_for(width, height);
         self.dispatch_stage_with_workgroups(encoder, stage_index, workgroup_count);
     }
 
@@ -1001,11 +1006,7 @@ impl ComputeShader {
 
         let width = self.output_texture.texture.width();
         let height = self.output_texture.texture.height();
-        let workgroup_count = [
-            width.div_ceil(self.workgroup_size[0]),
-            height.div_ceil(self.workgroup_size[1]),
-            1,
-        ];
+        let workgroup_count = self.workgroup_count_for(width, height);
 
         // Handle multi-pass execution
         if self.multipass_manager.is_some() {
@@ -1031,11 +1032,7 @@ impl ComputeShader {
             return;
         }
 
-        let workgroup_count = [
-            width.div_ceil(self.workgroup_size[0]),
-            height.div_ceil(self.workgroup_size[1]),
-            1,
-        ];
+        let workgroup_count = self.workgroup_count_for(width, height);
 
         if self.multipass_manager.is_some() {
             self.dispatch_multipass(encoder, core, workgroup_count);
