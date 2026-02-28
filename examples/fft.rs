@@ -341,7 +341,7 @@ impl ShaderManager for FFTShader {
         // Stage 6: Main rendering - always run for display (uses screen size)
         self.compute_shader.dispatch_stage(&mut frame.encoder, core, 6);
 
-        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
 
         self.base.end_frame(core, frame, full_output);
 
