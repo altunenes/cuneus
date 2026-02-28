@@ -107,6 +107,7 @@ pub struct ComputeConfiguration {
     pub has_fonts: bool,
     pub has_audio: bool,
     pub has_atomic_buffer: bool,
+    pub atomic_buffer_channels: u32,
     pub audio_buffer_size: usize,
     pub has_audio_spectrum: bool,
     pub audio_spectrum_size: usize,
@@ -163,6 +164,7 @@ impl ComputeShaderBuilder {
                 has_fonts: false,
                 has_audio: false,
                 has_atomic_buffer: false,
+                atomic_buffer_channels: 3,
                 audio_buffer_size: 1024,
                 has_audio_spectrum: false,
                 audio_spectrum_size: 128,
@@ -259,8 +261,13 @@ impl ComputeShaderBuilder {
     }
 
     /// Enable an atomic `u32` buffer in Group 2 for lock-free GPU algorithms (histograms, particle systems).
-    pub fn with_atomic_buffer(mut self) -> Self {
+    ///
+    /// `channels` is the number of `u32` values per pixel — the total buffer size is
+    /// `width * height * channels * sizeof(u32)`. Use 1 for simple counters,
+    /// 2-3 for multi-channel histograms, 4 for RGBA, etc.
+    pub fn with_atomic_buffer(mut self, channels: u32) -> Self {
         self.config.has_atomic_buffer = true;
+        self.config.atomic_buffer_channels = channels;
         self
     }
 

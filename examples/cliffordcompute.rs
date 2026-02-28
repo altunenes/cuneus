@@ -66,7 +66,7 @@ impl ShaderManager for CliffordShader {
         let mut config = ComputeShader::builder()
             .with_entry_point("Splat")
             .with_custom_uniforms::<CliffordParams>()
-            .with_atomic_buffer()
+            .with_atomic_buffer(2)
             .with_workgroup_size([16, 16, 1])
             .with_texture_format(COMPUTE_TEXTURE_FORMAT_RGBA16)
             .with_label("Clifford Attractor Unified")

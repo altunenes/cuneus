@@ -110,7 +110,7 @@ impl ShaderManager for NebulaShader {
         let mut config = ComputeShader::builder()
             .with_entry_point("volumetric_render")
             .with_custom_uniforms::<NebulaParams>()
-            .with_atomic_buffer()
+            .with_atomic_buffer(3)
             .with_workgroup_size([16, 16, 1])
             .with_texture_format(COMPUTE_TEXTURE_FORMAT_RGBA16)
             .with_label("Nebula Unified")
