@@ -1269,7 +1269,7 @@ impl ComputeShader {
                 let pass_dependencies = dependencies.get(entry_point).unwrap_or(&empty_deps);
                 multipass.create_input_bind_group(&core.device, &self.multipass_sampler, pass_dependencies)
             } else {
-                // Fallback for safety
+                log::warn!("Skipping pass '{entry_point}': multipass manager or dependencies missing");
                 continue;
             };
 
