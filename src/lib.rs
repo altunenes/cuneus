@@ -14,7 +14,6 @@ pub use wgpu::SurfaceError;
 pub use winit::event::WindowEvent;
 
 mod app;
-mod atomic;
 pub mod compute;
 mod controls;
 mod export;
@@ -36,7 +35,6 @@ mod spectrum;
 mod texture;
 mod uniforms;
 pub use app::*;
-pub use atomic::AtomicBuffer;
 pub use controls::{ControlsRequest, ShaderControls};
 pub use export::{save_frame, ExportError, ExportManager, ExportSettings, ExportUiState};
 pub use font::{CharInfo, FontSystem, FontUniforms};
@@ -65,7 +63,7 @@ pub mod prelude {
         compute::ComputeShader, compute::ComputeShaderBuilder, compute::MultiPassManager,
         compute::PassDescription, compute::StorageBufferSpec,
         compute::COMPUTE_TEXTURE_FORMAT_RGBA16, compute::COMPUTE_TEXTURE_FORMAT_RGBA8,
-        save_frame, AtomicBuffer, CharInfo, ControlsRequest, Core, ExportManager, FontSystem,
+        save_frame, CharInfo, ControlsRequest, Core, ExportManager, FontSystem,
         FontUniforms, KeyInputHandler, RenderKit, Renderer, ShaderApp, ShaderControls,
         FrameContext, ShaderHotReload, ShaderManager, TextureManager, UniformBinding,
         UniformProvider,
