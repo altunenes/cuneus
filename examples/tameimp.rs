@@ -346,7 +346,7 @@ impl ShaderManager for ExperimentShader {
 
         self.compute_shader.dispatch(&mut frame.encoder, core);
 
-        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
 
         self.base.end_frame(core, frame, full_output);
         Ok(())

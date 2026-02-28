@@ -315,7 +315,7 @@ impl ShaderManager for FluidSim {
         // Display: reads dye[dye_ping]
         self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, MAIN_IMAGE, output_workgroups);
 
-        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
 
         let mut params = self.params;
         let mut should_clear = false;

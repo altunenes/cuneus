@@ -142,7 +142,7 @@ impl ShaderManager for FluidShader {
         if !self.base.export_manager.is_exporting() {
             self.compute_shader.dispatch(&mut frame.encoder, core);
         }
-        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
         self.base.apply_media_requests(core, &controls_request);
         self.base.export_manager.apply_ui_request(export_request);
         if should_start_export {

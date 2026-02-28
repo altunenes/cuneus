@@ -308,7 +308,7 @@ impl ShaderManager for NebulaShader {
         // Stage 1: Main image render
         self.compute_shader.dispatch_stage(&mut frame.encoder, core, 1);
 
-        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
 
         self.frame_count = self.frame_count.wrapping_add(1);
 

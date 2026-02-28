@@ -113,7 +113,7 @@ impl ShaderManager for JfaShader {
         // Execute multi-pass compute shader: buffer_a -> buffer_b -> buffer_c -> main_image
         self.compute_shader.dispatch(&mut frame.encoder, core);
 
-        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
 
         // Handle UI and controls
         let mut params = self.current_params;

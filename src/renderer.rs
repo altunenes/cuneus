@@ -1,4 +1,3 @@
-use crate::compute::ComputeShader;
 use log::info;
 use wgpu::util::DeviceExt;
 #[repr(C)]
@@ -114,12 +113,12 @@ impl Renderer {
             vertex_buffer,
         }
     }
-    /// Blit a compute shader's output texture to the screen in one call.
+    /// Blit a bind group's texture to the screen in one call.
     pub fn render_to_view(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        compute_shader: &ComputeShader,
+        bind_group: &wgpu::BindGroup,
     ) {
         let mut render_pass = Self::begin_render_pass(
             encoder,
@@ -129,7 +128,7 @@ impl Renderer {
         );
         render_pass.set_pipeline(&self.render_pipeline);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_bind_group(0, &compute_shader.get_output_texture().bind_group, &[]);
+        render_pass.set_bind_group(0, bind_group, &[]);
         render_pass.draw(0..4, 0..1);
     }
 
