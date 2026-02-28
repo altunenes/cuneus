@@ -52,6 +52,7 @@ pub struct ComputeShader {
     // Engine resources (Group 2)
     pub font_system: Option<FontSystem>,
     pub atomic_buffer_raw: Option<wgpu::Buffer>,
+    pub atomic_buffer_channels: u32,
     pub audio_buffer: Option<wgpu::Buffer>,
     pub audio_staging_buffer: Option<wgpu::Buffer>,
     pub audio_spectrum_buffer: Option<wgpu::Buffer>,
@@ -110,9 +111,7 @@ impl ComputeShader {
             resource_layout.add_audio_spectrum_buffer(config.audio_spectrum_size);
         }
         if config.has_atomic_buffer {
-            // Create buffer with 3 u32s per pixel
-            // The shader accesses: atomic_buffer[idx], atomic_buffer[idx + w*h], atomic_buffer[idx + 2*w*h]
-            let atomic_size = (core.size.width * core.size.height * 3 * 4) as u64;
+            let atomic_size = (core.size.width * core.size.height * config.atomic_buffer_channels * 4) as u64;
             resource_layout.add_atomic_buffer(atomic_size);
         }
         if let Some(num_channels) = config.num_channels {
@@ -341,6 +340,7 @@ impl ComputeShader {
             pass_descriptions: config.passes.clone(),
             font_system,
             atomic_buffer_raw,
+            atomic_buffer_channels: config.atomic_buffer_channels,
             audio_buffer,
             audio_staging_buffer,
             audio_spectrum_buffer,
@@ -602,10 +602,9 @@ impl ComputeShader {
             None
         };
 
-        // Create atomic buffer if needed (raw buffer, not old AtomicBuffer struct)
-        // buffer size: 3 u32s * 4 bytes per pixel
+        // Create atomic buffer if needed
         let atomic_buffer_raw = if config.has_atomic_buffer {
-            let buffer_size = (core.size.width * core.size.height * 3 * 4) as u64;
+            let buffer_size = (core.size.width * core.size.height * config.atomic_buffer_channels * 4) as u64;
             Some(core.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Atomic Storage Buffer"),
                 size: buffer_size,
@@ -1489,9 +1488,9 @@ impl ComputeShader {
             multipass.resize(core, width, height);
         }
 
-        // Recreate atomic buffer if present (like clear_atomic_buffer)
+        // Recreate atomic buffer if present
         if let Some(atomic_buffer) = &mut self.atomic_buffer_raw {
-            let buffer_size = (width * height * 3 * 4) as u64; // 3 u32s * 4 bytes per pixel
+            let buffer_size = (width * height * self.atomic_buffer_channels * 4) as u64;
             *atomic_buffer = core.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Atomic Storage Buffer (resized)"),
                 size: buffer_size,
@@ -1537,8 +1536,7 @@ impl ComputeShader {
     /// Clear atomic buffer by recreating it (like old clear_all method)
     pub fn clear_atomic_buffer(&mut self, core: &Core) {
         if self.atomic_buffer_raw.is_some() {
-            // Recreate the atomic buffer entirely (more thorough than just writing zeros)
-            let buffer_size = (core.size.width * core.size.height * 3 * 4) as u64; // 3 u32s * 4 bytes per pixel
+            let buffer_size = (core.size.width * core.size.height * self.atomic_buffer_channels * 4) as u64;
             self.atomic_buffer_raw = Some(core.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Atomic Storage Buffer (cleared)"),
                 size: buffer_size,
