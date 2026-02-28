@@ -75,6 +75,7 @@ pub struct ComputeShader {
     pub hot_reload: Option<ShaderHotReload>,
     pub label: String,
     pub has_input_texture: bool,
+    pub texture_format: wgpu::TextureFormat,
 }
 
 impl ComputeShader {
@@ -212,7 +213,8 @@ impl ComputeShader {
             &core.device,
             bind_group_layouts.get(&1).unwrap(),
             &output_texture,
-            &config,
+            config.custom_uniform_size,
+            config.has_input_texture,
             custom_uniform.as_ref(),
             placeholder_input_texture.as_ref().map(|t| &t.view),
             placeholder_input_texture.as_ref().map(|t| &t.sampler),
@@ -355,6 +357,7 @@ impl ComputeShader {
             hot_reload: None,
             label: config.label,
             has_input_texture: config.has_input_texture,
+            texture_format: config.texture_format,
         };
 
         if let Some(path) = hot_reload_path {
@@ -524,7 +527,8 @@ impl ComputeShader {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         output_texture: &TextureManager,
-        config: &ComputeConfiguration,
+        custom_uniform_size: Option<u64>,
+        has_input_texture: bool,
         custom_uniform_buffer: Option<&wgpu::Buffer>,
         input_texture_view: Option<&wgpu::TextureView>,
         input_sampler: Option<&wgpu::Sampler>,
@@ -540,7 +544,7 @@ impl ComputeShader {
         }];
 
         // Add custom uniform if present
-        if let (Some(buffer), Some(_size)) = (custom_uniform_buffer, config.custom_uniform_size) {
+        if let (Some(buffer), Some(_size)) = (custom_uniform_buffer, custom_uniform_size) {
             entries.push(wgpu::BindGroupEntry {
                 binding: 1, // Custom uniforms go to binding 1 in Group 1
                 resource: buffer.as_entire_binding(),
@@ -548,7 +552,7 @@ impl ComputeShader {
         }
 
         // Add input texture and sampler if present (for shaders like FFT): again, this still not "perfect" and generic but let me think more
-        if config.has_input_texture {
+        if has_input_texture {
             // Input textures should always be provided - if not, there's an architecture issue
             if let (Some(view), Some(sampler)) = (input_texture_view, input_sampler) {
                 entries.push(wgpu::BindGroupEntry {
@@ -1466,36 +1470,18 @@ impl ComputeShader {
             &core.device,
             width,
             height,
-            wgpu::TextureFormat::Rgba16Float,
+            self.texture_format,
             &format!("{} Output Texture", self.label),
         );
 
-        // CRITICAL: Recreate Group 1 bind group with new texture!
+        // recreate Group 1 bind group with new texture
         let group1_layout = self.bind_group_layouts.get(&1).unwrap();
         self.group1_bind_group = Self::create_group1_bind_group(
             &core.device,
             group1_layout,
             &self.output_texture,
-            &ComputeConfiguration {
-                entry_points: self.entry_points.clone(),
-                passes: None,
-                custom_uniform_size: self.custom_uniform_size,
-                has_input_texture: self.has_input_texture,
-                has_mouse: true,
-                has_fonts: true,
-                has_audio: true,
-                has_atomic_buffer: false,
-                audio_buffer_size: 1024,
-                has_audio_spectrum: false,
-                audio_spectrum_size: 128,
-                storage_buffers: Vec::new(),
-                workgroup_size: self.workgroup_size,
-                dispatch_once: self.dispatch_once,
-                texture_format: wgpu::TextureFormat::Rgba16Float,
-                label: self.label.clone(),
-                num_channels: Some(self.num_channels),
-                hot_reload_path: None,
-            },
+            self.custom_uniform_size,
+            self.has_input_texture,
             self.custom_uniform.as_ref(),
             self.placeholder_input_texture.as_ref().map(|t| &t.view),
             self.placeholder_input_texture.as_ref().map(|t| &t.sampler),
