@@ -200,8 +200,8 @@ impl Core {
         let window_ptr = Box::into_raw(window_box);
         // SAFETY: window_ptr is valid as we just created it
         let surface = unsafe { instance.create_surface(&*window_ptr) }.unwrap();
-        let power_preference = instance
-            .enumerate_adapters(wgpu::Backends::all())
+        let adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
+        let power_preference = adapters
             .iter()
             .find(|p| p.get_info().device_type == wgpu::DeviceType::DiscreteGpu)
             .map(|_| wgpu::PowerPreference::HighPerformance)

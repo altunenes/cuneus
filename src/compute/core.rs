@@ -164,7 +164,7 @@ impl ComputeShader {
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(&format!("{} Pipeline Layout", config.label)),
                 bind_group_layouts: &layout_refs,
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
 
         // Step 4: Create time uniform (Group 0)
