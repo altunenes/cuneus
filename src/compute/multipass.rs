@@ -257,65 +257,6 @@ impl MultiPassManager {
         }
     }
 
-    /// Create input bind group for a pass with its dependencies
-    pub fn create_input_bind_group(
-        &self,
-        device: &wgpu::Device,
-        sampler: &wgpu::Sampler,
-        input_buffers: &[String],
-    ) -> wgpu::BindGroup {
-        let mut views = Vec::new();
-
-        // Create views for up to 3 input textures
-        for i in 0..3 {
-            let buffer_name = if input_buffers.is_empty() {
-                // For first pass with no dependencies, use the first buffer or create a dummy
-                self.buffers
-                    .keys()
-                    .next()
-                    .cloned()
-                    .unwrap_or_else(|| "buffer_a".to_string())
-            } else {
-                input_buffers.get(i).unwrap_or(&input_buffers[0]).clone()
-            };
-            let texture = self.get_read_texture(&buffer_name);
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            views.push(view);
-        }
-
-        let entries = [
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&views[0]),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::TextureView(&views[1]),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: wgpu::BindingResource::TextureView(&views[2]),
-            },
-            wgpu::BindGroupEntry {
-                binding: 5,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ];
-
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.input_layout,
-            entries: &entries,
-            label: Some("Multi-Pass Input"),
-        })
-    }
 
     /// Get output bind group
     pub fn get_output_bind_group(&self) -> &wgpu::BindGroup {
