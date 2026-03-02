@@ -417,31 +417,10 @@ impl ComputeShader {
             ..Default::default()
         });
 
-        // Create a dummy bind group for display purposes - this is only used by the display renderer
-        let dummy_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Display Texture Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+        let display_layout = TextureManager::create_display_layout(device);
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &dummy_layout,
+            layout: &display_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -487,31 +466,10 @@ impl ComputeShader {
         // This prevents red artifacts when no real texture is loaded
         // Note: We could write actual data here, but shaders should handle empty textures gracefully
 
-        // Create dummy bind group layout and bind group for placeholder
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(&format!("{label} Placeholder Layout")),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+        let display_layout = TextureManager::create_display_layout(device);
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &bind_group_layout,
+            layout: &display_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
