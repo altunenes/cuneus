@@ -32,9 +32,48 @@ struct FontTextureUniforms {
 @group(2) @binding(2) var t_font_texture_atlas: texture_2d<f32>;
 @group(2) @binding(3) var<storage, read_write> audio_buffer: array<f32>;
 
+// Group 3: Multi-pass inputs
+@group(3) @binding(0) var input_texture0: texture_2d<f32>;
+@group(3) @binding(1) var input_sampler0: sampler;
+@group(3) @binding(2) var input_texture1: texture_2d<f32>;
+@group(3) @binding(3) var input_sampler1: sampler;
+@group(3) @binding(4) var input_texture2: texture_2d<f32>;
+@group(3) @binding(5) var input_sampler2: sampler;
+
+
+fn sample_input(coord: vec2<i32>) -> vec4<f32> {
+    let dims = vec2<i32>(textureDimensions(input_texture0, 0));
+    let clamped = clamp(coord, vec2<i32>(0), dims - vec2<i32>(1));
+    return textureLoad(input_texture0, clamped, 0);
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> vec3<f32> {
+    let c = v * s;
+    let x = c * (1.0 - abs((h / 1.047197551) % 2.0 - 1.0));
+    let m = v - c;
+
+    var rgb = vec3<f32>(0.0);
+
+    if (h < 1.047197551) {
+        rgb = vec3<f32>(c, x, 0.0);
+    } else if (h < 2.094395102) {
+        rgb = vec3<f32>(x, c, 0.0);
+    } else if (h < 3.141592654) {
+        rgb = vec3<f32>(0.0, c, x);
+    } else if (h < 4.188790205) {
+        rgb = vec3<f32>(0.0, x, c);
+    } else if (h < 5.235987756) {
+        rgb = vec3<f32>(x, 0.0, c);
+    } else {
+        rgb = vec3<f32>(c, 0.0, x);
+    }
+
+    return rgb + vec3<f32>(m);
+}
+
+
 const FONT_SPACING: f32 = 2.0;
 
-// ASCII character codes
 const CHAR_SPACE: u32 = 32u;
 const CHAR_EXCLAMATION: u32 = 33u;
 const CHAR_COMMA: u32 = 44u;
@@ -79,8 +118,10 @@ const CHAR_l: u32 = 108u;
 const CHAR_m: u32 = 109u;
 const CHAR_n: u32 = 110u;
 const CHAR_o: u32 = 111u;
+const CHAR_r: u32 = 114u;
 const CHAR_s: u32 = 115u;
 const CHAR_u: u32 = 117u;
+const CHAR_x: u32 = 120u;
 
 // render single character
 fn ch(pp: vec2<f32>, pos: vec2<f32>, code: u32, size: f32) -> f32 {
@@ -109,7 +150,6 @@ fn ch(pp: vec2<f32>, pos: vec2<f32>, code: u32, size: f32) -> f32 {
     let cell_offset = vec2<f32>(f32(grid_x), f32(grid_y)) * cell_size_uv;
     let final_uv = cell_offset + padded_uv * cell_size_uv;
 
-    // sample font atlas with textureLoad
     let atlas_coord = vec2<i32>(
         i32(final_uv.x * u_font_texture.atlas_size.x),
         i32(final_uv.y * u_font_texture.atlas_size.y)
@@ -172,7 +212,17 @@ fn num(pp: vec2<f32>, pos: vec2<f32>, number: u32, size: f32) -> f32 {
     return alpha;
 }
 
-// render float with 1 decimal
+fn digit_count(n: u32) -> u32 {
+    if (n == 0u) { return 1u; }
+    var count = 0u;
+    var v = n;
+    while (v > 0u) {
+        v = v / 10u;
+        count++;
+    }
+    return count;
+}
+
 fn float1(pp: vec2<f32>, pos: vec2<f32>, value: f32, size: f32) -> f32 {
     let char_advance = adv(size);
     var alpha = 0.0;
@@ -181,17 +231,7 @@ fn float1(pp: vec2<f32>, pos: vec2<f32>, value: f32, size: f32) -> f32 {
     let whole_part = u32(value);
     let whole_alpha = num(pp, current_pos, whole_part, size);
     alpha = max(alpha, whole_alpha);
-    var digit_count = 0u;
-    if (whole_part == 0u) {
-        digit_count = 1u;
-    } else {
-        var temp = whole_part;
-        while (temp > 0u) {
-            temp = temp / 10u;
-            digit_count++;
-        }
-    }
-    current_pos.x += f32(digit_count) * char_advance;
+    current_pos.x += f32(digit_count(whole_part)) * char_advance;
 
     let dot_alpha = ch(pp, current_pos, CHAR_PERIOD, size);
     alpha = max(alpha, dot_alpha);
@@ -241,40 +281,6 @@ fn render_hello_cuneus_animated(pixel_pos: vec2<f32>, screen_center: vec2<f32>) 
     return result;
 }
 
-// basic hello cuneus text
-fn print_hello_cuneus(pixel_pos: vec2<f32>, start_pos: vec2<f32>, size: f32) -> f32 {
-    let hello_cuneus = array<u32, 32>(
-        CHAR_H, CHAR_e, CHAR_l, CHAR_l, CHAR_o, CHAR_SPACE,
-        CHAR_C, CHAR_u, CHAR_n, CHAR_e, CHAR_u, CHAR_s,
-        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u
-    );
-    return word(pixel_pos, start_pos, hello_cuneus, 12u, size);
-}
-
-fn hsv_to_rgb(h: f32, s: f32, v: f32) -> vec3<f32> {
-    let c = v * s;
-    let x = c * (1.0 - abs((h / 1.047197551) % 2.0 - 1.0));
-    let m = v - c;
-
-    var rgb = vec3<f32>(0.0);
-
-    if (h < 1.047197551) {
-        rgb = vec3<f32>(c, x, 0.0);
-    } else if (h < 2.094395102) {
-        rgb = vec3<f32>(x, c, 0.0);
-    } else if (h < 3.141592654) {
-        rgb = vec3<f32>(0.0, c, x);
-    } else if (h < 4.188790205) {
-        rgb = vec3<f32>(0.0, x, c);
-    } else if (h < 5.235987756) {
-        rgb = vec3<f32>(x, 0.0, c);
-    } else {
-        rgb = vec3<f32>(c, 0.0, x);
-    }
-
-    return rgb + vec3<f32>(m);
-}
-
 fn print_debug_text(pixel_pos: vec2<f32>, text_pos: vec2<f32>) -> f32 {
     let size = 32.0;
     let debug_text = array<u32, 32>(
@@ -319,6 +325,52 @@ fn print_fps_display(pixel_pos: vec2<f32>, text_pos: vec2<f32>) -> f32 {
     return alpha;
 }
 
+fn print_frame_display(pixel_pos: vec2<f32>, text_pos: vec2<f32>) -> f32 {
+    let size = 32.0;
+    let char_advance = adv(size);
+    var alpha = 0.0;
+
+    // "Frame: "
+    let frame_label = array<u32, 32>(
+        CHAR_F, CHAR_r, CHAR_a, CHAR_m, CHAR_e, CHAR_COLON, CHAR_SPACE,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u
+    );
+    alpha = max(alpha, word(pixel_pos, text_pos, frame_label, 7u, size));
+
+    let frame_number_pos = text_pos + vec2<f32>(7.0 * char_advance, 0.0);
+    alpha = max(alpha, num(pixel_pos, frame_number_pos, u_time.frame, size));
+
+    return alpha;
+}
+
+fn print_res_display(pixel_pos: vec2<f32>, text_pos: vec2<f32>, dims: vec2<u32>) -> f32 {
+    let size = 32.0;
+    let char_advance = adv(size);
+    var alpha = 0.0;
+
+    // "Res: "
+    let res_label = array<u32, 32>(
+        CHAR_R, CHAR_e, CHAR_s, CHAR_COLON, CHAR_SPACE,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u
+    );
+    alpha = max(alpha, word(pixel_pos, text_pos, res_label, 5u, size));
+
+    var current_x = text_pos.x + 5.0 * char_advance;
+
+    // Width number
+    alpha = max(alpha, num(pixel_pos, vec2<f32>(current_x, text_pos.y), dims.x, size));
+    current_x += f32(digit_count(dims.x)) * char_advance;
+
+    // "x"
+    alpha = max(alpha, ch(pixel_pos, vec2<f32>(current_x, text_pos.y), CHAR_x, size));
+    current_x += char_advance;
+
+    // Height number
+    alpha = max(alpha, num(pixel_pos, vec2<f32>(current_x, text_pos.y), dims.y, size));
+
+    return alpha;
+}
+
 fn print_rgb_display(pixel_pos: vec2<f32>, text_pos: vec2<f32>, color: vec3<f32>) -> f32 {
     let size = 24.0;
     let char_advance = adv(size);
@@ -336,21 +388,13 @@ fn print_rgb_display(pixel_pos: vec2<f32>, text_pos: vec2<f32>, color: vec3<f32>
     let b_val = u32(color.b * 255.0);
 
     alpha = max(alpha, num(pixel_pos, current_pos, r_val, size));
-
-    var r_digits = 1u;
-    if (r_val >= 10u) { r_digits = 2u; }
-    if (r_val >= 100u) { r_digits = 3u; }
-    current_pos.x += f32(r_digits) * char_advance;
+    current_pos.x += f32(digit_count(r_val)) * char_advance;
 
     alpha = max(alpha, ch(pixel_pos, current_pos, CHAR_COMMA, size));
     current_pos.x += char_advance;
 
     alpha = max(alpha, num(pixel_pos, current_pos, g_val, size));
-
-    var g_digits = 1u;
-    if (g_val >= 10u) { g_digits = 2u; }
-    if (g_val >= 100u) { g_digits = 3u; }
-    current_pos.x += f32(g_digits) * char_advance;
+    current_pos.x += f32(digit_count(g_val)) * char_advance;
 
     alpha = max(alpha, ch(pixel_pos, current_pos, CHAR_COMMA, size));
     current_pos.x += char_advance;
@@ -377,27 +421,31 @@ fn print_mouse_debug(pixel_pos: vec2<f32>, text_pos: vec2<f32>, sampled_color: v
     return alpha;
 }
 
+//simple feedback
 @compute @workgroup_size(16, 16, 1)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn effect(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let dimensions = textureDimensions(output);
     if (global_id.x >= dimensions.x || global_id.y >= dimensions.y) {
         return;
     }
 
-    // Calculate normalized pixel coordinates (0.0 to 1.0)
     let uv = vec2<f32>(
         f32(global_id.x) / f32(dimensions.x),
         f32(global_id.y) / f32(dimensions.y)
     );
 
-    let mouse_dist = distance(uv, u_mouse.position);
+    // Read previous frame (self-feedback via multi-pass)
+    let prev = sample_input(vec2<i32>(global_id.xy));
 
+    // Animated rainbow background
     let base_col = 0.5 + 0.5 * cos(
         u_time.time +
         uv.xyx * 1.0 +
         vec3<f32>(0.0, 2.0, 4.0)
     );
 
+    // Mouse circle interaction
+    let mouse_dist = distance(uv, u_mouse.position);
     let circle_radius = 0.1 + sin(u_time.time) * 0.05;
     let circle_effect = smoothstep(circle_radius, circle_radius - 0.02, mouse_dist);
 
@@ -408,19 +456,39 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     );
 
     let left_button_pressed = (u_mouse.buttons.x & 1u) != 0u;
-    var final_col = mix(base_col, circle_col, circle_effect);
+    var current = mix(base_col, circle_col, circle_effect);
     if (left_button_pressed && mouse_dist < circle_radius) {
-        final_col = vec3<f32>(1.0) - final_col;
+        current = vec3<f32>(1.0) - current;
     }
+
+    // Wheel effect
     let wheel_effect = abs(u_mouse.wheel.y) * 0.2;
     let pulse = sin(u_time.time * 5.0 + mouse_dist * 20.0) * wheel_effect;
     if (wheel_effect > 0.01) {
-        final_col = final_col * (1.0 + pulse);
+        current = current * (1.0 + pulse);
+    }
+
+    // Trail blend: decay old + blend in new
+    let trail_decay = 0.96;
+    let blend = max(0.2, circle_effect);
+    var result = mix(prev.rgb * trail_decay, current, blend);
+
+    textureStore(output, vec2<i32>(global_id.xy), vec4<f32>(result, 1.0));
+}
+
+// Pass 2: Read effect output, overlay all text + info
+
+@compute @workgroup_size(16, 16, 1)
+fn main_image(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let dimensions = textureDimensions(output);
+    if (global_id.x >= dimensions.x || global_id.y >= dimensions.y) {
+        return;
     }
 
     let pixel_pos = vec2<f32>(f32(global_id.x), f32(global_id.y));
     let screen_center = vec2<f32>(f32(dimensions.x) * 0.5, f32(dimensions.y) * 0.5);
 
+    var final_col = sample_input(vec2<i32>(global_id.xy)).rgb;
     let hello_color = render_hello_cuneus_animated(pixel_pos, screen_center);
     final_col += hello_color;
 
@@ -439,18 +507,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         final_col = mix(final_col, vec3<f32>(0.2, 0.9, 0.2), fps_alpha * 0.8);
     }
 
-    let color_debug_alpha = print_rgb_display(pixel_pos, vec2<f32>(20.0, 170.0), final_col);
+    let frame_alpha = print_frame_display(pixel_pos, vec2<f32>(20.0, 170.0));
+    if (frame_alpha > 0.01) {
+        final_col = mix(final_col, vec3<f32>(0.2, 0.7, 0.9), frame_alpha * 0.8);
+    }
+
+    let res_alpha = print_res_display(pixel_pos, vec2<f32>(20.0, 220.0), dimensions);
+    if (res_alpha > 0.01) {
+        final_col = mix(final_col, vec3<f32>(0.9, 0.5, 0.2), res_alpha * 0.8);
+    }
+
+    let color_debug_alpha = print_rgb_display(pixel_pos, vec2<f32>(20.0, 270.0), final_col);
     if (color_debug_alpha > 0.01) {
         final_col = mix(final_col, vec3<f32>(0.7, 0.7, 0.7), color_debug_alpha * 0.8);
     }
 
-    let mouse_sampled_color = base_col;
-    let mouse_debug_alpha = print_mouse_debug(pixel_pos, vec2<f32>(20.0, 220.0), mouse_sampled_color);
+    let mouse_sampled_color = final_col;
+    let mouse_debug_alpha = print_mouse_debug(pixel_pos, vec2<f32>(20.0, 320.0), mouse_sampled_color);
     if (mouse_debug_alpha > 0.01) {
         final_col = mix(final_col, vec3<f32>(0.6, 0.8, 0.9), mouse_debug_alpha * 0.8);
     }
 
-    // audio generation
+    // Audio generation (writes at pixel 0,0 only)
     if (global_id.x == 0u && global_id.y == 0u) {
         let base_frequency = 261.63;
         let note_frequency = base_frequency * (1.0 + sin(u_time.time * 0.5) * 0.1);

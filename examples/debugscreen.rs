@@ -1,5 +1,5 @@
 use cuneus::audio::SynthesisManager;
-use cuneus::compute::{ComputeShader, COMPUTE_TEXTURE_FORMAT_RGBA16};
+use cuneus::compute::{ComputeShader, PassDescription, COMPUTE_TEXTURE_FORMAT_RGBA16};
 use cuneus::{Core, RenderKit, ShaderApp, ShaderControls, ShaderManager};
 use winit::event::*;
 
@@ -15,12 +15,20 @@ impl ShaderManager for DebugScreen {
         // This layout defines how to bind the texture (binding 0) and sampler (binding 1) for rendering
         let base = RenderKit::new(core);
 
-        // Entry point configuration
+        // Multi-pass configuration:
+        // Pass 1 "effect": self-feedback for temporal trail
+        // Pass 2 "main_image": reads effect output, overlays text
+        let passes = vec![
+            PassDescription::new("effect", &["effect"]),
+            PassDescription::new("main_image", &["effect"]),
+        ];
+
         let config = ComputeShader::builder()
-            .with_entry_point("main")
-            .with_mouse() // Automatically goes to @group(2)
-            .with_fonts() // Automatically goes to @group(2)
-            .with_audio(1024) // Automatically goes to @group(2)
+            .with_entry_point("effect")
+            .with_multi_pass(&passes)
+            .with_mouse()
+            .with_fonts()
+            .with_audio(1024)
             .with_workgroup_size([16, 16, 1])
             .with_texture_format(COMPUTE_TEXTURE_FORMAT_RGBA16)
             .with_label("Debug Screen")
