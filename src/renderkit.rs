@@ -81,27 +81,7 @@ impl RenderKit {
 
     /// Creates a bind group layout with texture (binding 0) and sampler (binding 1) for displaying compute shader output
     pub fn create_standard_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-            label: Some("Standard Texture Layout"),
-        })
+        TextureManager::create_display_layout(device)
     }
 
     /// Create RenderKit with the standard texture layout (texture + sampler).
@@ -182,29 +162,7 @@ impl RenderKit {
                 label: Some("Fragment Shader"),
                 source: wgpu::ShaderSource::Wgsl(Self::BLIT_SHADER.into()),
             });
-        let texture_bind_group_layout =
-            core.device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Texture {
-                                multisampled: false,
-                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                            count: None,
-                        },
-                    ],
-                    label: Some("texture_bind_group_layout"),
-                });
+        let texture_bind_group_layout = TextureManager::create_display_layout(&core.device);
         let pipeline_layout = core
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
