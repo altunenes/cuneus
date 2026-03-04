@@ -53,7 +53,7 @@ jobs:
         if: runner.os == 'macOS' && matrix.shader_config.gstreamer_required
         run: |
           # Download and install official GStreamer packages
-          GSTREAMER_VERSION="1.26.9"
+          GSTREAMER_VERSION="1.28.1"
           curl -L "https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION/gstreamer-1.0-$GSTREAMER_VERSION-universal.pkg" -o gstreamer.pkg
           curl -L "https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION/gstreamer-1.0-devel-$GSTREAMER_VERSION-universal.pkg" -o gstreamer-devel.pkg
           
@@ -90,87 +90,80 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Starting GStreamer installation process..."
-          $gstVer = "1.26.9"
+          $gstVer = "1.28.1"
           $tempDir = "C:\gst-temp"
           $installDir = "C:\gstreamer"
-          
-          # Create necessary directories
+
           New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
-          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
-          Write-Host "Downloading installers from GitHub mirror..."
-          $runtimeUrl = "https://github.com/altunenes/cuneus/releases/download/dependencies/gstreamer-1.0-msvc-x86_64-1.26.9.msi"
-          $develUrl = "https://github.com/altunenes/cuneus/releases/download/dependencies/gstreamer-1.0-devel-msvc-x86_64-1.26.9.msi"
-          
-          Write-Host "Downloading MSVC 64-bit runtime installer..."
-          Invoke-WebRequest -Uri $runtimeUrl -OutFile "$tempDir\gstreamer.msi"
-          
-          Write-Host "Downloading MSVC 64-bit development installer..."
-          Invoke-WebRequest -Uri $develUrl -OutFile "$tempDir\gstreamer-devel.msi"
+          # GStreamer 1.28+ uses Inno Setup installer (single exe, no separate devel package)
+          $installerUrl = "https://github.com/altunenes/cuneus/releases/download/dependencies/gstreamer-1.0-msvc-x86_64-$gstVer.exe"
+          Write-Host "Downloading GStreamer $gstVer installer..."
+          Invoke-WebRequest -Uri $installerUrl -OutFile "$tempDir\gstreamer.exe"
 
-          Write-Host "Installing runtime package ..."
-          $proc = Start-Process msiexec -ArgumentList "/i", "`"$tempDir\gstreamer.msi`"", "INSTALLDIR=$installDir", "INSTALLLEVEL=1000", "/qn" -Wait -PassThru -NoNewWindow
+          # Inno Setup silent flags
+          Write-Host "Installing GStreamer..."
+          $proc = Start-Process -FilePath "$tempDir\gstreamer.exe" `
+            -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$installDir" `
+            -Wait -PassThru
           if ($proc.ExitCode -ne 0) {
-            Write-Host "Runtime installation failed with code: $($proc.ExitCode)"
-            exit 1
+            Write-Host "Installation failed with exit code: $($proc.ExitCode)"; exit 1
           }
 
-          Write-Host "Installing development package..."
-          $proc = Start-Process msiexec -ArgumentList "/i", "`"$tempDir\gstreamer-devel.msi`"", "INSTALLDIR=$installDir", "INSTALLLEVEL=1000", "/qn" -Wait -PassThru -NoNewWindow
-          if ($proc.ExitCode -ne 0) {
-            Write-Host "Development installation failed with code: $($proc.ExitCode)"
-            exit 1
+          Write-Host "Searching for GStreamer installation..."
+          # Dump directory tree to find where Inno Setup actually installed
+          Write-Host "=== Contents of C:\ ==="
+          Get-ChildItem "C:\" | Select-Object Name | Format-Table
+          if (Test-Path $installDir) {
+            Write-Host "=== Contents of $installDir (3 levels) ==="
+            Get-ChildItem $installDir -Recurse -Depth 3 | Select-Object FullName | Format-Table
           }
+          Write-Host "=== Checking Program Files ==="
+          Get-ChildItem "C:\Program Files" | Where-Object { $_.Name -like "*gstreamer*" -or $_.Name -like "*GStreamer*" } | Format-Table
 
-          
-          Write-Host "Looking for GStreamer installation..."
-          $expectedPath = "$installDir\1.0\msvc_x86_64"
-          $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-          while (-not (Test-Path $expectedPath)) {
-            if ($stopwatch.Elapsed.TotalSeconds -gt 60) {
-              Write-Host "Timeout waiting for installation directory. Current structure:"
-              Get-ChildItem -Path $installDir -Recurse | Format-List
-              exit 1
+          # Try known possible paths
+          $possiblePaths = @(
+            "$installDir\1.0\msvc_x86_64",
+            "$installDir\msvc_x86_64",
+            $installDir,
+            "C:\Program Files\GStreamer\1.0\msvc_x86_64",
+            "C:\Program Files (x86)\GStreamer\1.0\msvc_x86_64"
+          )
+          $expectedPath = $null
+          foreach ($p in $possiblePaths) {
+            if (Test-Path "$p\bin") {
+              Write-Host "Found GStreamer at: $p"
+              $expectedPath = $p
+              break
             }
-            Start-Sleep -Seconds 5
-            Write-Host "Waiting for installation directory... ($([int]$stopwatch.Elapsed.TotalSeconds)s)"
           }
-          
+          if ($null -eq $expectedPath) {
+            Write-Host "ERROR: Could not find GStreamer installation"
+            exit 1
+          }
+
+          # Verify core GStreamer DLL is present
+          $dllToCheck = "bin\gstreamer-1.0-0.dll"
+          $fullDllPath = Join-Path $expectedPath $dllToCheck
+          if (Test-Path $fullDllPath) {
+            Write-Host "Found: $dllToCheck"
+          } else {
+            Write-Host "Missing critical file: $dllToCheck in $expectedPath"
+            Get-ChildItem -Path $expectedPath -Recurse | Format-List
+            exit 1
+          }
+
           Write-Host "Setting environment variables..."
           $env:GSTREAMER_1_0_ROOT_MSVC_X86_64 = $expectedPath
           $env:GST_PLUGIN_PATH = "$expectedPath\lib\gstreamer-1.0"
           $env:PKG_CONFIG_PATH = "$expectedPath\lib\pkgconfig"
           $env:Path = "$expectedPath\bin;" + $env:Path
-          
-          # Set environment variables for subsequent steps
           "GSTREAMER_1_0_ROOT_MSVC_X86_64=$expectedPath" | Out-File -FilePath $env:GITHUB_ENV -Append
           "GST_PLUGIN_PATH=$expectedPath\lib\gstreamer-1.0" | Out-File -FilePath $env:GITHUB_ENV -Append
           "PKG_CONFIG_PATH=$expectedPath\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append
           "PATH=$expectedPath\bin;$env:Path" | Out-File -FilePath $env:GITHUB_ENV -Append
-          
-          # Verify critical FFmpeg codec DLLs are installed
-          Write-Host "Verifying FFmpeg codec installation..."
-          $criticalCodecs = @("avformat-61.dll", "avcodec-61.dll", "avutil-59.dll", "gstlibav.dll")
-          $binPath = "$expectedPath\bin"
-          $pluginPath = "$expectedPath\lib\gstreamer-1.0"
-          
-          foreach ($codec in $criticalCodecs) {
-            if ($codec -eq "gstlibav.dll") {
-              $codecPath = "$pluginPath\$codec"
-            } else {
-              $codecPath = "$binPath\$codec"
-            }
-            
-            if (Test-Path $codecPath) {
-              Write-Host "  Found: $codec"
-            } else {
-              Write-Host "  Missing: $codec at $codecPath"
-            }
-          }
-          
-          Write-Host " Installation summary:"
-          Write-Host "  Bin directory files: $((Get-ChildItem $binPath -ErrorAction SilentlyContinue).Count)"
-          Write-Host "  Plugin directory files: $((Get-ChildItem $pluginPath -ErrorAction SilentlyContinue).Count)"
+
+          Write-Host "GStreamer installation completed successfully."
 
       # Build all binaries for this shader group
       - name: Build binaries
