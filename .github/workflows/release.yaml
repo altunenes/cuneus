@@ -227,7 +227,7 @@ jobs:
             
           elif [[ "${{ runner.os }}" == "Windows" ]]; then
             echo "Bundling GStreamer for Windows..."
-            GSTREAMER_ROOT="C:/gstreamer/1.0/msvc_x86_64"
+            GSTREAMER_ROOT="${GSTREAMER_1_0_ROOT_MSVC_X86_64:-C:/gstreamer/1.0/msvc_x86_64}"
             LIB_EXT="dll"
             
             # Core libraries (Windows) - these come from both lib/ and bin/ directories
