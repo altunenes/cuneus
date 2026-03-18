@@ -56,7 +56,8 @@ fn implicit(z_in: vec2<f32>) -> vec2<f32> {
         if (dot(z, z) > ZZ) { break; }
     }
     
-    return vec2<f32>(f32(i), dot(z, z) / dot(dz, dz));
+    let dz_dot = max(dot(dz, dz), 1e-20);
+    return vec2<f32>(f32(i), dot(z, z) / dz_dot);
 }
 
 // Buffer A: Fractal calculation with self-feedback
@@ -73,7 +74,7 @@ fn buffer_a(@builtin(global_invocation_id) id: vec3<u32>) {
     let uv = ((vec2<f32>(U.x, R.y - U.y) - 0.5 * R) / min(R.y, R.x) + pan) * zoom;
     let z_and_i = implicit(uv);
     let iter_ratio = z_and_i.x / f32(ITER);
-    let sharpness = z_and_i.y;
+    let sharpness = clamp(z_and_i.y, 0.0, 100.0);
     
     let col1 = 0.5 + 0.5 * cos(params.col1 + vec3<f32>(0.0, 0.5, 1.0) + PI * vec3<f32>(2.0 * sharpness));
     let col2 = 0.5 + 0.5 * cos(params.col2 + PI * vec3<f32>(sharpness));
@@ -135,7 +136,8 @@ fn buffer_c(@builtin(global_invocation_id) id: vec3<u32>) {
         let b = textureLoad(input_texture1, coords, 0);
         
         d += (1.0 + h.z) * 30.0 * b.xy;
-        d = normalize(d);
+        let d_len = length(d);
+        d = select(d / d_len, vec2<f32>(0.0, 1.0), d_len < 1e-8);
         
         currentFrameContribution += amplitude * exp(-params.exp * length(d - vec2<f32>(0.0, 1.0))) * 
                                   max(sin(-2.0 + 6.0 * h.z + vec4<f32>(1.0, 2.0, 3.0, 4.0)), vec4<f32>(0.0));
@@ -160,10 +162,8 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     let R = vec2<f32>(dims);
     let U = vec2<f32>(id.xy);
     
-    let raw_result = textureLoad(input_texture0, vec2<i32>(U), 0);
-    
+    let raw_result = max(textureLoad(input_texture0, vec2<i32>(U), 0), vec4<f32>(0.0));
     let result = pow(raw_result, vec4<f32>(params.lights));
-    
     let gamma = 1.4;
     let final_result = pow(result, vec4<f32>(gamma));
     
