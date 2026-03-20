@@ -58,7 +58,8 @@ impl ShaderManager for KuwaharaShader {
             PassDescription::new("structure_tensor", &[]),
             PassDescription::new("tensor_field", &["structure_tensor"]),
             PassDescription::new("kuwahara_filter", &["tensor_field"]),
-            PassDescription::new("lic_edges", &["tensor_field", "kuwahara_filter"]),
+            PassDescription::new("lic_edges", &["tensor_field", "kuwahara_filter"])
+                .with_resolution_scale(0.5),
             PassDescription::new("main_image", &["lic_edges"]),
         ];
 

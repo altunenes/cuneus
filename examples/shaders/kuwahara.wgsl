@@ -17,8 +17,6 @@ struct TimeUniform {
 @group(3) @binding(1) var input_sampler0: sampler;
 @group(3) @binding(2) var input_texture1: texture_2d<f32>;
 @group(3) @binding(3) var input_sampler1: sampler;
-@group(3) @binding(4) var input_texture2: texture_2d<f32>;
-@group(3) @binding(5) var input_sampler2: sampler;
 
 struct KuwaharaParams {
     radius: f32,
@@ -268,7 +266,7 @@ fn kuwahara_filter(@builtin(global_invocation_id) id: vec3u) {
         }
     } else {
         // anisotropic mode
-        let td = textureSampleLevel(input_texture1, input_sampler1, uv, 0.0);
+        let td = textureSampleLevel(input_texture0, input_sampler0, uv, 0.0);
         let ori = td.xy;
         let anis = td.w;
         
@@ -357,7 +355,7 @@ fn kuwahara_filter(@builtin(global_invocation_id) id: vec3u) {
         
         // JUST FOR FEELING
         if (params.filter_mode == 1) {
-            let td = textureSampleLevel(input_texture1, input_sampler1, uv, 0.0);
+            let td = textureSampleLevel(input_texture0, input_sampler0, uv, 0.0);
             let anis = td.w;
             fc = aces_aniso(fc, anis);
         }
@@ -476,7 +474,7 @@ fn main_image(@builtin(global_invocation_id) id: vec3u) {
     if (id.x >= dims.x || id.y >= dims.y) { return; }
 
     let uv = (vec2f(id.xy) + 0.5) / vec2f(dims);
-    let result = textureSampleLevel(input_texture2, input_sampler2, uv, 0.0);
+    let result = textureSampleLevel(input_texture0, input_sampler0, uv, 0.0);
 
     textureStore(output, id.xy, result);
 }
