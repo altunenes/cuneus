@@ -187,9 +187,9 @@ impl ResourceLayout {
         }
     }
 
-    pub fn add_multipass_input_textures(&mut self) {
-        // Add 3 input texture pairs for multi-pass dependencies
-        for i in 0..3 {
+    pub fn add_multipass_input_textures(&mut self, count: usize) {
+        // Add N input texture pairs for multi-pass dependencies
+        for i in 0..count {
             self.add_resource(3, &format!("input_texture{i}"), ResourceType::InputTexture);
             self.add_resource(3, &format!("input_sampler{i}"), ResourceType::Sampler);
         }
