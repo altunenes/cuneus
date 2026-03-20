@@ -13,9 +13,11 @@ use wgpu;
 ///
 /// - `inputs[0]` → `@group(3) @binding(0) var input_texture0`
 /// - `inputs[1]` → `@group(3) @binding(2) var input_texture1`
-/// - `inputs[2]` → `@group(3) @binding(4) var input_texture2`
+/// - `inputs[N]` → `@group(3) @binding(2*N) var input_textureN`
 ///
-/// If fewer than 3 dependencies are listed, the remaining slots repeat `inputs[0]`.
+/// The Group 3 layout is sized automatically to fit the maximum dependency count
+/// across all passes. Passes with fewer dependencies repeat `inputs[0]` for the
+/// remaining slots.
 ///
 /// # Cross-frame feedback
 ///
@@ -49,13 +51,19 @@ pub struct PassDescription {
     /// dispatch dimensions from `screen_size / builder_workgroup_size`.
     /// If `Some`, the value is passed directly to `dispatch_workgroups(x, y, z)`.
     pub workgroup_size: Option<[u32; 3]>,
+    /// Optional fixed resolution for this buffer `[width, height]`.
+    /// If set, the buffer texture is created at this exact size regardless of screen size.
+    pub resolution: Option<[u32; 2]>,
+    /// Optional resolution scale factor relative to screen size (e.g., 0.5 = half-res).
+    /// Applied on creation and resize. Ignored if `resolution` is set.
+    pub resolution_scale: Option<f32>,
 }
 
 impl PassDescription {
     /// Create a new pass description.
     ///
     /// - `name`: the WGSL `@compute` entry point name.
-    /// - `inputs`: buffer names this pass reads from (max 3). Order determines WGSL binding:
+    /// - `inputs`: buffer names this pass reads from. Order determines WGSL binding:
     ///   `inputs[0]` → `input_texture0`, `inputs[1]` → `input_texture1`, etc.
     ///   Use `&[]` for passes with no dependencies (e.g., the first pass reading external input).
     pub fn new(name: &str, inputs: &[&str]) -> Self {
@@ -63,6 +71,8 @@ impl PassDescription {
             name: name.to_string(),
             inputs: inputs.iter().map(|s| s.to_string()).collect(),
             workgroup_size: None,
+            resolution: None,
+            resolution_scale: None,
         }
     }
 
@@ -73,6 +83,28 @@ impl PassDescription {
     /// Useful for passes that don't operate on screen-sized data (e.g., CNN layers, FFT butterflies).
     pub fn with_workgroup_size(mut self, size: [u32; 3]) -> Self {
         self.workgroup_size = Some(size);
+        self
+    }
+
+    /// Set a fixed resolution for this buffer's texture.
+    ///
+    /// The buffer will always be created at this exact size, independent of screen size.
+    ///
+    /// The workgroup dispatch count is automatically computed from this resolution.
+    pub fn with_resolution(mut self, width: u32, height: u32) -> Self {
+        self.resolution = Some([width, height]);
+        self
+    }
+
+    /// Set a resolution scale factor relative to screen size.
+    ///
+    /// For example, `0.5` creates a buffer at half the screen resolution in each dimension.
+    /// The actual pixel size is recomputed on window resize.
+    /// Ignored if [`with_resolution`] is also set (absolute takes precedence).
+    ///
+    /// The workgroup dispatch count is automatically computed from the scaled resolution.
+    pub fn with_resolution_scale(mut self, scale: f32) -> Self {
+        self.resolution_scale = Some(scale);
         self
     }
 }
@@ -118,6 +150,7 @@ pub struct ComputeConfiguration {
     pub label: String,
     pub num_channels: Option<u32>,
     pub hot_reload_path: Option<PathBuf>,
+    pub max_input_deps: usize,
 }
 
 /// Declarative builder for compute shader pipelines.
@@ -175,6 +208,7 @@ impl ComputeShaderBuilder {
                 label: "Compute Shader".to_string(),
                 num_channels: None,
                 hot_reload_path: None,
+                max_input_deps: 3,
             },
         }
     }
@@ -197,6 +231,12 @@ impl ComputeShaderBuilder {
     pub fn with_multi_pass(mut self, passes: &[PassDescription]) -> Self {
         self.config.passes = Some(passes.to_vec());
         self.config.entry_points = passes.iter().map(|p| p.name.clone()).collect();
+        self.config.max_input_deps = passes
+            .iter()
+            .map(|p| p.inputs.len())
+            .max()
+            .unwrap_or(0)
+            .max(1);
         self
     }
 

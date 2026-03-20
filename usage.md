@@ -252,11 +252,11 @@ When using `.with_multi_pass()`, the framework uses **ping-pong double-buffering
 
 The `&["dep1", "dep2"]` array in `PassDescription::new()` maps directly by position:
 
-- `deps[0]` → `input_texture0` in WGSL
-- `deps[1]` → `input_texture1` in WGSL
-- `deps[2]` → `input_texture2` in WGSL (max 3)
+- `deps[0]` → `input_texture0` in WGSL (`@group(3) @binding(0)`)
+- `deps[1]` → `input_texture1` in WGSL (`@group(3) @binding(2)`)
+- `deps[N]` → `input_textureN` in WGSL (`@group(3) @binding(2*N)`)
 
-If fewer than 3 dependencies are listed, the remaining slots repeat the first dependency.
+There is **no hard limit** on the number of dependencies per pass. The Group 3 layout is automatically sized to fit the maximum dependency count across all passes. Passes with fewer dependencies repeat the first dependency for the remaining slots.
 
 ```rust
 // Each pass reads from any previous pass — order doesn't matter
@@ -267,6 +267,30 @@ PassDescription::new("kuwahara", &["tensor_field"]),             // input_textur
 PassDescription::new("lic_edges", &["tensor_field", "kuwahara"]), // input_texture0 = tensor_field, 1 = kuwahara
 PassDescription::new("main_image", &["lic_edges"]),
 ```
+
+### Per-Buffer Resolution
+
+Each buffer can have its own resolution, independent of the screen size. This enables half-res blur passes, 1D lookup tables, fixed-size accumulation buffers, and more.
+
+```rust
+let passes = vec![
+    PassDescription::new("scene", &[]),                              // Full screen resolution
+    PassDescription::new("blur", &["scene"])
+        .with_resolution_scale(0.5),                                 // Half-res (recomputed on resize)
+    PassDescription::new("lut", &["scene"])
+        .with_resolution(256, 1),                                    // Fixed 256x1 lookup table
+    PassDescription::new("main_image", &["scene", "blur", "lut"]),   // Reads from all three
+];
+```
+
+**How it works:**
+
+- `.with_resolution(width, height)` — Fixed pixel size, never changes on resize
+- `.with_resolution_scale(0.5)` — Relative to screen, recomputed on window resize
+- No override — matches screen resolution (default behavior)
+- Workgroup dispatch count is **automatically computed** from the buffer's actual dimensions
+- Shaders query `textureDimensions()` at runtime, so they're already dimension-agnostic
+- When reading from a different-sized buffer, use `textureDimensions(input_texture0)` to scale coordinates
 
 ### Workgroup Sizes
 
