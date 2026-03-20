@@ -71,11 +71,13 @@ pub struct ComputeShader {
     // Cached sampler for multi-pass dispatch
     pub multipass_sampler: wgpu::Sampler,
 
-    // Pre-cached bind groups for multipass 
+    // Pre-cached bind groups for multipass
     // Group 1: [write_side=false, write_side=true] per intermediate pass
     cached_intermediate_group1: HashMap<String, [wgpu::BindGroup; 2]>,
-    // Group 3: indexed by write_side bit pattern (0..8) per pass
+    // Group 3: indexed by write_side bit pattern (0..2^max_input_deps) per pass
     cached_input_group3: HashMap<String, Vec<wgpu::BindGroup>>,
+    /// Maximum number of input dependencies per pass (determines Group 3 layout size)
+    max_input_deps: usize,
 
     // Configuration and hot reload
     pub entry_points: Vec<String>,
@@ -132,7 +134,7 @@ impl ComputeShader {
             }
         } else if config.passes.is_some() {
             // Fallback: Multi-pass input textures only if no storage buffers requested
-            resource_layout.add_multipass_input_textures();
+            resource_layout.add_multipass_input_textures(config.max_input_deps);
         }
 
         // Step 2: Create bind group layouts
@@ -278,6 +280,8 @@ impl ComputeShader {
                     &buffer_names,
                     config.texture_format,
                     bind_group_layouts.get(&3).unwrap().clone(),
+                    config.max_input_deps,
+                    passes,
                 );
 
                 (Some(manager), Some(dependencies))
@@ -361,6 +365,7 @@ impl ComputeShader {
             multipass_sampler,
             cached_intermediate_group1: HashMap::new(),
             cached_input_group3: HashMap::new(),
+            max_input_deps: config.max_input_deps,
             entry_points: config.entry_points,
             hot_reload: None,
             label: config.label,
@@ -1214,18 +1219,27 @@ impl ComputeShader {
             let entry_point = &self.entry_points[pass_idx];
 
             // Get workgroup count for this specific pass
+            // Priority: explicit workgroup_size > buffer resolution > screen-based default
             let pass_workgroup_count = if let Some(ref pass_descriptions) = self.pass_descriptions {
                 if let Some(pass_desc) = pass_descriptions.get(pass_idx) {
                     if let Some(custom_size) = pass_desc.workgroup_size {
-                        custom_size // Use custom workgroup size from PassDescription
+                        custom_size // Explicit dispatch count override
+                    } else if pass_desc.resolution.is_some() || pass_desc.resolution_scale.is_some() {
+                        // Compute from buffer's actual dimensions
+                        if let Some(ref multipass) = self.multipass_manager {
+                            let (bw, bh) = multipass.get_buffer_dimensions(entry_point);
+                            self.workgroup_count_for(bw, bh)
+                        } else {
+                            workgroup_count
+                        }
                     } else {
-                        workgroup_count // Fall back to default screen-based size
+                        workgroup_count // Default screen-based size
                     }
                 } else {
-                    workgroup_count // Fall back to default if no pass description
+                    workgroup_count
                 }
             } else {
-                workgroup_count // Fall back to default if no pass descriptions
+                workgroup_count
             };
 
             // Compute Group 3 cache key from current write_side state
@@ -1239,7 +1253,7 @@ impl ComputeShader {
                     .cloned()
                     .unwrap_or_else(|| "buffer_a".to_string());
                 let mut key = 0usize;
-                for i in 0..3 {
+                for i in 0..self.max_input_deps {
                     let buf_name = if deps.is_empty() {
                         &first_buf
                     } else {
@@ -1481,34 +1495,28 @@ impl ComputeShader {
                 }
             }
 
-            // --- Group 3: input textures (up to 8 combinations per pass) ---
+            // --- Group 3: input textures (2^N combinations per pass) ---
             let empty_deps = Vec::new();
             let deps = dependencies.get(entry_point).unwrap_or(&empty_deps);
+            let n = self.max_input_deps;
 
-            // Resolve which buffer each of the 3 input slots references
-            let slot_buffers: [&str; 3] = [
-                if deps.is_empty() {
-                    first_buf.as_str()
-                } else {
-                    deps.first().unwrap().as_str()
-                },
-                if deps.is_empty() {
-                    first_buf.as_str()
-                } else {
-                    deps.get(1).unwrap_or(&deps[0]).as_str()
-                },
-                if deps.is_empty() {
-                    first_buf.as_str()
-                } else {
-                    deps.get(2).unwrap_or(&deps[0]).as_str()
-                },
-            ];
+            // Resolve which buffer each input slot references
+            let slot_buffers: Vec<&str> = (0..n)
+                .map(|i| {
+                    if deps.is_empty() {
+                        first_buf.as_str()
+                    } else {
+                        deps.get(i).unwrap_or(&deps[0]).as_str()
+                    }
+                })
+                .collect();
 
             let input_layout = multipass.get_input_layout();
-            let mut cached = Vec::with_capacity(8);
+            let num_combinations = 1usize << n;
+            let mut cached = Vec::with_capacity(num_combinations);
 
-            for key in 0u8..8 {
-                let views: Vec<wgpu::TextureView> = (0..3)
+            for key in 0..num_combinations {
+                let views: Vec<wgpu::TextureView> = (0..n)
                     .map(|i| {
                         let write_side_val = (key >> i) & 1 == 1;
                         // Replicate get_read_texture: write_side==true → read .0
@@ -1522,34 +1530,21 @@ impl ComputeShader {
                     })
                     .collect();
 
+                let mut entries = Vec::with_capacity(n * 2);
+                for i in 0..n {
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: (i * 2) as u32,
+                        resource: wgpu::BindingResource::TextureView(&views[i]),
+                    });
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: (i * 2 + 1) as u32,
+                        resource: wgpu::BindingResource::Sampler(&self.multipass_sampler),
+                    });
+                }
+
                 cached.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                     layout: input_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&views[0]),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self.multipass_sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::TextureView(&views[1]),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::Sampler(&self.multipass_sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 4,
-                            resource: wgpu::BindingResource::TextureView(&views[2]),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 5,
-                            resource: wgpu::BindingResource::Sampler(&self.multipass_sampler),
-                        },
-                    ],
+                    entries: &entries,
                     label: Some(&format!("{entry_point} Cached Input (key={key})")),
                 }));
             }
