@@ -15,10 +15,18 @@ cuneus::uniform_params! {
     spec_power: f32,
     spec_intensity: f32,
     color_vibrancy: f32,
-    mixing: f32,
+    vortex_radius: f32,
     gamma: f32,
     feedback: f32,
-    _pad2: f32}
+    vortex_speed: f32,
+    force_mode: f32,
+    force_harmony: f32,
+    force_count: f32,
+    contrast: f32,
+    warp_amount: f32,
+    flow_intensity: f32,
+    color_advect: f32,
+    drift_decay: f32}
 }
 struct FluidShader {
     base: RenderKit,
@@ -31,8 +39,8 @@ impl ShaderManager for FluidShader {
             viscosity: 0.5,
             gravity: 0.002,
             pressure_scale: 1.0,
-            vortex_strength: 0.08,
-            turbulence: 0.003,
+            vortex_strength: 0.12,
+            turbulence: 0.002,
             flow_speed: 2.0,
             pos_diffusion: 0.3,
             texture_influence: 1.3,
@@ -40,16 +48,25 @@ impl ShaderManager for FluidShader {
             spec_power: 36.0,
             spec_intensity: 2.0,
             color_vibrancy: 1.3,
-            mixing: 0.0,
+            vortex_radius: 0.008,
             gamma: 1.1,
-            feedback: 0.0,
-            _pad2: 0.0};
+            feedback: 0.85,
+            vortex_speed: 0.04,
+            force_mode: 0.0,
+            force_harmony: 0.3,
+            force_count: 4.0,
+            contrast: 0.15,
+            warp_amount: 1.0,
+            flow_intensity: 1.0,
+            color_advect: 1.0,
+            drift_decay: 0.0};
         let base = RenderKit::new(core);
         let passes = vec![
             PassDescription::new("fluid_sim", &["fluid_sim", "color_map"]),
-            PassDescription::new("position_field", &["fluid_sim", "position_field", "color_map"]),
+            PassDescription::new("pressure_refine", &["fluid_sim", "pressure_refine"]),
+            PassDescription::new("position_field", &["pressure_refine", "position_field", "color_map"]),
             PassDescription::new("color_map", &["position_field", "color_map"]),
-            PassDescription::new("main_image", &["color_map", "fluid_sim"]),
+            PassDescription::new("main_image", &["color_map", "pressure_refine"]),
         ];
         let config = ComputeShader::builder()
             .with_entry_point("fluid_sim")
@@ -108,21 +125,38 @@ impl ShaderManager for FluidShader {
                     .default_width(300.0)
                     .show(ctx, |ui| {
                         egui::CollapsingHeader::new("Flow").default_open(true).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.flow_speed, 0.1..=5.0).text("Speed")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.vortex_strength, 0.0..=0.5).text("Vorticity")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.turbulence, 0.0..=0.02).text("Turbulence")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.viscosity, 0.0..=5.0).text("Viscosity")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.mixing, 0.0..=1.0).text("Mixing")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.flow_speed, 0.1..=3.0).text("Speed")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.viscosity, 0.0..=3.0).text("Viscosity")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.turbulence, 0.0..=0.5).text("Dissipation")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.feedback, 0.0..=1.01).text("Feedback")).changed();
+                        });
+                        egui::CollapsingHeader::new("Vortices").default_open(true).show(ui, |ui| {
+                            if ui.add(egui::Slider::new(&mut params.force_count, 0.0..=8.0).step_by(1.0).text("Sources")).changed() {
+                                params.force_count = params.force_count.round();
+                                changed = true;
+                            }
+                            changed |= ui.add(egui::Slider::new(&mut params.vortex_strength, 0.0..=0.5).text("Confinement")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.force_harmony, 0.0..=1.0).text("Softness")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.vortex_radius, 0.002..=0.04).text("Radius")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.vortex_speed, 0.005..=0.15).text("Speed")).changed();
+                        });
+                        egui::CollapsingHeader::new("Distortion").default_open(true).show(ui, |ui| {
+                            changed |= ui.add(egui::Slider::new(&mut params.warp_amount, 0.5..=5.0).text("Warp")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.flow_intensity, 0.5..=5.0).text("Flow Intensity")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.color_advect, 0.0..=3.0).text("Color Advect")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.drift_decay, 0.0..=0.05).text("Drift Decay")).changed();
                         });
                         egui::CollapsingHeader::new("Physics").default_open(false).show(ui, |ui| {
                             changed |= ui.add(egui::Slider::new(&mut params.pressure_scale, 0.0..=2.0).text("Pressure")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.gravity, 0.0..=0.2).text("Gravity")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.texture_influence, 0.0..=1.3).text("texture inf")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.texture_influence, 0.0..=1.3).text("Texture Inf")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.pos_diffusion, 0.0..=1.0).text("Pos Diffusion")).changed();
                         });
                         egui::CollapsingHeader::new("Display").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.light_intensity, 0.8..=2.0).text("Light")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.color_vibrancy, 0.5..=2.0).text("Color Vibrancy")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.light_intensity, 0.8..=3.0).text("Light")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.spec_intensity, 0.0..=5.0).text("Specular")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.color_vibrancy, 0.5..=2.5).text("Color Vibrancy")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.contrast, 0.0..=0.8).text("Contrast")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.gamma, 0.5..=2.5).text("Gamma")).changed();
                         });
                         ui.separator();
