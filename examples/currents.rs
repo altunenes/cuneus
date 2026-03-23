@@ -1,7 +1,5 @@
 // Photon tracing: currents
-// Very complex example demonstrating multi-buffer ping-pong computation
-// I hope this example is useful for those who came from the Shadertoy, I tried to use same terminology (bufferA, ichannels etc)
-// I used the all buffers (buffera,b,c,d,mainimage) and complex ping-pong logic
+// Complex example demonstrating multi-buffer ping-pong computation
 use cuneus::compute::{ComputeShader, PassDescription, COMPUTE_TEXTURE_FORMAT_RGBA16};
 use cuneus::{Core, RenderKit, ShaderApp, ShaderControls, ShaderManager};
 use cuneus::{ExportManager, UniformProvider};
@@ -97,15 +95,15 @@ impl ShaderManager for CurrentsShader {
 
         // Define the 5 passes
         let passes = vec![
-            PassDescription::new("buffer_a", &["buffer_a"]), // self-feedback
-            PassDescription::new("buffer_b", &["buffer_b", "buffer_a"]), // reads BufferB + BufferA
-            PassDescription::new("buffer_c", &["buffer_c", "buffer_a"]), // reads BufferC + BufferA
-            PassDescription::new("buffer_d", &["buffer_d", "buffer_c", "buffer_b"]), // reads BufferD + BufferC + BufferB
-            PassDescription::new("main_image", &["buffer_d"]), // reads BufferD for final output
+            PassDescription::new("pattern", &["pattern"]), // self-feedback
+            PassDescription::new("trace_fine", &["trace_fine", "pattern"]), // self + pattern
+            PassDescription::new("trace_coarse", &["trace_coarse", "pattern"]), // self + pattern
+            PassDescription::new("accumulate", &["accumulate", "trace_coarse", "trace_fine"]), // self + both traces
+            PassDescription::new("main_image", &["accumulate"]), // final output
         ];
 
         let config = ComputeShader::builder()
-            .with_entry_point("buffer_a") // Start with buffer_a
+            .with_entry_point("pattern")
             .with_multi_pass(&passes)
             .with_custom_uniforms::<CurrentsParams>()
             .with_workgroup_size([16, 16, 1])

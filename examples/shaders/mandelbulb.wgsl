@@ -1,4 +1,4 @@
-// Path tracer for Mandelbulb, Enes Altun, 2025. CC 3.0 
+// Path tracer for Mandelbulb, Enes Altun, 2025. CC 3.0
 // This shader uses various techniques, citations and inspirations:
 // - Hash functions (hash22, hash12): Dave_Hoskins https://www.shadertoy.com/view/4djSRW
 // - Random unit disk sampling (rnd_unit2): iq https://www.shadertoy.com/view/tl23Rm
@@ -407,7 +407,7 @@ fn draw(frag_coord: v2, frame: u32) -> v4 {
 
 // Path tracing with self-feedback accumulation
 @compute @workgroup_size(16, 16, 1)
-fn buffer_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn accumulate(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let dimensions = textureDimensions(output);
     R = v2(f32(dimensions.x), f32(dimensions.y));
 
@@ -459,7 +459,7 @@ fn main_image(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // Read from buffer_a - alpha channel contains frame count
+    // Read from accumulate - alpha channel contains frame count
     // Divide by frame count for proper average
     let tex = textureLoad(input_texture0, vec2<i32>(global_id.xy), 0);
     var col = tex.rgb / tex.a;

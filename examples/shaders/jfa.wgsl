@@ -1,7 +1,5 @@
 // Custom JFA (Jump Flooding Algorithm) with Clifford Attractor
-// Based on Shadertoy implementation with multi-buffer ping-pong
-// I also tried to use shadertoy term for that complex shader
-// Backbone for JFA algorithm based on the : https://www.shadertoy.com/view/wcfSzs, wyatt, 2025 "JFA art 2", Shadertoy default license
+// Backbone for JFA algorithm based on: https://www.shadertoy.com/view/wcfSzs, wyatt, 2025 "JFA art 2"
 
 struct TimeUniform {
     time: f32,
@@ -91,7 +89,7 @@ fn sample_input2(uv: v2) -> v4 {
 }
 
 @compute @workgroup_size(16, 16, 1)
-fn buffer_a(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn seed_points(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dims = textureDimensions(output);
     R = v2(dims);
     
@@ -145,10 +143,10 @@ fn buffer_a(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(output, gid.xy, Q);
 }
 
-// Buffer B - Jump Flooding Algorithm (ichannel0=bufferA, ichannel1=bufferB)
+// Flood step - Jump Flooding Algorithm (reads seed_points + self-feedback)
 fn Y(inout_Q: ptr<function, v4>, U: v2, v: v2) {
-    let x = sample_input1(U + v).xy; // Read from old "BufferB"
-    // Compare distance to a point in the new point cloud ("BufferA")
+    let x = sample_input1(U + v).xy; // Read from previous flood_step
+    // Compare distance to a point in the seed point cloud
     if (distance(U, sample_input0(x).xy) < distance(U, sample_input0((*inout_Q).xy).xy)) {
         (*inout_Q).x = x.x;
         (*inout_Q).y = x.y;
@@ -156,7 +154,7 @@ fn Y(inout_Q: ptr<function, v4>, U: v2, v: v2) {
 }
 
 @compute @workgroup_size(16, 16, 1)
-fn buffer_b(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn flood_step(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dims = textureDimensions(output);
     R = v2(dims);
     
@@ -172,7 +170,7 @@ fn buffer_b(@builtin(global_invocation_id) gid: vec3<u32>) {
         Q = v4(U, 0.0, 1.0);
     } else {
         // JFA Propagation Step
-        // Read previous state from BufferB
+        // Read previous state
         Q = sample_input1(U);
         let k = exp2(f32(N - 1 - (i32(time_data.frame) % N)));
         Y(&Q, U, v2(0.0, k));
@@ -184,9 +182,9 @@ fn buffer_b(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(output, gid.xy, Q);
 }
 
-// Buffer C - Color accumulation based on JFA results (ichannel0=bufferA, ichannel1=bufferB, ichannel2=bufferC)
+// Color accumulation based on JFA results (reads seed_points + flood_step + self-feedback)
 @compute @workgroup_size(16, 16, 1)
-fn buffer_c(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn color_accumulate(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dims = textureDimensions(output);
     R = v2(dims);
     
@@ -206,7 +204,7 @@ fn buffer_c(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (should_reset) {
         Q = v4(0.0);
     } else {
-        Q = sample_input2(U); // Read old color from "BufferC"
+        Q = sample_input2(U); // Read old color (self-feedback)
         // Apply fade to prevent infinite accumulation after stabilization
         // But only if accumulation is not frozen
         if (cycle_count >= 3 && params.freeze_accumulation < 0.5) {
@@ -217,8 +215,8 @@ fn buffer_c(@builtin(global_invocation_id) gid: vec3<u32>) {
     // On the *last* frame of the JFA cycle, add the new color information.
     // But only if accumulation is not frozen
     if (frame_in_cycle == (N - 1) && params.freeze_accumulation < 0.5) {
-        // sample_input1(U) is the result of the completed JFA from BufferB
-        // sample_input0(...) is looking up that point's data from the new BufferA
+        // sample_input1(U) is the result of the completed JFA from flood_step
+        // sample_input0(...) is looking up that point's data from seed_points
         let a = sample_input0(sample_input1(U).xy);
         
         let color_term = max(0.5 + 0.5 * sin(-2.0 + 3.0 * a.z + v4(params.color_r, params.color_g, params.color_b, params.color_w)), v4(0.0));
@@ -230,7 +228,7 @@ fn buffer_c(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(output, gid.xy, Q);
 }
 
-// (ichannel2=bufferC)
+// Main image (reads color_accumulate)
 @compute @workgroup_size(16, 16, 1)
 fn main_image(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dims = textureDimensions(output);

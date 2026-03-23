@@ -763,7 +763,7 @@ impl ComputeShader {
             binding_counter += 1;
         }
 
-        // Add font texture resources (Shadertoy-style)
+        // Add font texture resources
         if let Some(font_tex) = font_system {
             entries.extend_from_slice(&[
                 wgpu::BindGroupEntry {
@@ -1251,7 +1251,7 @@ impl ComputeShader {
                 let first_buf = multipass
                     .first_buffer_name()
                     .cloned()
-                    .unwrap_or_else(|| "buffer_a".to_string());
+                    .unwrap_or_else(|| "main".to_string());
                 let mut key = 0usize;
                 for i in 0..self.max_input_deps {
                     let buf_name = if deps.is_empty() {
@@ -1459,7 +1459,7 @@ impl ComputeShader {
         let first_buf = multipass
             .first_buffer_name()
             .cloned()
-            .unwrap_or_else(|| "buffer_a".to_string());
+            .unwrap_or_else(|| "main".to_string());
 
         for entry_point in &self.entry_points {
             // --- Group 1: intermediate pass write targets (2 per pass) ---

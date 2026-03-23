@@ -131,7 +131,7 @@ impl FontSystem {
         let (width, height) = font_image.dimensions();
 
         let texture = core.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Shadertoy Font Texture"),
+            label: Some("Font Texture"),
             size: wgpu::Extent3d {
                 width,
                 height,

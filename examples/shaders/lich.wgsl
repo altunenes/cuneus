@@ -120,9 +120,9 @@ fn process_color(base_color: vec3<f32>, wave: f32, spectrum_mix: f32) -> vec3<f3
     return mixed * temp_adjust;
 }
 
-// Lightning generation pass (buffer_a writes to buffer_a)
+// Lightning generation pass
 @compute @workgroup_size(16, 16, 1)
-fn buffer_a(@builtin(global_invocation_id) id: vec3<u32>) {
+fn lightning(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
     if (id.x >= dims.x || id.y >= dims.y) { return; }
 
@@ -187,9 +187,9 @@ fn buffer_a(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(output, pixel_pos, result);
 }
 
-// Feedback accumulation pass (combines buffer_a + buffer_b with decay)
+// Feedback accumulation pass (combines lightning + previous feedback with decay)
 @compute @workgroup_size(16, 16, 1)
-fn buffer_b(@builtin(global_invocation_id) id: vec3<u32>) {
+fn feedback(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
     if (id.x >= dims.x || id.y >= dims.y) { return; }
 

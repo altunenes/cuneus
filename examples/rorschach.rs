@@ -63,14 +63,14 @@ impl ShaderManager for RorschachShader {
         let base = RenderKit::new(core);
 
         let passes = vec![
-            PassDescription::new("buffer_a", &[]), 
-            PassDescription::new("buffer_b", &["buffer_a"]), 
-            PassDescription::new("buffer_c", &["buffer_c", "buffer_b"]), 
-            PassDescription::new("main_image", &["buffer_c"]),
+            PassDescription::new("shape", &[]),
+            PassDescription::new("flow_field", &["shape"]),
+            PassDescription::new("ink_trace", &["ink_trace", "flow_field"]),
+            PassDescription::new("main_image", &["ink_trace"]),
         ];
 
         let config = ComputeShader::builder()
-            .with_entry_point("buffer_a")
+            .with_entry_point("shape")
             .with_multi_pass(&passes)
             .with_custom_uniforms::<RorschachParams>()
             .with_workgroup_size([16, 16, 1])

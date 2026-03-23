@@ -23,10 +23,10 @@ Cuneus uses a declarative builder to configure your entire compute pipeline. You
 ```rust
 // Define your multi-pass pipeline as a dependency graph:
 let passes = vec![
-    PassDescription::new("buffer_a", &[]),                       // no inputs
-    PassDescription::new("buffer_b", &["buffer_a"]),             // reads buffer_a
-    PassDescription::new("buffer_c", &["buffer_b", "buffer_c"]),  // reads buffer_b + own previous frame
-    PassDescription::new("main_image", &["buffer_c"]),
+    PassDescription::new("compute_field", &[]),                              // no inputs
+    PassDescription::new("render", &["compute_field"]),                      // reads compute_field
+    PassDescription::new("feedback", &["render", "feedback"]),               // reads render + own previous frame
+    PassDescription::new("main_image", &["feedback"]),
 ];
 
 let config = ComputeShader::builder()
@@ -36,7 +36,7 @@ let config = ComputeShader::builder()
     .build();
 ```
 
-Dependencies are packed sequentially — `&["buffer_b", "buffer_c"]` becomes `input_texture0` and `input_texture1` in WGSL. Self-reference enables cross-frame feedback (ping-pong) automatically. One `.dispatch()` call runs the entire pipeline. See [usage.md](usage.md) for the full guide.
+Dependencies are packed sequentially — `&["render", "feedback"]` becomes `input_texture0` and `input_texture1` in WGSL. Self-reference enables cross-frame feedback (ping-pong) automatically. One `.dispatch()` call runs the entire pipeline. See [usage.md](usage.md) for the full guide.
 
 ## Current look
 

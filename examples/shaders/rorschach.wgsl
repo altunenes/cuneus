@@ -77,7 +77,7 @@ fn pal(t:f32,uv:v2,off:f32)->v3{
 // A: Shape Generation
 // simple: regular stuff: I calculate the raw heightmap of the inkblot here.
 @compute @workgroup_size(16,16,1)
-fn buffer_a(@builtin(global_invocation_id) id:vec3<u32>){
+fn shape(@builtin(global_invocation_id) id:vec3<u32>){
     let dim=textureDimensions(out);
     if(id.x>=dim.x||id.y>=dim.y){return;}
     let uv=(v2(id.xy)-.5*v2(f32(dim.x),f32(dim.y)))/f32(dim.y);
@@ -90,7 +90,7 @@ fn buffer_a(@builtin(global_invocation_id) id:vec3<u32>){
 // B: Vector Field
 // I calculate the gradient (slope) of the ink shape to determine flow direction.
 @compute @workgroup_size(16,16,1)
-fn buffer_b(@builtin(global_invocation_id) id:vec3<u32>){
+fn flow_field(@builtin(global_invocation_id) id:vec3<u32>){
     let dim=textureDimensions(out);
     if(id.x>=dim.x||id.y>=dim.y){return;}
     let c=iv2(id.xy);
@@ -103,7 +103,7 @@ fn buffer_b(@builtin(global_invocation_id) id:vec3<u32>){
 // I perform Line Integral Convolution (LIC) here. I trace particles through the 
 // vector field, accumulating color and density to simulate wet ink flow.
 @compute @workgroup_size(16,16,1)
-fn buffer_c(@builtin(global_invocation_id) id:vec3<u32>){
+fn ink_trace(@builtin(global_invocation_id) id:vec3<u32>){
     let dim=textureDimensions(out);
     if(id.x>=dim.x||id.y>=dim.y){return;}
     

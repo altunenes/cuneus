@@ -60,9 +60,9 @@ fn implicit(z_in: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(f32(i), dot(z, z) / dz_dot);
 }
 
-// Buffer A: Fractal calculation with self-feedback
+// Fractal calculation
 @compute @workgroup_size(16, 16, 1)
-fn buffer_a(@builtin(global_invocation_id) id: vec3<u32>) {
+fn fractal(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
     if (id.x >= dims.x || id.y >= dims.y) { return; }
 
@@ -87,9 +87,9 @@ fn buffer_a(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(output, id.xy, result);
 }
 
-// Buffer B: Gradient computation from Buffer A
+// Gradient computation from fractal pass
 @compute @workgroup_size(16, 16, 1)
-fn buffer_b(@builtin(global_invocation_id) id: vec3<u32>) {
+fn gradient(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
     if (id.x >= dims.x || id.y >= dims.y) { return; }
 
@@ -111,9 +111,9 @@ fn buffer_b(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(output, id.xy, result);
 }
 
-// Buffer C: Particle tracing with self-feedback + Buffer B input
+// Particle tracing with self-feedback + gradient input
 @compute @workgroup_size(16, 16, 1)
-fn buffer_c(@builtin(global_invocation_id) id: vec3<u32>) {
+fn trace(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
     if (id.x >= dims.x || id.y >= dims.y) { return; }
 
@@ -153,7 +153,7 @@ fn buffer_c(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(output, id.xy, result);
 }
 
-//gamma correction from Buffer C
+// Gamma correction from trace pass
 @compute @workgroup_size(16, 16, 1)
 fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);

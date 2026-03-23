@@ -4,19 +4,6 @@ Cuneus is a GPU compute shader engine with a unified backend for single-pass, mu
 
 **Key Philosophy:** Declare what you need in the builder → get predictable bindings in WGSL. No manual binding management, no boilerplate. Add `.with_mouse()` in Rust, access `@group(2) mouse` in your shader. The **4-Group Binding Convention** guarantees where every resource lives: Group 0 (time), Group 1 (output/params), Group 2 (engine resources), Group 3 (user data/multi-pass). Everything flows from the builder.
 
-## Shadertoy Mapping
-
-| Shadertoy | Cuneus WGSL |
-|-----------|-------------|
-| `iResolution.xy` | `vec2<f32>(textureDimensions(output))` |
-| `iTime` | `time_data.time` |
-| `iTimeDelta` | `time_data.delta` |
-| `iFrame` | `time_data.frame` |
-| `iMouse` | `mouse` (requires `.with_mouse()`) |
-| `iChannel0` | `channel0` (requires `.with_channels(1)`) |
-| `fragCoord` | `vec2<f32>(id.xy)` from `@builtin(global_invocation_id)` |
-| `fragColor = ...` | `textureStore(output, id.xy, color)` |
-
 ## Core Concepts
 
 ### 1. The Unified Compute Pipeline
@@ -60,8 +47,8 @@ Cuneus enforces a standard bind group layout to create a stable and predictable 
 The framework elegantly handles two types of multi-pass computation:
 
 1. **Texture-Based (Ping-Pong):** Ideal for image processing and feedback effects. Intermediate results are stored in textures. Each buffer independently tracks its write state, so any pass can read from any previous pass's output — and cross-frame feedback (self-referencing passes) works automatically.
-   - *Examples with cross-frame feedback: `lich.rs`, `currents.rs`, `rorschach.rs`*
-   - *Examples with within-frame only: `kuwahara.rs`, `fluid.rs`, `jfa.rs`, `2dneuron.rs`*
+   - *Examples with cross-frame feedback: `lich.rs`, `currents.rs`, `rorschach.rs`, `jfa.rs`*
+   - *Examples with within-frame only: `kuwahara.rs`, `fluid.rs`, `2dneuron.rs`*
 
 2. **Storage-Buffer-Based (Shared Memory):** Ideal for GPU algorithms like FFT or simulations like CNNs. All passes read from and write to the same large, user-defined storage buffers. This is enabled by using `.with_multi_pass()` *and* `.with_storage_buffer()`.
    - *Examples: `fft.rs`, `cnn.rs`*
@@ -103,16 +90,16 @@ impl ShaderManager for MyShader {
         // 1. (Multi-Pass) Define your passes and their dependencies.
         //    The string in `new()` is the WGSL entry point name.
         //    The slice `&[]` lists buffers to bind as input_texture0, input_texture1, etc.
-        //    Self-reference (e.g., "buffer_a" in its own inputs) enables cross-frame feedback.
+        //    Self-reference (e.g., "feedback" in its own inputs) enables cross-frame feedback.
         /*
         let passes = vec![
-            PassDescription::new("buffer_a", &[]),              // No inputs
-            PassDescription::new("buffer_b", &["buffer_a"]),    // input_texture0 = buffer_a
-            PassDescription::new("main_image", &["buffer_b"]),
+            PassDescription::new("compute_field", &[]),                  // No inputs
+            PassDescription::new("feedback", &["compute_field"]),        // input_texture0 = compute_field
+            PassDescription::new("main_image", &["feedback"]),
         ];
         // For cross-frame feedback (temporal effects), add self to inputs:
-        // PassDescription::new("buffer_b", &["buffer_a", "buffer_b"])
-        // Then input_texture1 = buffer_b's PREVIOUS frame output (automatic)
+        // PassDescription::new("feedback", &["compute_field", "feedback"])
+        // Then input_texture1 = feedback's PREVIOUS frame output (automatic)
         */
 
         // Configure the compute shader using the builder
@@ -175,8 +162,7 @@ impl ShaderManager for MyShader {
         // end_frame() handles UI overlay + submit + present in one call
         self.base.end_frame(core, frame, full_output);
 
-        // Cross-frame feedback (self-referencing passes like buffer_a reading buffer_a)
-        // works automatically
+        // Cross-frame feedback (self-referencing passes) works automatically
 
         Ok(())
     }

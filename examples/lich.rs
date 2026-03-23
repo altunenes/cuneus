@@ -32,9 +32,9 @@ impl ShaderManager for LichShader {
         let base = RenderKit::new(core);
 
         let passes = vec![
-            PassDescription::new("buffer_a", &[]),
-            PassDescription::new("buffer_b", &["buffer_a", "buffer_b"]), // Self-feedback!
-            PassDescription::new("main_image", &["buffer_b"]),
+            PassDescription::new("lightning", &[]),
+            PassDescription::new("feedback", &["lightning", "feedback"]), // Self-feedback!
+            PassDescription::new("main_image", &["feedback"]),
         ];
 
         let config = ComputeShader::builder()

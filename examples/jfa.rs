@@ -66,16 +66,16 @@ impl ShaderManager for JfaShader {
         };
         let base = RenderKit::new(core);
 
-        // Create multipass system: buffer_a -> buffer_b -> buffer_c -> main_image
+        // Create multipass system: seed_points -> flood_step -> color_accumulate -> main_image
         let passes = vec![
-            PassDescription::new("buffer_a", &["buffer_a"]), // self-feedback
-            PassDescription::new("buffer_b", &["buffer_a", "buffer_b"]), // reads buffer_a + self-feedback
-            PassDescription::new("buffer_c", &["buffer_a", "buffer_b", "buffer_c"]), // reads ALL 3 buffers
-            PassDescription::new("main_image", &["buffer_c"]),
+            PassDescription::new("seed_points", &["seed_points"]), // self-feedback
+            PassDescription::new("flood_step", &["seed_points", "flood_step"]), // reads seed_points + self-feedback
+            PassDescription::new("color_accumulate", &["seed_points", "flood_step", "color_accumulate"]), // reads all 3
+            PassDescription::new("main_image", &["color_accumulate"]),
         ];
 
         let config = ComputeShader::builder()
-            .with_entry_point("buffer_a")
+            .with_entry_point("seed_points")
             .with_multi_pass(&passes)
             .with_custom_uniforms::<JfaParams>()
             .with_workgroup_size([16, 16, 1])
@@ -110,7 +110,7 @@ impl ShaderManager for JfaShader {
     fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
-        // Execute multi-pass compute shader: buffer_a -> buffer_b -> buffer_c -> main_image
+        // Execute multi-pass compute shader: seed_points -> flood_step -> color_accumulate -> main_image
         self.compute_shader.dispatch(&mut frame.encoder, core);
 
         self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);

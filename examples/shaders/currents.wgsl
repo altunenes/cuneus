@@ -1,10 +1,7 @@
 // Photon tracing: currents
-// Very complex example demonstrating multi-buffer ping-pong computation
-// I hope this example is useful for those who came from the Shadertoy, I tried to use same terminology (bufferA, ichannels etc)
-// I used the all buffers (buffera,b,c,d,mainimage) and complex ping-pong logic 
 // This photon tracing technique is from Wyatt's https://www.shadertoy.com/view/tfB3Rw code, "fractal with photon tracking", 2025.
 // (my pattern is different but the rendering method is directly coming from this code)
-// Be aware though, If you do anything commercial with this rendering technique, you should definitely ask Wyatt about licensing (wyatthf@gmail.com). The goal here is to reproduce a complex but meaningful shadertoy code in cuneus.
+// Be aware though, If you do anything commercial with this rendering technique, you should definitely ask Wyatt about licensing (wyatthf@gmail.com).
 
 struct TimeUniform {
     time: f32,
@@ -158,15 +155,9 @@ fn sample_input2(uv: v2) -> v4 {
     return textureLoad(input_texture2, clamped_coord, 0);
 }
 
-// Backward compatibility 
-fn sample_input(uv: v2) -> v4 {
-    return sample_input0(uv);
-}
-
-// Buffer A - simple pattern (ichannel0=BufferA)
-// This is mosty about our pattern generation
+// Pattern pass - pattern generation (self-feedback)
 @compute @workgroup_size(16, 16, 1)
-fn buffer_a(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn pattern(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dims = textureDimensions(output);
     R = v2(dims);
     
@@ -253,9 +244,9 @@ fn buffer_a(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(output, gid.xy, Q);
 }
 
-// Buffer B - (ichannel0=BufferB, ichannel1=BufferA)
+// Fine trace pass (self-feedback + pattern)
 @compute @workgroup_size(16, 16, 1)
-fn buffer_b(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn trace_fine(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dims = textureDimensions(output);
     R = v2(dims);
     
@@ -263,25 +254,25 @@ fn buffer_b(@builtin(global_invocation_id) gid: vec3<u32>) {
     
     let U = v2(f32(gid.x), f32(gid.y));
     
-    // Buffer B self-reference
-    var Q = sample_input0(U); // Previous frame Buffer B
+    // Self-reference
+    var Q = sample_input0(U); // Previous frame trace_fine
     Q.x += 2.0 * Q.z;
     Q.y += 2.0 * Q.w;
-    Q.z += 3.5 * sample_input1(Q.xy).y; // Read from BufferA
+    Q.z += 3.5 * sample_input1(Q.xy).y; // Read from pattern
     Q.w += 3.5 * sample_input1(Q.xy).z;
-    
+
     if (length(Q.zw) > 0.0) {
         let norm = normalize(Q.zw);
         Q.z = norm.x;
         Q.w = norm.y;
     }
-    
+
     for (var x = -2.0; x <= 2.0; x += 1.0) {
         for (var y = -2.0; y <= 2.0; y += 1.0) {
-            var q = sample_input0(U + v2(x, y)); 
+            var q = sample_input0(U + v2(x, y));
             q.x += 3.0 * q.z;
             q.y += 3.0 * q.w;
-            q.z += 3.5 * sample_input1(q.xy).y; 
+            q.z += 3.5 * sample_input1(q.xy).y;
             q.w += 3.5 * sample_input1(q.xy).z;
             
             if (length(q.zw) > 0.0) {
@@ -304,9 +295,9 @@ fn buffer_b(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(output, gid.xy, Q);
 }
 
-// Buffer C - (ichannel0=BufferC, iChannel1=BufferA)
+// Coarse trace pass (self-feedback + pattern)
 @compute @workgroup_size(16, 16, 1)
-fn buffer_c(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn trace_coarse(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dims = textureDimensions(output);
     R = v2(dims);
     
@@ -314,11 +305,11 @@ fn buffer_c(@builtin(global_invocation_id) gid: vec3<u32>) {
     
     let U = v2(f32(gid.x), f32(gid.y));
     
-    // Buffer C self-reference
-    var Q = sample_input0(U); // Previous frame Buffer C
+    // Self-reference
+    var Q = sample_input0(U); // Previous frame trace_coarse
     Q.x += 6.0 * Q.z;
     Q.y += 6.0 * Q.w;
-    Q.z += sample_input1(Q.xy).y; // Read from BufferA
+    Q.z += sample_input1(Q.xy).y; // Read from pattern
     Q.w += sample_input1(Q.xy).z;
     
     if (length(Q.zw) > 0.0) {
@@ -355,9 +346,9 @@ fn buffer_c(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(output, gid.xy, Q);
 }
 
-// Buffer D (ichannel0=BufferD, iChannel1=BufferC, iChannel2=BufferB)
+// Accumulate pass (self-feedback + trace_coarse + trace_fine)
 @compute @workgroup_size(16, 16, 1)
-fn buffer_d(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn accumulate(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dims = textureDimensions(output);
     R = v2(dims);
     
@@ -365,21 +356,21 @@ fn buffer_d(@builtin(global_invocation_id) gid: vec3<u32>) {
     
     let U = v2(f32(gid.x), f32(gid.y));
     
-    var Q = sample_input0(U); // BufferD (ichannel0)
-    let buffer_c = sample_input1(U); // BufferC (ichannel1)
-    let buffer_b = sample_input2(U); // BufferB (ichannel2)
+    var Q = sample_input0(U); // accumulate (self)
+    let coarse = sample_input1(U); // trace_coarse
+    let fine = sample_input2(U); // trace_fine
     
 
     let grad_col = v4(params.gradient_r, params.gradient_g, params.gradient_b, params.gradient_w);
     let line_col = v4(params.line_color_r, params.line_color_g, params.line_color_b, params.line_color_w);
     
-    Q += params.gradient_intensity * (4.0 - grad_col) * exp(-length(U - buffer_c.xy));
-    Q += params.line_intensity_final * line_col * exp(-length(U - buffer_b.xy));
+    Q += params.gradient_intensity * (4.0 - grad_col) * exp(-length(U - coarse.xy));
+    Q += params.line_intensity_final * line_col * exp(-length(U - fine.xy));
     
     textureStore(output, gid.xy, Q);
 }
 
-// Main (ichannel0=bufferD)
+// Main image (reads accumulate)
 @compute @workgroup_size(16, 16, 1)
 fn main_image(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dims = textureDimensions(output);
@@ -389,8 +380,8 @@ fn main_image(@builtin(global_invocation_id) gid: vec3<u32>) {
     
     let U = v2(f32(gid.x), f32(gid.y));
     
-    let buffer_d = sample_input0(U); // BufferD
-    var Q = 0.8 * atan(1.5 * buffer_d / f32(time_data.frame + 1u));
+    let acc = sample_input0(U); // accumulate
+    var Q = 0.8 * atan(1.5 * acc / f32(time_data.frame + 1u));
     
     Q = pow(Q, vec4<f32>(params.gamma));
     

@@ -132,16 +132,16 @@ impl ShaderManager for MandelbulbShader {
         };
         let base = RenderKit::new(core);
 
-        // multipass system: buffer_a (self-feedback) -> main_image (in shadertoy term)
-        // buffa: self-feedback for accumulation
-        // img: reads buffer_a for tonemapping
+        // multipass system: accumulate (self-feedback) -> main_image
+        // accumulate: self-feedback for path tracing accumulation
+        // main_image: reads accumulate for tonemapping
         let passes = vec![
-            cuneus::compute::PassDescription::new("buffer_a", &["buffer_a"]),
-            cuneus::compute::PassDescription::new("main_image", &["buffer_a"]),
+            cuneus::compute::PassDescription::new("accumulate", &["accumulate"]),
+            cuneus::compute::PassDescription::new("main_image", &["accumulate"]),
         ];
 
         let config = ComputeShader::builder()
-            .with_entry_point("buffer_a")
+            .with_entry_point("accumulate")
             .with_multi_pass(&passes)
             .with_custom_uniforms::<MandelbulbParams>()
             .with_mouse() // Enable mouse backend integration

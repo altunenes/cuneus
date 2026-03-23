@@ -26,11 +26,11 @@ use wgpu;
 /// output while writing to the current frame:
 ///
 /// ```rust,ignore
-/// // buffer_a reads its own previous frame (temporal accumulation)
-/// PassDescription::new("buffer_a", &["buffer_a"])
+/// // feedback reads its own previous frame (temporal accumulation)
+/// PassDescription::new("feedback", &["feedback"])
 ///
-/// // buffer_c reads buffer_b (current frame) + its own previous frame
-/// PassDescription::new("buffer_c", &["buffer_b", "buffer_c"])
+/// // composite reads render (current frame) + its own previous frame
+/// PassDescription::new("composite", &["render", "composite"])
 /// ```
 ///
 /// # Non-adjacent reads
@@ -38,12 +38,12 @@ use wgpu;
 /// Any pass can read from any other pass regardless of ordering distance:
 ///
 /// ```rust,ignore
-/// PassDescription::new("lic_edges", &["tensor_field", "kuwahara_filter"])
+/// PassDescription::new("edge_detect", &["tensor_field", "kuwahara_filter"])
 /// // Works even though tensor_field is 2 passes earlier
 /// ```
 #[derive(Debug, Clone)]
 pub struct PassDescription {
-    /// The WGSL entry point name for this pass (e.g., `"buffer_a"`, `"main_image"`).
+    /// The WGSL entry point name for this pass (e.g., `"compute_field"`, `"main_image"`).
     pub name: String,
     /// Buffer names this pass reads from, mapped by position to `input_texture0..2` in WGSL.
     pub inputs: Vec<String>,

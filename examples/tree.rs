@@ -32,16 +32,16 @@ impl ShaderManager for TreeShader {
             decay: 0.96};
         let base = RenderKit::new(core);
 
-        // Create multipass system: buffer_a -> buffer_b -> buffer_c -> main_image
+        // Create multipass system: fractal -> gradient -> trace -> main_image
         let passes = vec![
-            PassDescription::new("buffer_a", &[]), // no dependencies, generates fractal
-            PassDescription::new("buffer_b", &["buffer_a"]), // reads buffer_a
-            PassDescription::new("buffer_c", &["buffer_c", "buffer_b"]), // self-feedback + buffer_b
-            PassDescription::new("main_image", &["buffer_c"]),
+            PassDescription::new("fractal", &[]), // no dependencies, generates fractal
+            PassDescription::new("gradient", &["fractal"]), // reads fractal
+            PassDescription::new("trace", &["trace", "gradient"]), // self-feedback + gradient
+            PassDescription::new("main_image", &["trace"]),
         ];
 
         let config = ComputeShader::builder()
-            .with_entry_point("buffer_a")
+            .with_entry_point("fractal")
             .with_multi_pass(&passes)
             .with_custom_uniforms::<TreeParams>()
             .with_workgroup_size([16, 16, 1])
@@ -174,7 +174,7 @@ impl ShaderManager for TreeShader {
             self.compute_shader.current_frame = 0;
         }
 
-        // Execute multi-pass compute shader: buffer_a -> buffer_b -> buffer_c -> main_image
+        // Execute multi-pass compute shader: fractal -> gradient -> trace -> main_image
         self.compute_shader.dispatch(&mut frame.encoder, core);
 
         self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);

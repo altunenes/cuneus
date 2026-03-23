@@ -1,5 +1,5 @@
 // 2D Neuron, by Enes Altun, 2025; MIT license
-// Ported from Shadertoy: https://www.shadertoy.com/view/3Xj3zz
+// Based on: https://www.shadertoy.com/view/3Xj3zz
 
 struct TimeUniform { time: f32, delta: f32, frame: u32, _padding: u32 };
 @group(0) @binding(0) var<uniform> time_data: TimeUniform;
@@ -80,9 +80,9 @@ fn hash(p4: vec4<f32>) -> vec4<f32> {
     return fract((p.xxyz + p.yzzw) * p.zywx);
 }
 
-// Buffer A: Neuron geometry calculation with self-feedback
+// Neuron geometry calculation
 @compute @workgroup_size(16, 16, 1)
-fn buffer_a(@builtin(global_invocation_id) id: vec3<u32>) {
+fn geometry(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
     if (id.x >= dims.x || id.y >= dims.y) { return; }
 
@@ -107,9 +107,9 @@ fn buffer_a(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(output, id.xy, result);
 }
 
-// Buffer B: Gradient computation from Buffer A
+// Gradient computation from geometry pass
 @compute @workgroup_size(16, 16, 1)
-fn buffer_b(@builtin(global_invocation_id) id: vec3<u32>) {
+fn gradient(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
     if (id.x >= dims.x || id.y >= dims.y) { return; }
 
@@ -131,9 +131,9 @@ fn buffer_b(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(output, id.xy, result);
 }
 
-// Buffer C: Particle tracing with self-feedback + Buffer B input
+// Particle tracing with self-feedback + gradient input
 @compute @workgroup_size(16, 16, 1)
-fn buffer_c(@builtin(global_invocation_id) id: vec3<u32>) {
+fn trace(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
     if (id.x >= dims.x || id.y >= dims.y) { return; }
 
@@ -172,7 +172,7 @@ fn buffer_c(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(output, id.xy, result);
 }
 
-// Main image: Final gamma correction from Buffer C
+// Main image: Final gamma correction from trace pass
 @compute @workgroup_size(16, 16, 1)
 fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
