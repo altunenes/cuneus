@@ -23,9 +23,9 @@ Cuneus uses a declarative builder to configure your entire compute pipeline. You
 ```rust
 // Define your multi-pass pipeline as a dependency graph:
 let passes = vec![
-    PassDescription::new("compute_field", &[]),                              // no inputs
-    PassDescription::new("render", &["compute_field"]),                      // reads compute_field
-    PassDescription::new("feedback", &["render", "feedback"]),               // reads render + own previous frame
+    PassDescription::new("compute_field", &[]),               // no inputs
+    PassDescription::new("render", &["compute_field"]),       // reads compute_field
+    PassDescription::new("feedback", &["render", "feedback"]),// reads render + own previous frame
     PassDescription::new("main_image", &["feedback"]),
 ];
 
