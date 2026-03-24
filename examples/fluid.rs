@@ -26,7 +26,12 @@ cuneus::uniform_params! {
     warp_amount: f32,
     flow_intensity: f32,
     color_advect: f32,
-    drift_decay: f32}
+    drift_decay: f32,
+    dye_intensity: f32,
+    dye_radius: f32,
+    bg_boil: f32,
+    _padding: f32
+}
 }
 struct FluidShader {
     base: RenderKit,
@@ -40,7 +45,7 @@ impl ShaderManager for FluidShader {
             gravity: 0.002,
             pressure_scale: 1.0,
             vortex_strength: 0.12,
-            turbulence: 0.002,
+            turbulence: 0.0005,
             flow_speed: 2.0,
             pos_diffusion: 0.3,
             texture_influence: 1.3,
@@ -48,9 +53,9 @@ impl ShaderManager for FluidShader {
             spec_power: 36.0,
             spec_intensity: 2.0,
             color_vibrancy: 1.3,
-            vortex_radius: 0.008,
+            vortex_radius: 0.001,
             gamma: 1.1,
-            feedback: 0.85,
+            feedback: 0.90,
             vortex_speed: 0.04,
             force_mode: 0.0,
             force_harmony: 0.3,
@@ -59,7 +64,13 @@ impl ShaderManager for FluidShader {
             warp_amount: 1.0,
             flow_intensity: 1.0,
             color_advect: 1.0,
-            drift_decay: 0.0};
+            drift_decay: 0.0,
+            dye_intensity: 0.06,
+            dye_radius: 1.0,
+            bg_boil: 0.8,
+            _padding: 0.0
+        };
+
         let base = RenderKit::new(core);
         let passes = vec![
             PassDescription::new("fluid_sim", &["fluid_sim", "color_map"]),
@@ -129,15 +140,22 @@ impl ShaderManager for FluidShader {
                             changed |= ui.add(egui::Slider::new(&mut params.viscosity, 0.0..=3.0).text("Viscosity")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.turbulence, 0.0..=0.5).text("Dissipation")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.feedback, 0.0..=1.01).text("Feedback")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.bg_boil, 0.0..=2.0).text("Global Boil")).changed();
                         });
-                        egui::CollapsingHeader::new("Vortices").default_open(true).show(ui, |ui| {
-                            if ui.add(egui::Slider::new(&mut params.force_count, 0.0..=8.0).step_by(1.0).text("Sources")).changed() {
+
+                        egui::CollapsingHeader::new("Dye & Glow").default_open(false).show(ui, |ui| {
+                            changed |= ui.add(egui::Slider::new(&mut params.dye_intensity, 0.0..=0.2).text("Paint Brightness")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.dye_radius, 0.1..=3.0).text("Glow Spread")).changed();
+                        });
+
+                        egui::CollapsingHeader::new("Vortices").default_open(false).show(ui, |ui| {
+                            if ui.add(egui::Slider::new(&mut params.force_count, 0.0..=18.0).step_by(1.0).text("Sources")).changed() {
                                 params.force_count = params.force_count.round();
                                 changed = true;
                             }
                             changed |= ui.add(egui::Slider::new(&mut params.vortex_strength, 0.0..=0.5).text("Confinement")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.force_harmony, 0.0..=1.0).text("Softness")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.vortex_radius, 0.002..=0.04).text("Radius")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.vortex_radius, 0.001..=0.05).text("Radius")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.vortex_speed, 0.005..=0.15).text("Speed")).changed();
                         });
                         egui::CollapsingHeader::new("Distortion").default_open(true).show(ui, |ui| {

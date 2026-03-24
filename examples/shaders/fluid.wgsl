@@ -29,7 +29,12 @@ struct FluidParams {
     flow_intensity: f32,
     color_advect: f32,
     drift_decay: f32,
+    dye_intensity: f32,
+    dye_radius: f32,
+    bg_boil: f32,
+    _padding: f32, 
 };
+
 @group(1) @binding(0) var output: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(1) var<uniform> params: FluidParams;
 @group(2) @binding(0) var channel0: texture_2d<f32>;
@@ -119,26 +124,34 @@ fn fluid_sim(@builtin(global_invocation_id) id: vec3<u32>) {
     let v_rad = params.vortex_radius;
     let v_spd = params.vortex_speed;
     let soft = mix(0.01, 0.08, params.force_harmony);
-    let n_src = u32(clamp(params.force_count, 0.0, 8.0));
+    let n_src = u32(clamp(params.force_count, 0.0, 18.0));
+    let active_sources = max(1.0, f32(n_src));
+    let force_scale = min(1.0, 2.0 / sqrt(active_sources)); 
 
     var force = vec2<f32>(0.0);
-    for (var s = 0u; s < 8u; s++) {
+    for (var s = 0u; s < 18u; s++) {
         if (s >= n_src) { break; }
         let fs = f32(s);
-        let ang = fs * 1.257 + t * (v_spd + fs * v_spd * 0.4);
-        let orbit_r = 0.12 + 0.06 * sin(t * v_spd * 0.6 + fs * 1.8);
-        let cx = fract(fs * 0.618 + 0.1) * 0.6 + 0.2;
-        let cy = fract(fs * 0.382 + 0.2) * 0.6 + 0.2;
-        let center = vec2<f32>(cx + orbit_r * cos(ang), cy + orbit_r * sin(ang * 0.8 + fs));
+        let time_s = t * (v_spd * 2.0); 
+        let phase = fs * 1.618; 
+        let x_pos = 0.5 + 0.35 * sin(time_s * (0.7 + fs * 0.15) + phase) 
+                        + 0.10 * cos(time_s * 0.43 - phase);
+        let y_pos = 0.5 + 0.35 * cos(time_s * (0.5 + fs * 0.22) + phase * 1.3) 
+                        + 0.10 * sin(time_s * 0.57 + phase);
+        let center = vec2<f32>(x_pos, y_pos);
+        
         let d = uv - center;
         let dist2 = dot(d, d);
-        let envelope = exp(-dist2 / v_rad);
+        let envelope = (v_rad / (dist2 + v_rad)) * exp(-dist2 / (v_rad * 8.0));
         let pulse = sin(t * (v_spd * 2.5 + fs * v_spd) + fs * 2.1) * 0.5 + 0.5;
         let chirality = select(-1.0, 1.0, s % 2u == 0u);
-        force += vec2<f32>(-d.y, d.x) / (dist2 + soft) * envelope * pulse * 0.03 * chirality;
+        force += vec2<f32>(-d.y, d.x) / (dist2 + soft) * envelope * pulse * 0.03 * chirality * force_scale;
     }
 
     vel += force;
+    let drift_uv = uv * 1.5 + vec2<f32>(sin(t * 0.1), cos(t * 0.15)) * 0.2;
+    let global_boil = seed_velocity(drift_uv);
+    vel += global_boil * params.vortex_strength * params.bg_boil;
 
     // Velocity dissipation + soft limit + boundary
     let dissipation = 1.0 / (1.0 + params.turbulence);
@@ -281,6 +294,46 @@ fn color_map(@builtin(global_invocation_id) id: vec3<u32>) {
     let refresh = mix(0.0, 0.005, smoothstep(0.9, 1.0, fb));
     Q = mix(Q, original, refresh);
 
+    let t = time_data.time;
+    let v_rad = params.vortex_radius * params.dye_radius;
+    let v_spd = params.vortex_speed;
+    
+    let n_src = u32(clamp(params.force_count, 0.0, 18.0));
+    
+    let active_sources = max(1.0, f32(n_src));
+    let dye_scale = min(1.0, 4.0 / active_sources);
+    var glow_dye = vec3<f32>(0.0);
+    for (var s = 0u; s < 18u; s++) {
+        if (s >= n_src) { break; }
+        let fs = f32(s);
+        
+        let time_s = t * (v_spd * 2.0); 
+        let phase = fs * 1.618; 
+        
+        let x_pos = 0.5 + 0.35 * sin(time_s * (0.7 + fs * 0.15) + phase) 
+                        + 0.10 * cos(time_s * 0.43 - phase);
+        let y_pos = 0.5 + 0.35 * cos(time_s * (0.5 + fs * 0.22) + phase * 1.3) 
+                        + 0.10 * sin(time_s * 0.57 + phase);
+                        
+        let center = vec2<f32>(x_pos, y_pos);
+        
+        let d = uv - center;
+        let dist2 = dot(d, d);
+        
+        let envelope = exp(-dist2 / (v_rad * 0.4)); 
+        let pulse = sin(t * (v_spd * 2.5 + fs * v_spd) + fs * 2.1) * 0.5 + 0.5;
+        
+        let r_col = 0.5 + 0.5 * sin(fs * 2.1 + t * 0.5);
+        let g_col = 0.5 + 0.5 * sin(fs * 3.7 + t * 0.6);
+        let b_col = 0.5 + 0.5 * sin(fs * 1.3 + t * 0.7);
+        let src_color = vec3<f32>(r_col, g_col, b_col);
+        
+        // some balance attempts...
+        glow_dye += src_color * envelope * pulse * params.dye_intensity * dye_scale; 
+    }
+
+    Q = vec4<f32>(Q.rgb + glow_dye, Q.a);
+
     Q = clamp(Q, vec4<f32>(0.0), vec4<f32>(1.0));
 
     if (time_data.frame < 4u) {
@@ -349,7 +402,7 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     let NdotL_fill = max(dot(normal, fill), 0.0);
 
     // Wrap diffuse
-    let diff_key = NdotL_key * 0.7 + 0.3; // never fully dark
+    let diff_key = NdotL_key * 0.7 + 0.3;
     let diff_fill = NdotL_fill * 0.3;
     let diffuse = diff_key + diff_fill;
 
