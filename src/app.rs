@@ -111,13 +111,16 @@ impl<S: ShaderManager> ApplicationHandler for ShaderAppHandler<S> {
                                     self.first_render = false;
                                 }
                             }
-                            Err(wgpu::SurfaceError::Lost) => {
+                            Err(crate::SurfaceError::SkipFrame) => {}
+                            Err(crate::SurfaceError::Lost | crate::SurfaceError::Outdated) => {
                                 if let Some(core) = &mut self.app.core {
                                     core.resize(core.size);
                                 }
                             }
-                            Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
-                            Err(e) => error!("Render error: {e:?}"),
+                            Err(crate::SurfaceError::OutOfMemory) => {
+                                error!("GPU out of memory, exiting");
+                                event_loop.exit();
+                            }
                         }
                     }
                     _ => {}
