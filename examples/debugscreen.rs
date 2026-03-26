@@ -1,7 +1,7 @@
 use cuneus::audio::SynthesisManager;
 use cuneus::compute::{ComputeShader, PassDescription, COMPUTE_TEXTURE_FORMAT_RGBA16};
 use cuneus::{Core, RenderKit, ShaderApp, ShaderControls, ShaderManager};
-use winit::event::*;
+use cuneus::WindowEvent;
 
 struct DebugScreen {
     base: RenderKit,

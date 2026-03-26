@@ -2,7 +2,7 @@ use cuneus::compute::{
     ComputeShader, PassDescription, StorageBufferSpec, COMPUTE_TEXTURE_FORMAT_RGBA16};
 use cuneus::{Core, ExportManager, RenderKit, ShaderControls, ShaderManager};
 use log::error;
-use winit::event::WindowEvent;
+use cuneus::WindowEvent;
 
 cuneus::uniform_params! {
     struct FFTParams {

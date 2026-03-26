@@ -3,7 +3,7 @@ use cuneus::{
     Core, ExportManager, RenderKit, ShaderApp, ShaderControls, ShaderManager, UniformProvider,
 };
 use log::error;
-use winit::event::WindowEvent;
+use cuneus::WindowEvent;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

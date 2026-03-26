@@ -3,7 +3,7 @@ use cuneus::{
     Core, ExportManager, RenderKit, ShaderControls, ShaderManager,
 };
 use log::debug;
-use winit::event::WindowEvent;
+use cuneus::WindowEvent;
 
 cuneus::uniform_params! {
     struct MandelbulbParams {

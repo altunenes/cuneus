@@ -3,7 +3,6 @@ use cuneus::prelude::*;
 use cuneus::{GaussianCamera, GaussianCloud, GaussianExporter, GaussianRenderer, GaussianSorter};
 use log::{error, info};
 use std::collections::HashSet;
-use winit::event::WindowEvent;
 
 const MAX_GAUSSIANS: u32 = 2_000_000;
 

@@ -2,7 +2,7 @@ use cuneus::prelude::ComputeShader;
 use cuneus::{
     Core, ExportManager, RenderKit, ShaderApp, ShaderControls, ShaderManager,
 };
-use winit::event::*;
+use cuneus::WindowEvent;
 
 cuneus::uniform_params! {
     struct ShaderParams {

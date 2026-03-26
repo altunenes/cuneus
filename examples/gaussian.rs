@@ -2,7 +2,7 @@ use cuneus::compute::{ComputeShader, ComputeShaderBuilder, PassDescription, Stor
 use cuneus::{Core, RenderKit, ShaderApp, ShaderControls, ShaderManager};
 use cuneus::{ExportManager, UniformProvider};
 use log::error;
-use winit::event::*;
+use cuneus::WindowEvent;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

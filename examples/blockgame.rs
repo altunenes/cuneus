@@ -2,7 +2,7 @@
 
 use cuneus::compute::*;
 use cuneus::prelude::*;
-use winit::event::*;
+use winit::event::ElementState;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

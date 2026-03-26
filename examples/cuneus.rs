@@ -1,7 +1,7 @@
 use cuneus::compute::{ComputeShader, COMPUTE_TEXTURE_FORMAT_RGBA16};
 use cuneus::{Core, RenderKit, ShaderApp, ShaderControls, ShaderManager};
 use cuneus::{ExportManager};
-use winit::event::*;
+use cuneus::WindowEvent;
 
 cuneus::uniform_params! {
     struct ShaderParams {
