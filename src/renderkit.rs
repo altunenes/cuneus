@@ -92,7 +92,7 @@ impl RenderKit {
 
     /// Create RenderKit with a custom bind group layout and optional fragment entry point.
     pub fn new_with_layout(core: &Core, layout: &wgpu::BindGroupLayout, fragment_entry: Option<&str>) -> Self {
-        let bind_group_layouts = &[layout];
+        let bind_group_layouts: &[Option<&wgpu::BindGroupLayout>] = &[Some(layout)];
         let time_bind_group_layout =
             core.device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -168,7 +168,7 @@ impl RenderKit {
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
                 bind_group_layouts,
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
         let renderer = Renderer::new(
             &core.device,
@@ -303,7 +303,7 @@ impl RenderKit {
         self.context.set_zoom_factor(zoom);
 
         let raw_input = self.egui_state.take_egui_input(core.window());
-        self.context.run(raw_input, |ctx| ui_builder(ctx))
+        self.context.run_ui(raw_input, |ctx| ui_builder(ctx))
     }
 
     pub fn handle_render_output(
@@ -351,8 +351,24 @@ impl RenderKit {
             self.egui_renderer.free_texture(id);
         }
     }
-    pub fn begin_frame(&self, core: &Core) -> Result<FrameContext, wgpu::SurfaceError> {
-        let output = core.surface.get_current_texture()?;
+    pub fn begin_frame(&self, core: &Core) -> Result<FrameContext, crate::SurfaceError> {
+        let output = match core.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(texture)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Err(crate::SurfaceError::SkipFrame);
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                return Err(crate::SurfaceError::Outdated);
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                return Err(crate::SurfaceError::Lost);
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                return Err(crate::SurfaceError::Lost);
+            }
+        };
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -382,7 +398,7 @@ impl RenderKit {
     }
 
     pub fn apply_default_style(ctx: &egui::Context) {
-        ctx.style_mut(|style| {
+        ctx.global_style_mut(|style| {
             style.visuals.window_fill =
                 egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
             style
