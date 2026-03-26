@@ -173,8 +173,8 @@ impl GaussianRenderer {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Gaussian Render Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -213,7 +213,7 @@ impl GaussianRenderer {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -346,7 +346,7 @@ impl GaussianExporter {
         count: u32,
         settings: &ExportSettings,
         texture_format: wgpu::TextureFormat,
-    ) -> Result<Vec<u8>, wgpu::SurfaceError> {
+    ) -> Result<Vec<u8>, crate::SurfaceError> {
         let capture_texture = core.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Gaussian Export Capture"),
             size: wgpu::Extent3d {
