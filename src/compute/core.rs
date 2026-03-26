@@ -159,14 +159,14 @@ impl ComputeShader {
             }
         }
 
-        let layout_refs: Vec<&wgpu::BindGroupLayout> = layouts_vec.iter().collect();
+        let layout_refs: Vec<Option<&wgpu::BindGroupLayout>> = layouts_vec.iter().map(|l| Some(l)).collect();
 
         let pipeline_layout = core
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(&format!("{} Pipeline Layout", config.label)),
                 bind_group_layouts: &layout_refs,
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
 
         // Step 4: Create time uniform (Group 0)
@@ -1828,7 +1828,7 @@ impl ComputeShader {
         time: f32,
         render_kit: &crate::RenderKit,
         custom_dispatch: Option<F>,
-    ) -> Result<Vec<u8>, wgpu::SurfaceError>
+    ) -> Result<Vec<u8>, crate::SurfaceError>
     where
         F: FnOnce(&mut Self, &mut wgpu::CommandEncoder, &Core),
     {
