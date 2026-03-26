@@ -2,7 +2,7 @@ use cuneus::prelude::ComputeShader;
 use cuneus::{
     Core, ExportManager, RenderKit, ShaderApp, ShaderControls, ShaderManager,
 };
-use winit::event::*;
+use cuneus::WindowEvent;
 
 cuneus::uniform_params! {
     struct ShaderParams {
@@ -79,7 +79,7 @@ impl ShaderManager for MatrixShader {
         }
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         let mut params = self.current_params;

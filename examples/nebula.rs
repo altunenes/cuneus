@@ -1,6 +1,5 @@
 use cuneus::compute::*;
 use cuneus::prelude::*;
-use winit::event::WindowEvent;
 
 cuneus::uniform_params! {
     struct NebulaParams {
@@ -139,7 +138,7 @@ impl ShaderManager for NebulaShader {
         self.base.default_resize(core, &mut self.compute_shader);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         let mut params = self.current_params;

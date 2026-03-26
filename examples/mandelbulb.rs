@@ -3,7 +3,7 @@ use cuneus::{
     Core, ExportManager, RenderKit, ShaderControls, ShaderManager,
 };
 use log::debug;
-use winit::event::WindowEvent;
+use cuneus::WindowEvent;
 
 cuneus::uniform_params! {
     struct MandelbulbParams {
@@ -180,7 +180,7 @@ impl ShaderManager for MandelbulbShader {
         debug!("Resizing to {:?}", core.size);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         let current_mouse_pos = self.base.mouse_tracker.uniform.position;

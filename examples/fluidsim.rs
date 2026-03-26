@@ -9,7 +9,6 @@
 
 use cuneus::compute::*;
 use cuneus::prelude::*;
-use winit::event::WindowEvent;
 
 const SIM_SCALE: u32 = 2;
 const PRESSURE_ITERATIONS: u32 = 20;
@@ -207,7 +206,7 @@ impl ShaderManager for FluidSim {
         self.compute_shader.handle_export(core, &mut self.base);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         // Update params
@@ -325,7 +324,7 @@ impl ShaderManager for FluidSim {
 
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
-                ctx.style_mut(|style| {
+                ctx.global_style_mut(|style| {
                     style.visuals.window_fill = egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
                     style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;
                     style.text_styles.get_mut(&egui::TextStyle::Button).unwrap().size = 10.0;

@@ -7,7 +7,7 @@ pub trait ShaderManager {
         Self: Sized;
     fn resize(&mut self, _core: &Core) {}
     fn update(&mut self, _core: &Core) {}
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError>;
+    fn render(&mut self, core: &Core) -> Result<(), crate::SurfaceError>;
     fn handle_input(&mut self, _core: &Core, _event: &WindowEvent) -> bool {
         false
     }

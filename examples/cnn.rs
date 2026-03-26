@@ -1,6 +1,5 @@
 use cuneus::compute::*;
 use cuneus::prelude::*;
-use winit::event::WindowEvent;
 
 cuneus::uniform_params! {
     struct CNNParams {
@@ -117,7 +116,7 @@ impl ShaderManager for CNNDigitRecognizer {
             .resize(core, core.size.width, core.size.height);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
 

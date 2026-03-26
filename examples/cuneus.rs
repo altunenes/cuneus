@@ -1,7 +1,7 @@
 use cuneus::compute::{ComputeShader, COMPUTE_TEXTURE_FORMAT_RGBA16};
 use cuneus::{Core, RenderKit, ShaderApp, ShaderControls, ShaderManager};
 use cuneus::{ExportManager};
-use winit::event::*;
+use cuneus::WindowEvent;
 
 cuneus::uniform_params! {
     struct ShaderParams {
@@ -121,7 +121,7 @@ impl ShaderManager for Shader {
         self.base.default_resize(core, &mut self.compute_shader);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         let mut params = self.current_params;

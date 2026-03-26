@@ -2,7 +2,7 @@
 
 use cuneus::compute::*;
 use cuneus::prelude::*;
-use winit::event::*;
+use winit::event::ElementState;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -125,7 +125,7 @@ impl ShaderManager for BlockTowerGame {
         self.base.default_resize(core, &mut self.compute_shader);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
         let _controls_request = self
             .base

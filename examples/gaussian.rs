@@ -2,7 +2,7 @@ use cuneus::compute::{ComputeShader, ComputeShaderBuilder, PassDescription, Stor
 use cuneus::{Core, RenderKit, ShaderApp, ShaderControls, ShaderManager};
 use cuneus::{ExportManager, UniformProvider};
 use log::error;
-use winit::event::*;
+use cuneus::WindowEvent;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -154,7 +154,7 @@ impl ShaderManager for GaussianShader {
         self.base.default_resize(core, &mut self.compute_shader);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         let mut controls_request = self

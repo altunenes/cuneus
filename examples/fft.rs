@@ -2,7 +2,7 @@ use cuneus::compute::{
     ComputeShader, PassDescription, StorageBufferSpec, COMPUTE_TEXTURE_FORMAT_RGBA16};
 use cuneus::{Core, ExportManager, RenderKit, ShaderControls, ShaderManager};
 use log::error;
-use winit::event::WindowEvent;
+use cuneus::WindowEvent;
 
 cuneus::uniform_params! {
     struct FFTParams {
@@ -96,7 +96,7 @@ impl ShaderManager for FFTShader {
             .resize(core, core.size.width, core.size.height);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         // Handle UI and controls - using original transparent UI design

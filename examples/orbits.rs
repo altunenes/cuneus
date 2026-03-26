@@ -1,6 +1,7 @@
 use cuneus::prelude::ComputeShader;
 use cuneus::{Core, ExportManager, RenderKit, ShaderApp, ShaderControls, ShaderManager, UniformProvider};
-use winit::event::*;
+use cuneus::WindowEvent;
+use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ShaderParams {
@@ -100,7 +101,7 @@ impl ShaderManager for Shader {
         self.compute_shader.handle_export(core, &mut self.base);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         let mut params = self.current_params;

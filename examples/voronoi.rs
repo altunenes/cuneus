@@ -1,6 +1,6 @@
 use cuneus::prelude::ComputeShader;
 use cuneus::{Core, RenderKit, ShaderApp, ShaderManager};
-use winit::event::*;
+use cuneus::WindowEvent;
 cuneus::uniform_params! {
     struct ShaderParams {
     scale: f32,
@@ -73,7 +73,7 @@ impl ShaderManager for Voronoi {
         // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
     }
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         let _video_updated = if self.base.using_video_texture {
@@ -104,7 +104,7 @@ impl ShaderManager for Voronoi {
 
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
-                ctx.style_mut(|style| {
+                ctx.global_style_mut(|style| {
                     style.visuals.window_fill =
                         egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
                 });

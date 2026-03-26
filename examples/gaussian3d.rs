@@ -3,7 +3,6 @@ use cuneus::prelude::*;
 use cuneus::{GaussianCamera, GaussianCloud, GaussianExporter, GaussianRenderer, GaussianSorter};
 use log::{error, info};
 use std::collections::HashSet;
-use winit::event::WindowEvent;
 
 const MAX_GAUSSIANS: u32 = 2_000_000;
 
@@ -262,8 +261,24 @@ impl ShaderManager for Gaussian3DShader {
         self.base.update_resolution(&core.queue, core.size);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
-        let output = core.surface.get_current_texture()?;
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
+        let output = match core.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(texture)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Err(cuneus::SurfaceError::SkipFrame);
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                return Err(cuneus::SurfaceError::Outdated);
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                return Err(cuneus::SurfaceError::Lost);
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                return Err(cuneus::SurfaceError::Lost);
+            }
+        };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut params = self.params;
