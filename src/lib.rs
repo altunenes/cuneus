@@ -10,8 +10,33 @@ pub use wgpu;
 pub use winit;
 
 pub use bytemuck::{Pod, Zeroable};
-pub use wgpu::SurfaceError;
 pub use winit::event::WindowEvent;
+
+/// Represents surface acquisition failures during rendering.
+#[derive(Debug)]
+pub enum SurfaceError {
+    /// Surface texture not available this frame (timeout or occluded).
+    SkipFrame,
+    /// Surface needs reconfiguration.
+    Outdated,
+    /// Surface or device lost.
+    Lost,
+    /// GPU out of memory.
+    OutOfMemory,
+}
+
+impl std::fmt::Display for SurfaceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SkipFrame => write!(f, "Surface not ready, skip frame"),
+            Self::Outdated => write!(f, "Surface outdated"),
+            Self::Lost => write!(f, "Surface lost"),
+            Self::OutOfMemory => write!(f, "Out of memory"),
+        }
+    }
+}
+
+impl std::error::Error for SurfaceError {}
 
 mod app;
 pub mod compute;
@@ -190,18 +215,13 @@ pub struct Core {
 impl Core {
     pub async fn new(window: Window) -> Self {
         let size = window.inner_size();
-        let instance_desc = wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            backend_options: wgpu::BackendOptions::default(),
-            ..Default::default()
-        };
-        let instance = wgpu::Instance::new(&instance_desc);
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let window_box = Box::new(window);
         let window_ptr = Box::into_raw(window_box);
         // SAFETY: window_ptr is valid as we just created it
         let surface = unsafe { instance.create_surface(&*window_ptr) }.unwrap();
-        let power_preference = instance
-            .enumerate_adapters(wgpu::Backends::all())
+        let adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
+        let power_preference = adapters
             .iter()
             .find(|p| p.get_info().device_type == wgpu::DeviceType::DiscreteGpu)
             .map(|_| wgpu::PowerPreference::HighPerformance)
