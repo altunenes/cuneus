@@ -72,14 +72,26 @@ impl ShaderManager for FluidShader {
 
         let base = RenderKit::new(core);
         let passes = vec![
-            PassDescription::new("fluid_sim", &["fluid_sim", "color_map"]),
-            PassDescription::new("pressure_refine", &["fluid_sim", "pressure_refine"]),
-            PassDescription::new("position_field", &["pressure_refine", "position_field", "color_map"]),
+            PassDescription::new("advect_forces", &["project"]),
+            PassDescription::new("pressure", &["advect_forces", "pressure"]),
+            PassDescription::new("pressure", &["advect_forces", "pressure"]),
+            PassDescription::new("pressure", &["advect_forces", "pressure"]),
+            PassDescription::new("pressure", &["advect_forces", "pressure"]),
+            PassDescription::new("pressure", &["advect_forces", "pressure"]),
+            PassDescription::new("pressure", &["advect_forces", "pressure"]),
+            PassDescription::new("pressure", &["advect_forces", "pressure"]),
+            PassDescription::new("pressure", &["advect_forces", "pressure"]),
+            PassDescription::new("pressure", &["advect_forces", "pressure"]),
+            PassDescription::new("pressure", &["advect_forces", "pressure"]),
+            PassDescription::new("pressure", &["advect_forces", "pressure"]),
+            PassDescription::new("pressure", &["advect_forces", "pressure"]),
+            PassDescription::new("project", &["advect_forces", "pressure"]),
+            PassDescription::new("position_field", &["project", "position_field", "color_map"]),
             PassDescription::new("color_map", &["position_field", "color_map"]),
-            PassDescription::new("main_image", &["color_map", "pressure_refine"]),
+            PassDescription::new("main_image", &["color_map", "project"]),
         ];
         let config = ComputeShader::builder()
-            .with_entry_point("fluid_sim")
+            .with_entry_point("advect_forces")
             .with_multi_pass(&passes)
             .with_channels(1)
             .with_custom_uniforms::<FluidParams>()

@@ -1,7 +1,9 @@
-// 2D Navier-Stokes fluid with position field tracking
+// 2D Navier-Stokes with Helmholtz-Hodge projection
 // Enes Altun, 2026 License Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
-// Position field concept inspired by wyatt's Lattice Boltzmann shader (shadertoy.com/view/WdyGzy)
-// Gradient-based lighting approach inspired by flockaroo (shadertoy.com/view/MsGSRd)
+// MacCormack advection · 12-iteration Jacobi pressure · curl-noise turbulence
+// Pipeline: advect_forces → pressure(×12) → project → position_field → color_map → main
+// Position field concept inspired by wyatt (shadertoy.com/view/WdyGzy)
+// Gradient lighting inspired by flockaroo (shadertoy.com/view/MsGSRd)
 struct TimeUniform { time: f32, delta: f32, frame: u32, _padding: u32 };
 @group(0) @binding(0) var<uniform> time_data: TimeUniform;
 struct FluidParams {
@@ -32,7 +34,7 @@ struct FluidParams {
     dye_intensity: f32,
     dye_radius: f32,
     bg_boil: f32,
-    _padding: f32, 
+    _padding: f32,
 };
 
 @group(1) @binding(0) var output: texture_storage_2d<rgba16float, write>;
@@ -59,101 +61,181 @@ fn s2(px: vec2<f32>) -> vec4<f32> {
     return textureSampleLevel(input_texture2, input_sampler2, clamp((px + 0.5) / R, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0);
 }
 
-// Divergence-free initial seed via analytic curl of hash field
-fn hash2(p: vec2<f32>) -> f32 {
-    return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
+// Noise with analytical gradient for divergence-free curl noise
+
+fn hash22(p: vec2<f32>) -> vec2<f32> {
+    var p3 = fract(vec3<f32>(p.xyx) * vec3<f32>(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.xx + p3.yz) * p3.zy);
 }
+
+fn value_noise_grad(p: vec2<f32>) -> vec3<f32> {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let du = 6.0 * f * (1.0 - f);
+    let a = hash22(i).x;
+    let b = hash22(i + vec2<f32>(1.0, 0.0)).x;
+    let c = hash22(i + vec2<f32>(0.0, 1.0)).x;
+    let d = hash22(i + vec2<f32>(1.0, 1.0)).x;
+    let val = a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y;
+    let gx = du.x * ((b - a) + (a - b - c + d) * u.y);
+    let gy = du.y * ((c - a) + (a - b - c + d) * u.x);
+    return vec3<f32>(gx, gy, val);
+}
+
+fn curl_noise_2d(p: vec2<f32>) -> vec2<f32> {
+    let ng = value_noise_grad(p);
+    return vec2<f32>(-ng.y, ng.x);
+}
+
+fn fbm_curl(p: vec2<f32>) -> vec2<f32> {
+    var result = vec2<f32>(0.0);
+    var amp = 1.0;
+    var freq = 1.0;
+    for (var i = 0; i < 3; i++) {
+        result += curl_noise_2d(p * freq) * amp;
+        freq *= 2.0;
+        amp *= 0.5;
+    }
+    return result;
+}
+
+
+struct VortexData {
+    force: vec2<f32>,
+    dye: vec3<f32>,
+};
+
+fn compute_vortices(uv: vec2<f32>, t: f32) -> VortexData {
+    var vd: VortexData;
+    vd.force = vec2<f32>(0.0);
+    vd.dye = vec3<f32>(0.0);
+
+    let v_rad = params.vortex_radius;
+    let v_spd = params.vortex_speed;
+    let soft = mix(0.01, 0.08, params.force_harmony);
+    let n_src = u32(clamp(params.force_count, 0.0, 18.0));
+    let num_active = max(1.0, f32(n_src));
+    let force_scale = min(1.0, 2.0 / sqrt(num_active));
+    let dye_scale = min(1.0, 4.0 / num_active);
+
+    for (var s = 0u; s < 18u; s++) {
+        if (s >= n_src) { break; }
+        let fs = f32(s);
+        let time_s = t * v_spd * 2.0;
+        let phase = fs * 1.618;
+
+        let center = vec2<f32>(
+            0.5 + 0.35 * sin(time_s * (0.7 + fs * 0.15) + phase)
+                + 0.10 * cos(time_s * 0.43 - phase),
+            0.5 + 0.35 * cos(time_s * (0.5 + fs * 0.22) + phase * 1.3)
+                + 0.10 * sin(time_s * 0.57 + phase)
+        );
+
+        let d = uv - center;
+        let dist2 = dot(d, d);
+        let pulse = sin(t * (v_spd * 2.5 + fs * v_spd) + fs * 2.1) * 0.5 + 0.5;
+        let chirality = select(-1.0, 1.0, s % 2u == 0u);
+
+        let force_env = (v_rad / (dist2 + v_rad)) * exp(-dist2 / (v_rad * 8.0));
+        vd.force += vec2<f32>(-d.y, d.x) / (dist2 + soft) * force_env * pulse * 0.03 * chirality * force_scale;
+
+        let dye_rad = v_rad * params.dye_radius;
+        let dye_env = exp(-dist2 / (dye_rad * 0.4));
+        let src_color = vec3<f32>(
+            0.5 + 0.5 * sin(fs * 2.1 + t * 0.5),
+            0.5 + 0.5 * sin(fs * 3.7 + t * 0.6),
+            0.5 + 0.5 * sin(fs * 1.3 + t * 0.7)
+        );
+        vd.dye += src_color * dye_env * pulse * params.dye_intensity * dye_scale;
+    }
+    return vd;
+}
+
 fn seed_velocity(uv: vec2<f32>) -> vec2<f32> {
     let e = 0.005;
     let p = uv * 5.0;
-    let dy = hash2(floor(p + vec2<f32>(0.0, e))) - hash2(floor(p - vec2<f32>(0.0, e)));
-    let dx = hash2(floor(p + vec2<f32>(e, 0.0))) - hash2(floor(p - vec2<f32>(e, 0.0)));
+    let dy = hash22(floor(p + vec2<f32>(0.0, e))).x - hash22(floor(p - vec2<f32>(0.0, e))).x;
+    let dx = hash22(floor(p + vec2<f32>(e, 0.0))).x - hash22(floor(p - vec2<f32>(e, 0.0))).x;
     return vec2<f32>(dy, -dx) * 0.1;
 }
 
-
-// input_texture0 = self (prev velocity), input_texture1 = color_map
-// Stores: vec4(vx, vy, curl, pressure)
+// Pass 1: advect_forces
+// Reads: s0 = project (last frame: .xy=div-free velocity, .z=curl, .w=pressure)
+// Writes: vec4(vx_raw, vy_raw, 0, 0)
 @compute @workgroup_size(16, 16, 1)
-fn fluid_sim(@builtin(global_invocation_id) id: vec3<u32>) {
+fn advect_forces(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
     if (id.x >= dims.x || id.y >= dims.y) { return; }
     let R = vec2<f32>(dims);
     let U = vec2<f32>(id.xy);
     let uv = U / R;
-
-    // Advect (RK2)
     let dt = params.flow_speed;
+
+    // Read last frame's projected velocity field
     let C = s0(U);
     let v0 = C.xy;
-    let mid = U - 0.5 * v0 * dt;
-    let v_mid = s0(clamp(mid, vec2<f32>(0.0), R - 1.0)).xy;
-    var vel = s0(clamp(U - v_mid * dt, vec2<f32>(0.0), R - 1.0)).xy;
 
-    // Neighbors
-    let N = s0(clamp(U + vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0));
-    let S = s0(clamp(U - vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0));
-    let E = s0(clamp(U + vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0));
-    let W = s0(clamp(U - vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0));
+    // Sample 4 neighbors (reused for curl, vorticity, viscosity, MacCormack limiter)
+    let vN = s0(clamp(U + vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0)).xy;
+    let vS = s0(clamp(U - vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0)).xy;
+    let vE = s0(clamp(U + vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0)).xy;
+    let vW = s0(clamp(U - vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0)).xy;
 
-    // Pressure Jacobi step 1
-    let div = 0.5 * ((E.x - W.x) + (N.y - S.y));
-    let p1 = (N.w + S.w + E.w + W.w - div) * 0.25;
-    vel -= params.pressure_scale * 0.5 * vec2<f32>(E.w - W.w, N.w - S.w);
+    // MacCormack advection
+    // Step 1: RK2 backward trace (standard semi-Lagrangian)
+    let mid_back = U - 0.5 * v0 * dt;
+    let v_mid = s0(clamp(mid_back, vec2<f32>(0.0), R - 1.0)).xy;
+    let trace_back = clamp(U - v_mid * dt, vec2<f32>(0.0), R - 1.0);
+    let v_hat = s0(trace_back).xy;
 
-    // Viscosity
-    vel = mix(vel, 0.25 * (N.xy + S.xy + E.xy + W.xy), params.viscosity * 0.01);
+    // Step 2: Forward trace for error estimation
+    let trace_fwd = clamp(trace_back + v_hat * dt, vec2<f32>(0.0), R - 1.0);
+    let v_back = s0(trace_fwd).xy;
 
-    // Vorticity confinement
-    let curl_c = 0.5 * ((E.y - W.y) - (N.x - S.x));
-    var eta = vec2<f32>(abs(E.z) - abs(W.z), abs(N.z) - abs(S.z));
+    // Step 3: MacCormack correction with limiter
+    let v_mc = v_hat + 0.5 * (v0 - v_back);
+    let v_min = min(min(vN, vS), min(vE, vW));
+    let v_max = max(max(vN, vS), max(vE, vW));
+    var vel = clamp(v_mc, min(v_min, v_hat), max(v_max, v_hat));
+
+    // ── Viscosity (explicit diffusion) ──
+    let avg_vel = 0.25 * (vN + vS + vE + vW);
+    vel = mix(vel, avg_vel, params.viscosity * 0.01);
+
+    // ── Vorticity confinement ──
+    // Curl from last frame's velocity neighbors
+    let curl_c = 0.5 * ((vE.y - vW.y) - (vN.x - vS.x));
+    // Gradient of |curl| from stored curl in project buffer .z
+    let curl_N = abs(s0(clamp(U + vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0)).z);
+    let curl_S = abs(s0(clamp(U - vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0)).z);
+    let curl_E = abs(s0(clamp(U + vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0)).z);
+    let curl_W = abs(s0(clamp(U - vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0)).z);
+    var eta = vec2<f32>(curl_E - curl_W, curl_N - curl_S);
     eta /= (length(eta) + 1e-5);
     vel += params.vortex_strength * curl_c * vec2<f32>(eta.y, -eta.x) * dt;
 
-    // Texture buoyancy + edge flow
+    // ── Texture buoyancy ──
     let tex_w = params.texture_influence;
-    let lc = dot(s1(U).rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let ln = dot(s1(U + vec2<f32>(0.0, 3.0)).rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let ls = dot(s1(U - vec2<f32>(0.0, 3.0)).rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let le = dot(s1(U + vec2<f32>(3.0, 0.0)).rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let lw = dot(s1(U - vec2<f32>(3.0, 0.0)).rgb, vec3<f32>(0.299, 0.587, 0.114));
+    let lc = dot(textureSampleLevel(channel0, channel0_sampler, uv, 0.0).rgb, vec3<f32>(0.299, 0.587, 0.114));
+    let ln = dot(textureSampleLevel(channel0, channel0_sampler, uv + vec2<f32>(0.0, 3.0) / R, 0.0).rgb, vec3<f32>(0.299, 0.587, 0.114));
+    let ls = dot(textureSampleLevel(channel0, channel0_sampler, uv - vec2<f32>(0.0, 3.0) / R, 0.0).rgb, vec3<f32>(0.299, 0.587, 0.114));
+    let le = dot(textureSampleLevel(channel0, channel0_sampler, uv + vec2<f32>(3.0, 0.0) / R, 0.0).rgb, vec3<f32>(0.299, 0.587, 0.114));
+    let lw = dot(textureSampleLevel(channel0, channel0_sampler, uv - vec2<f32>(3.0, 0.0) / R, 0.0).rgb, vec3<f32>(0.299, 0.587, 0.114));
     vel.y += (lc - 0.5) * params.gravity * tex_w;
     vel += vec2<f32>(-(ln - ls), le - lw) * params.gravity * 0.3 * tex_w;
 
     let t = time_data.time;
-    let v_rad = params.vortex_radius;
-    let v_spd = params.vortex_speed;
-    let soft = mix(0.01, 0.08, params.force_harmony);
-    let n_src = u32(clamp(params.force_count, 0.0, 18.0));
-    let active_sources = max(1.0, f32(n_src));
-    let force_scale = min(1.0, 2.0 / sqrt(active_sources)); 
+    let vortices = compute_vortices(uv, t);
+    vel += vortices.force;
 
-    var force = vec2<f32>(0.0);
-    for (var s = 0u; s < 18u; s++) {
-        if (s >= n_src) { break; }
-        let fs = f32(s);
-        let time_s = t * (v_spd * 2.0); 
-        let phase = fs * 1.618; 
-        let x_pos = 0.5 + 0.35 * sin(time_s * (0.7 + fs * 0.15) + phase) 
-                        + 0.10 * cos(time_s * 0.43 - phase);
-        let y_pos = 0.5 + 0.35 * cos(time_s * (0.5 + fs * 0.22) + phase * 1.3) 
-                        + 0.10 * sin(time_s * 0.57 + phase);
-        let center = vec2<f32>(x_pos, y_pos);
-        
-        let d = uv - center;
-        let dist2 = dot(d, d);
-        let envelope = (v_rad / (dist2 + v_rad)) * exp(-dist2 / (v_rad * 8.0));
-        let pulse = sin(t * (v_spd * 2.5 + fs * v_spd) + fs * 2.1) * 0.5 + 0.5;
-        let chirality = select(-1.0, 1.0, s % 2u == 0u);
-        force += vec2<f32>(-d.y, d.x) / (dist2 + soft) * envelope * pulse * 0.03 * chirality * force_scale;
-    }
+    // Curl-noise turbulence
+    let drift_uv = uv * 3.0 + vec2<f32>(sin(t * 0.1), cos(t * 0.15)) * 0.3;
+    let boil = fbm_curl(drift_uv + t * 0.05);
+    vel += boil * params.vortex_strength * params.bg_boil * 0.08;
 
-    vel += force;
-    let drift_uv = uv * 1.5 + vec2<f32>(sin(t * 0.1), cos(t * 0.15)) * 0.2;
-    let global_boil = seed_velocity(drift_uv);
-    vel += global_boil * params.vortex_strength * params.bg_boil;
-
-    // Velocity dissipation + soft limit + boundary
+    // ── Dissipation + speed limit + boundary ──
     let dissipation = 1.0 / (1.0 + params.turbulence);
     let speed = length(vel);
     if (speed > 3.0) { vel *= 3.0 / speed; }
@@ -164,54 +246,82 @@ fn fluid_sim(@builtin(global_invocation_id) id: vec3<u32>) {
     if (time_data.frame < 2u) {
         vel = seed_velocity(uv);
     }
-    textureStore(output, id.xy, vec4<f32>(vel, curl_c, p1));
+    textureStore(output, id.xy, vec4<f32>(vel, 0.0, 0.0));
 }
 
-// input_texture0 = fluid_sim, input_texture1 = self
-// Stores: vec4(vx, vy, speed, pressure)
+// Pass 2: pressure (Jacobi iteration, dispatched 12× via duplicate passes)
+// Reads: s0 = advect_forces (.xy = raw velocity for divergence)
+//        s1 = self (previous pressure iteration, .x = pressure)
+// Writes: vec4(pressure, 0, 0, 0)
 @compute @workgroup_size(16, 16, 1)
-fn pressure_refine(@builtin(global_invocation_id) id: vec3<u32>) {
+fn pressure(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
     if (id.x >= dims.x || id.y >= dims.y) { return; }
     let R = vec2<f32>(dims);
     let U = vec2<f32>(id.xy);
 
-    let C = s0(U);
-    let N = s0(clamp(U + vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0));
-    let S = s0(clamp(U - vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0));
-    let E = s0(clamp(U + vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0));
-    let W = s0(clamp(U - vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0));
+    // Velocity neighbors for divergence (from advect_forces)
+    let vN = s0(clamp(U + vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0)).xy;
+    let vS = s0(clamp(U - vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0)).xy;
+    let vE = s0(clamp(U + vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0)).xy;
+    let vW = s0(clamp(U - vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0)).xy;
+    let div = 0.5 * ((vE.x - vW.x) + (vN.y - vS.y));
 
-    let div = 0.5 * ((E.x - W.x) + (N.y - S.y));
-    let p2 = (N.w + S.w + E.w + W.w - div) * 0.25;
+    // Pressure neighbors (from previous iteration)
+    let pN = s1(clamp(U + vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0)).x;
+    let pS = s1(clamp(U - vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0)).x;
+    let pE = s1(clamp(U + vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0)).x;
+    let pW = s1(clamp(U - vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0)).x;
 
-    // Temporal pressure accumulation
-    let prev = s1(U);
-    let prev_N = s1(clamp(U + vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0));
-    let prev_S = s1(clamp(U - vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0));
-    let prev_E = s1(clamp(U + vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0));
-    let prev_W = s1(clamp(U - vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0));
-    let p3 = (prev_N.w + prev_S.w + prev_E.w + prev_W.w - div) * 0.25;
+    // Jacobi iteration: p_new = (sum_neighbors - divergence) / 4
+    let p_new = (pN + pS + pE + pW - div) * 0.25;
 
-    let p_final = mix(p2, p3, 0.5);
-
-    var vel = C.xy;
-    let grad_p = params.pressure_scale * 0.5 * vec2<f32>(
-        mix(E.w, prev_E.w, 0.5) - mix(W.w, prev_W.w, 0.5),
-        mix(N.w, prev_N.w, 0.5) - mix(S.w, prev_S.w, 0.5));
-    vel -= grad_p * 0.5;
-
-    let avg = 0.25 * (N.xy + S.xy + E.xy + W.xy);
-    let smooth_vel = mix(vel, avg, 0.03);
-
-    let spd = length(smooth_vel);
-    textureStore(output, id.xy, vec4<f32>(smooth_vel, spd, p_final));
+    textureStore(output, id.xy, vec4<f32>(p_new, 0.0, 0.0, 0.0));
 }
 
-// input_texture0 = pressure_refine (corrected velocity.xy, speed.z)
-// input_texture1 = self (previous position)
-// input_texture2 = color_map
-// Stores: vec4(pos.x, pos.y, vel.x, vel.y)
+// Pass 3: project (subtract pressure gradient → divergence-free velocity)
+// Reads: s0 = advect_forces (.xy = raw velocity)
+//        s1 = pressure (.x = solved pressure)
+// Writes: vec4(vx_proj, vy_proj, curl, pressure)
+@compute @workgroup_size(16, 16, 1)
+fn project(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(output);
+    if (id.x >= dims.x || id.y >= dims.y) { return; }
+    let R = vec2<f32>(dims);
+    let U = vec2<f32>(id.xy);
+
+    let raw_vel = s0(U).xy;
+
+    // Pressure gradient
+    let pN = s1(clamp(U + vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0)).x;
+    let pS = s1(clamp(U - vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0)).x;
+    let pE = s1(clamp(U + vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0)).x;
+    let pW = s1(clamp(U - vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0)).x;
+
+    let grad_p = params.pressure_scale * 0.5 * vec2<f32>(pE - pW, pN - pS);
+    var vel = raw_vel - grad_p;
+
+    // Compute curl
+    let vN = s0(clamp(U + vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0)).xy;
+    let vS = s0(clamp(U - vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0)).xy;
+    let vE = s0(clamp(U + vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0)).xy;
+    let vW = s0(clamp(U - vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0)).xy;
+    let curl = 0.5 * ((vE.y - vW.y) - (vN.x - vS.x));
+
+    let p_local = s1(U).x;
+
+    if (time_data.frame < 2u) {
+        let uv = U / R;
+        vel = seed_velocity(uv);
+    }
+    textureStore(output, id.xy, vec4<f32>(vel, curl, p_local));
+}
+
+// Pass 4: position_field (Lagrangian particle tracking)
+// Reads: s0 = project (.xy = div-free velocity)
+//        s1 = self (.xy = previous position, .zw = velocity)
+//        s2 = color_map (reserved)
+// Writes: vec4(pos.x, pos.y, vel.x, vel.y)
 @compute @workgroup_size(16, 16, 1)
 fn position_field(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
@@ -223,7 +333,7 @@ fn position_field(@builtin(global_invocation_id) id: vec3<u32>) {
     let vel_data = s0(U);
     let vel = vel_data.xy * params.flow_speed * params.flow_intensity;
 
-    // RK2 trace-back
+    // RK2 trace-back through divergence free velocity field
     let mid = U - 0.5 * vel;
     let v_mid = s0(clamp(mid, vec2<f32>(0.0), R - 1.0)).xy * params.flow_speed * params.flow_intensity;
     let trace = clamp(U - v_mid, vec2<f32>(0.5), R - 1.5);
@@ -245,7 +355,7 @@ fn position_field(@builtin(global_invocation_id) id: vec3<u32>) {
     let diffuse = params.pos_diffusion * 0.04 + broken * 0.35;
     Q = vec4<f32>(mix(Q.xy, avg_pos, diffuse), Q.zw);
 
-    // Reseed broken
+    // Reseed broken regions
     Q = vec4<f32>(mix(Q.xy, U, broken * 0.12), vel_data.xy);
 
     // Edge handling
@@ -264,22 +374,23 @@ fn position_field(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(output, id.xy, Q);
 }
 
-// input_texture0 = position_field (.xy=pos, .zw=vel)
-// input_texture1 = self (prev color)
+// Pass 5: color_map (color advection + dye injection)
+// Reads: s0 = position_field (.xy = pos, .zw = vel)
+//        s1 = self (previous color)
+// Writes: vec4(r, g, b, a)
 @compute @workgroup_size(16, 16, 1)
 fn color_map(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
     if (id.x >= dims.x || id.y >= dims.y) { return; }
     let R = vec2<f32>(dims);
     let U = vec2<f32>(id.xy);
+    let uv = U / R;
 
     let pos_data = s0(U);
-    let uv = U / R;
     let vel = pos_data.zw;
 
     let raw_uv = pos_data.xy / R;
     let warped_uv = uv + (raw_uv - uv) * params.warp_amount;
-
     let original = textureSampleLevel(channel0, channel0_sampler, warped_uv, 0.0);
 
     // Semi-Lagrangian advection of previous color
@@ -294,45 +405,10 @@ fn color_map(@builtin(global_invocation_id) id: vec3<u32>) {
     let refresh = mix(0.0, 0.005, smoothstep(0.9, 1.0, fb));
     Q = mix(Q, original, refresh);
 
+    // Dye injection
     let t = time_data.time;
-    let v_rad = params.vortex_radius * params.dye_radius;
-    let v_spd = params.vortex_speed;
-    
-    let n_src = u32(clamp(params.force_count, 0.0, 18.0));
-    
-    let active_sources = max(1.0, f32(n_src));
-    let dye_scale = min(1.0, 4.0 / active_sources);
-    var glow_dye = vec3<f32>(0.0);
-    for (var s = 0u; s < 18u; s++) {
-        if (s >= n_src) { break; }
-        let fs = f32(s);
-        
-        let time_s = t * (v_spd * 2.0); 
-        let phase = fs * 1.618; 
-        
-        let x_pos = 0.5 + 0.35 * sin(time_s * (0.7 + fs * 0.15) + phase) 
-                        + 0.10 * cos(time_s * 0.43 - phase);
-        let y_pos = 0.5 + 0.35 * cos(time_s * (0.5 + fs * 0.22) + phase * 1.3) 
-                        + 0.10 * sin(time_s * 0.57 + phase);
-                        
-        let center = vec2<f32>(x_pos, y_pos);
-        
-        let d = uv - center;
-        let dist2 = dot(d, d);
-        
-        let envelope = exp(-dist2 / (v_rad * 0.4)); 
-        let pulse = sin(t * (v_spd * 2.5 + fs * v_spd) + fs * 2.1) * 0.5 + 0.5;
-        
-        let r_col = 0.5 + 0.5 * sin(fs * 2.1 + t * 0.5);
-        let g_col = 0.5 + 0.5 * sin(fs * 3.7 + t * 0.6);
-        let b_col = 0.5 + 0.5 * sin(fs * 1.3 + t * 0.7);
-        let src_color = vec3<f32>(r_col, g_col, b_col);
-        
-        // some balance attempts...
-        glow_dye += src_color * envelope * pulse * params.dye_intensity * dye_scale; 
-    }
-
-    Q = vec4<f32>(Q.rgb + glow_dye, Q.a);
+    let vortices = compute_vortices(uv, t);
+    Q = vec4<f32>(Q.rgb + vortices.dye, Q.a);
 
     Q = clamp(Q, vec4<f32>(0.0), vec4<f32>(1.0));
 
@@ -342,8 +418,10 @@ fn color_map(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(output, id.xy, Q);
 }
 
-// input_texture0 = color_map
-// input_texture1 = pressure_refine (corrected velocity.xy, speed.z, pressure.w)
+// 
+// Pass 6: main_image (gradient lighting + compositing)
+// Reads: s0 = color_map
+//        s1 = project (.xy = velocity, .z = curl, .w = pressure)
 @compute @workgroup_size(16, 16, 1)
 fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
@@ -355,6 +433,7 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     let fluid = s1(U);
     let fb = clamp(params.feedback, 0.0, 1.0);
 
+    // Multi-scale color gradients for surface normals
     let cn = length(s0(U + vec2<f32>(0.0, 1.0)).rgb);
     let cs = length(s0(U - vec2<f32>(0.0, 1.0)).rgb);
     let ce = length(s0(U + vec2<f32>(1.0, 0.0)).rgb);
@@ -367,13 +446,12 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     let cw3 = length(s0(U - vec2<f32>(3.0, 0.0)).rgb);
     let coarse = vec2<f32>(ce3 - cw3, cn3 - cs3) / 3.0;
 
-    // Velocity/pressure normals
-    let fN = s1(clamp(U + vec2<f32>(0.0, 2.0), vec2<f32>(0.0), R - 1.0));
-    let fS = s1(clamp(U - vec2<f32>(0.0, 2.0), vec2<f32>(0.0), R - 1.0));
-    let fE = s1(clamp(U + vec2<f32>(2.0, 0.0), vec2<f32>(0.0), R - 1.0));
-    let fW = s1(clamp(U - vec2<f32>(2.0, 0.0), vec2<f32>(0.0), R - 1.0));
-    // Pressure as height field
-    let vel_grad = vec2<f32>(fE.w - fW.w, fN.w - fS.w) * 0.5;
+    // Pressure based surface height
+    let pN = s1(clamp(U + vec2<f32>(0.0, 2.0), vec2<f32>(0.0), R - 1.0)).w;
+    let pS = s1(clamp(U - vec2<f32>(0.0, 2.0), vec2<f32>(0.0), R - 1.0)).w;
+    let pE = s1(clamp(U + vec2<f32>(2.0, 0.0), vec2<f32>(0.0), R - 1.0)).w;
+    let pW = s1(clamp(U - vec2<f32>(2.0, 0.0), vec2<f32>(0.0), R - 1.0)).w;
+    let vel_grad = vec2<f32>(pE - pW, pN - pS) * 0.5;
 
     // Blend color + pressure normals
     let color_grad = mix(coarse, fine, smoothstep(0.0, 0.02, length(fine)));
@@ -384,8 +462,6 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
 
     // Two-light setup
     let t = time_data.time;
-
-    // Key light
     let key = normalize(vec3<f32>(
         3.0 + 0.3 * sin(t * 0.3),
         3.0 + 0.3 * cos(t * 0.25),
@@ -393,7 +469,6 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     ));
     let NdotL_key = max(dot(normal, key), 0.0);
 
-    // Fill light
     let fill = normalize(vec3<f32>(
         -2.0 + 0.2 * cos(t * 0.2),
         -1.5,
@@ -421,14 +496,15 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     // Velocity tint
     col += vec3<f32>(fluid.x * 0.001, fluid.z * 0.0005, fluid.y * 0.001);
 
-    let sat_boost = params.color_vibrancy;
+    // Saturation
     let lum = dot(col, vec3<f32>(0.299, 0.587, 0.114));
-    col = mix(vec3<f32>(lum), col, sat_boost);
+    col = mix(vec3<f32>(lum), col, params.color_vibrancy);
 
     // S-curve contrast
-    let contrast_amt = params.contrast;
-    col = mix(col, smoothstep(vec3<f32>(0.0), vec3<f32>(1.0), col), contrast_amt);
+    col = mix(col, smoothstep(vec3<f32>(0.0), vec3<f32>(1.0), col), params.contrast);
 
+    // Gamma
     col = pow(max(col, vec3<f32>(0.0)), vec3<f32>(params.gamma));
+
     textureStore(output, id.xy, vec4<f32>(col, 1.0));
 }
