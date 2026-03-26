@@ -96,7 +96,7 @@ impl ShaderManager for FFTShader {
             .resize(core, core.size.width, core.size.height);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         // Handle UI and controls - using original transparent UI design

@@ -100,7 +100,7 @@ impl ShaderManager for Shader {
         self.compute_shader.handle_export(core, &mut self.base);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         let mut params = self.current_params;

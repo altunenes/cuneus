@@ -1,6 +1,5 @@
 use cuneus::prelude::*;
 use cuneus::{Core, RenderKit, ShaderApp, ShaderManager, UniformProvider};
-use winit::event::WindowEvent;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -125,7 +124,7 @@ impl ShaderManager for ExperimentShader {
         self.compute_shader.handle_export(core, &mut self.base);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         let mut params = self.current_params;
@@ -142,7 +141,7 @@ impl ShaderManager for ExperimentShader {
 
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
-                ctx.style_mut(|style| {
+                ctx.global_style_mut(|style| {
                     style.visuals.window_fill = egui::Color32::from_black_alpha(220);
                     style.visuals.window_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(60));
                     style.text_styles.get_mut(&egui::TextStyle::Body).unwrap().size = 11.0;

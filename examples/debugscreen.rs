@@ -90,7 +90,7 @@ impl ShaderManager for DebugScreen {
         self.base.default_resize(core, &mut self.compute_shader);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         let mut controls_request = self
@@ -105,7 +105,7 @@ impl ShaderManager for DebugScreen {
 
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
-                ctx.style_mut(|style| {
+                ctx.global_style_mut(|style| {
                     style.visuals.window_fill =
                         egui::Color32::from_rgba_premultiplied(0, 0, 0, 180);
                 });

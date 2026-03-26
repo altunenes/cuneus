@@ -1,7 +1,6 @@
 use cuneus::compute::*;
 use cuneus::prelude::*;
 use log::error;
-use winit::event::WindowEvent;
 
 struct CameraMovement {
     forward: bool,
@@ -284,7 +283,7 @@ impl ShaderManager for PathTracingShader {
         self.should_reset_accumulation = true;
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         // Handle UI and parameter updates

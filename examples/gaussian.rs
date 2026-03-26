@@ -154,7 +154,7 @@ impl ShaderManager for GaussianShader {
         self.base.default_resize(core, &mut self.compute_shader);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         let mut controls_request = self

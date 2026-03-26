@@ -2,7 +2,6 @@ use cuneus::audio::{EnvelopeConfig, SynthesisManager};
 use cuneus::compute::*;
 use cuneus::prelude::*;
 use log::{error, info};
-use winit::event::WindowEvent;
 
 cuneus::uniform_params! {
     struct SongParams {
@@ -121,7 +120,7 @@ impl ShaderManager for VeridisQuo {
         }
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         let mut params = self.current_params;

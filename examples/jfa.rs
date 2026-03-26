@@ -1,6 +1,5 @@
 use cuneus::compute::*;
 use cuneus::prelude::*;
-use winit::event::WindowEvent;
 
 cuneus::uniform_params! {
     struct JfaParams {
@@ -107,7 +106,7 @@ impl ShaderManager for JfaShader {
         self.base.default_resize(core, &mut self.compute_shader);
     }
 
-    fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
         // Execute multi-pass compute shader: seed_points -> flood_step -> color_accumulate -> main_image
