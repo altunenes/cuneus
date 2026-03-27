@@ -3,7 +3,7 @@
 <img src="https://github.com/user-attachments/assets/590dbd91-5eaa-4c04-b3f9-d579924fa4c3" alt="cuneus sdf" width="320" height="120" />
 
 
-A tool for experimenting with WGSL shaders, it uses `wgpu` for rendering, `egui` for the UI and `winit` for windowing :-)
+A GPU compute engine for creating, tweaking, and shipping WGSL shader programs. Built on `wgpu`, `egui`, `winit` and `gstreamer` :-)
 
 ### Current Features
 
