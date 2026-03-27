@@ -254,6 +254,30 @@ PassDescription::new("lic_edges", &["tensor_field", "kuwahara"]), // input_textu
 PassDescription::new("main_image", &["lic_edges"]),
 ```
 
+### Iterative Solvers via Duplicate Passes
+
+Repeat the same entry point name to run iterative algorithms (e.g., Jacobi pressure) within a single `dispatch()` call:
+
+```rust
+let passes = vec![
+    PassDescription::new("compute_field", &["compute_field"]),
+    PassDescription::new("pressure", &["compute_field", "pressure"]),  // iteration 1
+    PassDescription::new("pressure", &["compute_field", "pressure"]),  // iteration 2
+    PassDescription::new("pressure", &["compute_field", "pressure"]),  // ...repeat N times
+    PassDescription::new("project", &["compute_field", "pressure"]),
+    PassDescription::new("main_image", &["project"]),
+];
+```
+
+note that cuneus creates one buffer pair per unique name. Each dispatch flips the write side automatically, so iters ping/pong correctly: iter 1 writes `.0` → iter 2 reads `.0`, writes `.1` → iter 3 reads `.1`, writes `.0`, etc. Non-iterated passes stay fixed throughout. *Example: `fluid.rs` uses 12 Jacobi pressure iterations this way.*
+
+### `dispatch()` vs `dispatch_stage()`
+
+- **`dispatch()`** — Runs all passes with correct per-pass ping-pong bind groups. Auto-increments frame counter. Use for **texture-based multipass** (most shaders).
+- **`dispatch_stage(encoder, core, index)`** — Runs one pass using **global** bind groups (no ping-pong awareness). Does not increment frame counter. Use for **storage-buffer multipass** (`fluidsim.rs`) or **path tracing accumulation** (`mandelbulb.rs`).
+
+**Important:** `dispatch_stage()` cannot select correct ping-pong sides for texture-based multipass. For iterative texture-based solving, use duplicate passes with `dispatch()` instead.
+
 ### Per-Buffer Resolution
 
 Each buffer can have its own resolution, independent of the screen size. This enables half-res blur passes, 1D lookup tables, fixed-size accumulation buffers, and more.
