@@ -368,51 +368,57 @@ Cuneus supports **bidirectional GPU-CPU audio workflows** using two complementar
 - **Use Case**: Audio visualizers like `audiovis.rs`
 
 **2. Audio Synthesis (`.with_audio()`)** - Generate music on GPU:
-- **Flow**: GPU calculates frequencies/amplitudes → writes to buffer → CPU reads → GStreamer plays audio
+- **Flow**: GPU computes raw PCM samples per-frame → CPU reads back → `PcmStreamManager` streams to audio output
 - **Shader Access**: `@group(2) var<storage, read_write> audio_buffer: array<f32>` (read-write)
 - **Use Case**: Music generators like `synth.rs`, `veridisquo.rs`
 
-> **Note:** Audio synthesis examples use two different patterns depending on *who decides what to play*:
-> - **GPU-driven** (`veridisquo.rs`): The shader composes the music (frequencies, amplitudes) and writes to the audio buffer. The CPU reads it back with `pollster::block_on(read_audio_buffer(...))` and feeds it to `SynthesisManager`. The GPU is the "composer".
-> - **CPU-driven** (`synth.rs`): The user presses keys on the keyboard and the CPU calls `synth.set_voice(...)` directly. No GPU→CPU readback is needed — the GPU only handles visualization.
+The shader writes interleaved stereo f32 samples (left, right, left, right...) to the audio buffer. The CPU reads them back each frame and pushes to GStreamer via `PcmStreamManager`. This is per-sample synthesis. you have full control over harmonics, effects, envelopes, anything.
 
-#### Composing Music on the GPU
+#### Per-Sample GPU Audio Synthesis
 
-You can write entire songs in your compute shader by calculating note sequences, melodies, and synthesis parameters:
+Write a `mainSound(time) → vec2<f32>` function in WGSL. Thread (0,0) loops over samples and fills the buffer:
 
 ```wgsl
-// In WGSL: Compose music and write synthesis parameters
-// This pattern is from veridisquo.wgsl - a complete GPU-composed song
-if (global_id.x == 0u && global_id.y == 0u) {
-    // Calculate melody notes based on time
-    let beat = u32(u_time.time * tempo / 60.0);
-    let melody_note = get_melody_for_beat(beat);
-    let bass_note = get_bass_for_beat(beat);
+fn mainSound(t: f32) -> vec2<f32> {
+    // Your synthesis here — harmonics, filters, delay lines, drums, anything
+    let melody = sin(6.283 * 440.0 * t) * 0.3;
+    return vec2<f32>(melody, melody); // stereo
+}
 
-    // Write to audio buffer for CPU playback
-    audio_buffer[0] = melody_note.frequency;
-    audio_buffer[1] = melody_note.amplitude;
-    audio_buffer[2] = bass_note.frequency;
-    audio_buffer[3] = bass_note.amplitude;
+// Thread (0,0) generates all samples for this frame
+if (g.x == 0u && g.y == 0u) {
+    for (var i = 0u; i < params.samples_to_generate; i++) {
+        let t = f32(params.sample_offset + i) / params.sample_rate;
+        let stereo = mainSound(t);
+        audio_buffer[i * 2u] = stereo.x;
+        audio_buffer[i * 2u + 1u] = stereo.y;
+    }
 }
 ```
 
 ```rust
-// In Rust: Read GPU-composed music and play it
-// This pattern is from veridisquo.rs
-if let Ok(data) = pollster::block_on(
-    compute.read_audio_buffer(&core.device, &core.queue)
-) {
-    synth.set_voice(0, data[0], data[1], true);  // Melody
-    synth.set_voice(1, data[2], data[3], true);  // Bass
+// In Rust: read back PCM and push to audio output
+let mut pcm = PcmStreamManager::new(Some(44100))?;
+pcm.start()?;
+
+// In update() each frame:
+let prev = self.last_samples_generated;
+if prev > 0 {
+    if let Ok(data) = pollster::block_on(compute.read_audio_buffer(&device, &queue)) {
+        pcm.push_samples(&data[..(prev * 2) as usize])?;
+    }
 }
+// Time-sync: generate exactly the samples real-time demands
+let needed = ((elapsed * 44100.0) as u64 - pcm.samples_written()).min(1024) as u32;
+params.sample_offset = pcm.samples_written() as u32;
+params.samples_to_generate = needed;
 ```
 
 **Examples:**
 
-- `veridisquo.rs` - Complete GPU-composed song with melody and bassline
-- `synth.rs` - Interactive polyphonic synthesizer with ADSR envelopes
-- `debugscreen.rs` - Simple tone generation for testing
+- `veridisquo.rs` - Full song: drawbar organ, Moog bass, chord pads, kick drums, delay lines, sidechain
+- `synth.rs` - Interactive keyboard synth with per-sample ADSR, filter, distortion, chorus, reverb
+- `debugscreen.rs` - Simple tone generation using `SynthesisManager` (oscillator-based, not PCM)
 
 **Pro-tip - Generic Storage:** The `.with_audio()` buffer is just a `storage, read_write` array of floats. You don't have to use it for audio! Any shader can use it as generic persistent storage:
 

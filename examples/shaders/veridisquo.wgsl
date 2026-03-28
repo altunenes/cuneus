@@ -93,7 +93,7 @@ fn getSongData(time: f32) -> SongData {
     let p2s = pd + sh;
     let p2e = p2s + pd;
 
-    // --- Melody Sequencer ---
+    // melody sequencer
     if (m == 0 || m == 4) {
         if (pm < pd) {
             let p = pm / pd;
@@ -144,7 +144,7 @@ fn getSongData(time: f32) -> SongData {
         }
     }
 
-    // --- Driving Bass (Daft Punk Bounce) ---
+    // driving bass (the bounce)
     let step16 = i32(floor(pm * 16.0));
     let loop_m = m - (m / 4) * 4;
     let is_high = (step16 == 0 || step16 == 4 || step16 == 7 || step16 == 10 || step16 == 13);
@@ -169,7 +169,7 @@ fn getSongData(time: f32) -> SongData {
     if (is_high) { bas_drv = bas_hi_f; } else { bas_drv = bas_lo_f; }
     let bas_drv_t = fract(pm * 16.0) * (md / 16.0);
 
-    // --- Pad Chords ---
+    // pad chords
     var pad_root = A4;
     var pad_minor = true;
     if (loop_m == 0) { pad_root = D4; pad_minor = true; }
@@ -191,7 +191,7 @@ fn getSongData(time: f32) -> SongData {
     return data;
 }
 
-// --- Instruments ---
+// instruments
 
 // 1. Drawbar organ lead
 fn leadOrgan(freq: f32, phase_t: f32, env_t: f32) -> f32 {
@@ -280,9 +280,8 @@ fn kickDrum(t: f32) -> f32 {
     return sin(TAU * freq * t) * env;
 }
 
-// --- Main sound function (per-sample) ---
 fn mainSound(time: f32) -> vec2<f32> {
-    // Delay lines (phase-decoupled to fix comb filtering)
+    // delay lines (phase-decoupled to avoid comb filtering)
     let v0 = getVoicesAtTime(time, time);
     let v1 = getVoicesAtTime(time - 0.15, time);
     let v2 = getVoicesAtTime(time - 0.30, time);
@@ -299,7 +298,7 @@ fn mainSound(time: f32) -> vec2<f32> {
     let bas_L = v0.y * 0.35 + v1.y * 0.10 + v2.y * 0.05;
     let bas_R = vR0.y * 0.35 + vR1.y * 0.10 + vR2.y * 0.05;
 
-    // Background instruments
+    // background pads
     let data = getSongData(time);
     let wave_guitar = guitarPad(data.pad_root, time, data.pad_minor);
     let wave_organ = organSynth(data.pad_root, time, data.pad_minor);
@@ -311,7 +310,7 @@ fn mainSound(time: f32) -> vec2<f32> {
     let kick_t = fract(pm * 4.0) * (md / 4.0);
     let wave_kick = kickDrum(kick_t);
 
-    // Sidechain compression (duck when kick hits)
+    // sidechain duck
     var sc_depth: f32 = 0.35;
     if (m == 3 || m == 7) {
         sc_depth = mix(0.35, 0.05, pm);
@@ -325,14 +324,13 @@ fn mainSound(time: f32) -> vec2<f32> {
     let spread_pad = smoothstep(1.0, 0.0, pm) * 0.2;
     let R = (lead_R + bas_R + wave_guitar * guitar_vol * (1.0 + spread_pad) + wave_organ * organ_vol * (1.0 - spread_pad)) * sidechain + wave_kick * 0.6;
 
-    // tanh soft clipping
+    // soft clip
     let Lc = (exp(2.0 * L) - 1.0) / (exp(2.0 * L) + 1.0);
     let Rc = (exp(2.0 * R) - 1.0) / (exp(2.0 * R) + 1.0);
 
     return vec2<f32>(Lc, Rc) * 0.5;
 }
 
-// --- Visualization helpers ---
 
 fn note_col(n: f32) -> vec3<f32> {
     let ni = u32(n);
@@ -357,14 +355,12 @@ fn measure_data(m: u32) -> vec2<f32> {
     }
 }
 
-// --- Main entry: audio generation + visualization ---
-
 @compute @workgroup_size(16, 16, 1)
 fn main(@builtin(global_invocation_id) g: vec3<u32>) {
     let d = textureDimensions(output);
     if (g.x >= d.x || g.y >= d.y) { return; }
 
-    // --- Audio generation (thread 0,0 fills the entire PCM buffer) ---
+    // audio: thread (0,0) fills the PCM buffer
     if (g.x == 0u && g.y == 0u) {
         let sr = u_song.sample_rate;
         let n = u_song.samples_to_generate;
