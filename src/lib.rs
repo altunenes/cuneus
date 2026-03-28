@@ -79,7 +79,7 @@ pub use uniforms::*;
 pub mod audio {
     pub use crate::gst::audio::{
         AudioDataProvider, AudioSynthManager, AudioSynthUniform, AudioWaveform, EnvelopeConfig,
-        MusicalNote, SynthesisManager, SynthesisUniform, SynthesisWaveform,
+        MusicalNote, PcmStreamManager, SynthesisManager, SynthesisUniform, SynthesisWaveform,
     };
 }
 
@@ -97,7 +97,8 @@ pub mod prelude {
     #[cfg(feature = "media")]
     pub use crate::{
         audio::{
-            AudioWaveform, MusicalNote, SynthesisManager, SynthesisUniform, SynthesisWaveform,
+            AudioWaveform, MusicalNote, PcmStreamManager, SynthesisManager, SynthesisUniform,
+            SynthesisWaveform,
         },
         gst,
     };

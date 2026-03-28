@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use gst::glib::ControlFlow;
 use gst::prelude::*;
 use gstreamer as gst;
+use gstreamer_app as gst_app;
 use log::{debug, info, warn};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -1180,5 +1181,211 @@ impl SynthesisWaveform {
             SynthesisWaveform::Saw => 2,
             SynthesisWaveform::Triangle => 3,
         }
+    }
+}
+
+/// Streams raw PCM audio samples (computed by GPU) to the audio output via GStreamer AppSrc.
+/// Unlike SynthesisManager (which uses audiotestsrc for simple waveforms), this accepts
+/// arbitrary interleaved stereo f32 samples — enabling complex GPU-side synthesis
+/// (harmonics, delay lines, drums, sidechain, etc.).
+pub struct PcmStreamManager {
+    pipeline: gst::Pipeline,
+    appsrc: gst_app::AppSrc,
+    volume_element: gst::Element,
+    sample_rate: u32,
+    channels: u32,
+    samples_written: u64,
+    is_playing: bool,
+    master_volume: f64,
+}
+
+impl PcmStreamManager {
+    pub fn new(sample_rate: Option<u32>) -> Result<Self> {
+        let sample_rate = sample_rate.unwrap_or(44100);
+        let channels = 2u32;
+
+        info!("Creating PCM stream manager at {sample_rate} Hz, {channels} channels");
+
+        let pipeline = gst::Pipeline::new();
+
+        let appsrc_elem = gst::ElementFactory::make("appsrc")
+            .name("pcm_appsrc")
+            .build()
+            .map_err(|_| anyhow!("Failed to create appsrc element"))?;
+
+        let appsrc = appsrc_elem
+            .dynamic_cast::<gst_app::AppSrc>()
+            .map_err(|_| anyhow!("Failed to cast to AppSrc"))?;
+
+        let caps = gst::Caps::builder("audio/x-raw")
+            .field("format", "F32LE")
+            .field("channels", channels as i32)
+            .field("rate", sample_rate as i32)
+            .field("layout", "interleaved")
+            .build();
+        appsrc.set_caps(Some(&caps));
+        appsrc.set_format(gst::Format::Time);
+        appsrc.set_is_live(true);
+        appsrc.set_stream_type(gst_app::AppStreamType::Stream);
+        // ~100ms of buffer — low latency for interactive use
+        appsrc.set_max_bytes(sample_rate as u64 * channels as u64 * 4 / 10);
+
+        let audioconvert = gst::ElementFactory::make("audioconvert")
+            .name("pcm_convert")
+            .build()
+            .map_err(|_| anyhow!("Failed to create audioconvert"))?;
+
+        let audioresample = gst::ElementFactory::make("audioresample")
+            .name("pcm_resample")
+            .build()
+            .map_err(|_| anyhow!("Failed to create audioresample"))?;
+
+        let volume_element = gst::ElementFactory::make("volume")
+            .name("pcm_volume")
+            .property("volume", 0.5f64)
+            .build()
+            .map_err(|_| anyhow!("Failed to create volume element"))?;
+
+        let audiosink = gst::ElementFactory::make("autoaudiosink")
+            .name("pcm_sink")
+            .build()
+            .map_err(|_| anyhow!("Failed to create autoaudiosink"))?;
+
+        pipeline
+            .add_many([
+                appsrc.upcast_ref(),
+                &audioconvert,
+                &audioresample,
+                &volume_element,
+                &audiosink,
+            ])
+            .map_err(|_| anyhow!("Failed to add PCM pipeline elements"))?;
+
+        gst::Element::link_many([
+            appsrc.upcast_ref(),
+            &audioconvert,
+            &audioresample,
+            &volume_element,
+            &audiosink,
+        ])
+        .map_err(|_| anyhow!("Failed to link PCM pipeline elements"))?;
+
+        let bus = pipeline.bus().expect("Pipeline has no bus");
+        let _ = bus.add_watch(move |_, message| {
+            match message.view() {
+                gst::MessageView::Error(err) => {
+                    warn!(
+                        "PCM audio error: {} ({})",
+                        err.error(),
+                        err.debug().unwrap_or_default()
+                    );
+                }
+                gst::MessageView::Warning(warning) => {
+                    debug!("PCM audio warning: {}", warning.error());
+                }
+                _ => (),
+            }
+            ControlFlow::Continue
+        });
+
+        Ok(Self {
+            pipeline,
+            appsrc,
+            volume_element,
+            sample_rate,
+            channels,
+            samples_written: 0,
+            is_playing: false,
+            master_volume: 0.5,
+        })
+    }
+
+    pub fn start(&mut self) -> Result<()> {
+        info!("Starting PCM audio stream");
+        self.pipeline
+            .set_state(gst::State::Playing)
+            .map_err(|e| anyhow!("Failed to start PCM stream: {:?}", e))?;
+        self.is_playing = true;
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        Ok(())
+    }
+
+    pub fn stop(&mut self) -> Result<()> {
+        info!("Stopping PCM audio stream");
+        let _ = self.appsrc.end_of_stream();
+        self.pipeline
+            .set_state(gst::State::Null)
+            .map_err(|e| anyhow!("Failed to stop PCM stream: {:?}", e))?;
+        self.is_playing = false;
+        self.samples_written = 0;
+        Ok(())
+    }
+
+    /// Push interleaved stereo f32 samples to the audio output.
+    /// `samples` must contain pairs of [left, right, left, right, ...].
+    pub fn push_samples(&mut self, samples: &[f32]) -> Result<()> {
+        if !self.is_playing || samples.is_empty() {
+            return Ok(());
+        }
+
+        let num_frames = samples.len() as u64 / self.channels as u64;
+        let byte_data: &[u8] = bytemuck::cast_slice(samples);
+
+        let mut buffer = gst::Buffer::with_size(byte_data.len())
+            .map_err(|_| anyhow!("Failed to create GStreamer buffer"))?;
+
+        {
+            let buffer_ref = buffer.get_mut().unwrap();
+
+            let pts = gst::ClockTime::from_nseconds(
+                self.samples_written * 1_000_000_000 / self.sample_rate as u64,
+            );
+            let duration = gst::ClockTime::from_nseconds(
+                num_frames * 1_000_000_000 / self.sample_rate as u64,
+            );
+            buffer_ref.set_pts(Some(pts));
+            buffer_ref.set_duration(Some(duration));
+
+            buffer_ref
+                .copy_from_slice(0, byte_data)
+                .map_err(|_| anyhow!("Failed to copy PCM data to buffer"))?;
+        }
+
+        match self.appsrc.push_buffer(buffer) {
+            Ok(_) => {
+                self.samples_written += num_frames;
+                Ok(())
+            }
+            Err(e) => {
+                warn!("Failed to push PCM buffer: {:?}", e);
+                Ok(()) // Don't crash on push failure
+            }
+        }
+    }
+
+    pub fn set_master_volume(&mut self, vol: f64) {
+        let clamped = vol.clamp(0.0, 1.0);
+        self.master_volume = clamped;
+        self.volume_element.set_property("volume", clamped);
+    }
+
+    pub fn samples_written(&self) -> u64 {
+        self.samples_written
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.is_playing
+    }
+}
+
+impl Drop for PcmStreamManager {
+    fn drop(&mut self) {
+        info!("Shutting down PCM stream pipeline");
+        let _ = self.appsrc.end_of_stream();
+        let _ = self.pipeline.set_state(gst::State::Null);
     }
 }
