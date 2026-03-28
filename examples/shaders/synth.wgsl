@@ -1,15 +1,15 @@
-// This example demonstrates a how to generate audio using cunes via compute shaders
-@group(0) @binding(0) var<uniform> u_time: ComputeTimeUniform;
+// Cuneus GPU Synth — a simple keyboard instrument written entirely in WGSL
+// Enes Altun, 2025-2026; MIT License
+// Press keys 1-9 to play notes (C4 through D5). Everything runs on the GPU:
+// waveform generation, ADSR envelopes, lowpass filter, distortion, chorus,
+// delay, reverb — all computed per-sample at 44.1kHz.
+// It's not a Moog, but it's fun to play with :-)
+
+struct TimeUniform { time: f32, delta: f32, frame: u32, _padding: u32 };
+@group(0) @binding(0) var<uniform> u_time: TimeUniform;
 @group(1) @binding(0) var output: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(1) var<uniform> params: SynthParams;
 @group(2) @binding(0) var<storage, read_write> audio_buffer: array<f32>;
-
-struct ComputeTimeUniform {
-    time: f32,
-    delta: f32,
-    frame: u32,
-    _padding: u32,
-}
 
 struct SynthParams {
     tempo: f32,
@@ -29,404 +29,252 @@ struct SynthParams {
     decay_time: f32,
     sustain_level: f32,
     release_time: f32,
-    _padding1: u32,
-    _padding2: u32,
-    _padding3: u32,
+    sample_offset: u32,
+    samples_to_generate: u32,
+    sample_rate: u32,
     key_states: array<vec4<f32>, 3>,
     key_decay: array<vec4<f32>, 3>,
-}
+};
 
-const PI = 3.14159265359;
+const PI: f32 = 3.14159265;
+const TAU: f32 = 6.2831853;
 
-fn get_background_beat(time: f32, tempo: f32) -> f32 {
-    let beat_duration = 60.0 / tempo;
-    let beat_time = fract(time / beat_duration);
-    
-    if beat_time < 0.1 {
-        return 0.25 * exp(-beat_time * 10.0);
-    }
-    return 0.0;
-}
-
-
-fn generate_waveform(phase: f32, waveform_type: u32) -> f32 {
-    switch waveform_type {
-        case 0u: {
-            return sin(phase);
-        }
-        case 1u: {
-            return 2.0 * fract(phase / (2.0 * PI)) - 1.0;
-        }
-        case 2u: {
-            return select(-1.0, 1.0, sin(phase) > 0.0);
-        }
-        case 3u: {
-            // Pure triangle wave
-            let t = fract(phase / (2.0 * PI));
-            return select(4.0 * t - 1.0, 3.0 - 4.0 * t, t > 0.5);
-        }
-        case 4u: {
-            let seed = phase * 12.9898;
-            return 2.0 * fract(sin(seed) * 43758.5453) - 1.0;
-        }
-        default: {
-            return sin(phase);
-        }
-    }
-}
-
-fn get_note_frequency(note_index: u32, octave: f32) -> f32 {
+fn get_note_frequency(idx: u32, octave: f32) -> f32 {
     let notes = array<f32, 9>(
         261.63, 293.66, 329.63, 349.23, 392.00,
         440.00, 493.88, 523.25, 587.33
     );
-    return notes[note_index] * pow(2.0, octave - 4.0);
+    return notes[idx] * pow(2.0, octave - 4.0);
 }
 
-fn apply_lowpass_filter(sample: f32, cutoff: f32, resonance: f32, time: f32) -> f32 {
-    if cutoff > 0.95 {
-        return sample;
-    }
-    let freq = cutoff * cutoff * 0.8;
-    let filtered = sample * (0.3 + freq * 0.7);
-    let resonant = sample * sin(time * 50.0) * resonance * 0.1;
-    return filtered + resonant;
+// returns vec2(press_time, release_time) for voice i
+fn get_key(i: u32) -> vec2<f32> {
+    let vi = i / 4u;
+    let ci = i % 4u;
+    var press_t: f32 = 0.0;
+    var release_t: f32 = 0.0;
+    if (ci == 0u) { press_t = params.key_states[vi].x; release_t = params.key_decay[vi].x; }
+    else if (ci == 1u) { press_t = params.key_states[vi].y; release_t = params.key_decay[vi].y; }
+    else if (ci == 2u) { press_t = params.key_states[vi].z; release_t = params.key_decay[vi].z; }
+    else { press_t = params.key_states[vi].w; release_t = params.key_decay[vi].w; }
+    return vec2<f32>(press_t, release_t);
 }
 
-fn apply_distortion(sample: f32, amount: f32) -> f32 {
-    if amount < 0.01 {
-        return sample;
-    }
-    let drive = 1.0 + amount * 5.0;
-    let driven = sample * drive;
-    let distorted = driven / (1.0 + abs(driven));
-    return mix(sample, distorted, amount);
-}
+fn adsr_envelope(t: f32, press_time: f32, release_time: f32) -> f32 {
+    if (press_time <= 0.0) { return 0.0; }
+    let since_press = t - press_time;
+    if (since_press < 0.0) { return 0.0; }
 
-fn apply_chorus(sample: f32, time: f32, rate: f32, depth: f32) -> f32 {
-    if depth < 0.01 {
-        return sample;
-    }
-    let lfo1 = sin(time * rate) * depth;
-    let lfo2 = sin(time * rate * 1.3 + 1.57) * depth;
-    let delayed1 = sample * (1.0 + lfo1 * 0.5);
-    let delayed2 = sample * (1.0 + lfo2 * 0.3);
-    return (sample + delayed1 * 0.4 + delayed2 * 0.3) / 1.7;
-}
+    let A = max(params.attack_time, 0.005); // min 5ms to avoid clicks
+    let D = params.decay_time;
+    let S = params.sustain_level;
 
-fn apply_reverb(sample: f32, mix: f32, time: f32) -> f32 {
-    if mix < 0.01 {
-        return sample;
-    }
-    let delay1 = sin(time * 0.7) * 0.01 + 0.03;
-    let delay2 = sin(time * 0.5) * 0.015 + 0.08;
-    let delay3 = sin(time * 0.3) * 0.02 + 0.15;
-    
-    let reverb_sample = sample * 0.7 + 
-                       sample * sin(time * 100.0) * 0.15 * mix + 
-                       sample * sin(time * 150.0 + delay2) * 0.1 * mix + 
-                       sample * sin(time * 80.0 + delay3) * 0.08 * mix;
-    
-    return mix(sample, reverb_sample, mix);
-}
-
-fn apply_delay(sample: f32, time: f32, delay_time: f32, feedback: f32) -> f32 {
-    if feedback < 0.01 {
-        return sample;
-    }
-    let delayed_time = time - delay_time;
-    let delayed_sample = sample * sin(delayed_time * 10.0) * feedback;
-    let multi_tap = sample * sin(delayed_time * 15.0) * feedback * 0.3;
-    return sample + delayed_sample * 0.6 + multi_tap * 0.4;
-}
-
-fn piano_envelope(key_state: f32, key_decay: f32, attack: f32, decay: f32, sustain: f32, release: f32) -> f32 {
-    if key_state > 0.5 {
-        return sustain * 1.6;
+    var level: f32;
+    if (since_press < A) {
+        level = smoothstep(0.0, A, since_press);
+    } else if (since_press < A + D) {
+        level = 1.0 - (1.0 - S) * (since_press - A) / D;
     } else {
-        if key_decay > 0.8 {
-            return sustain * key_decay * 0.9;
-        } else if key_decay > 0.4 {
-            return sustain * key_decay * 1.1;
-        } else {
-            let bright_tail = key_decay * 1.3;
-            return sustain * bright_tail;
+        level = S;
+    }
+
+    if (release_time > 0.0) {
+        let since_release = t - release_time;
+        if (since_release < 0.0) { return level; }
+        let R = max(params.release_time, 0.02);
+        // figure out where the envelope was when the key was released
+        let rsp = release_time - press_time;
+        var release_level: f32;
+        if (rsp < A) { release_level = rsp / A; }
+        else if (rsp < A + D) { release_level = 1.0 - (1.0 - S) * (rsp - A) / D; }
+        else { release_level = S; }
+        level = release_level * exp(-since_release * 5.0 / R);
+        if (level < 0.001) { return 0.0; }
+    }
+
+    return level;
+}
+
+fn generate_waveform(phase: f32, waveform_type: u32) -> f32 {
+    switch waveform_type {
+        case 0u: { return sin(phase); }
+        case 1u: { return 2.0 * fract(phase / TAU) - 1.0; }
+        case 2u: { return select(-1.0, 1.0, sin(phase) > 0.0); }
+        case 3u: {
+            let t = fract(phase / TAU);
+            return select(4.0 * t - 1.0, 3.0 - 4.0 * t, t > 0.5);
+        }
+        case 4u: {
+            return 2.0 * fract(sin(phase * 12.9898) * 43758.5453) - 1.0;
+        }
+        default: { return sin(phase); }
+    }
+}
+
+fn lowpass(s: f32, cutoff: f32, resonance: f32, t: f32) -> f32 {
+    if (cutoff > 0.95) { return s; }
+    let freq = cutoff * cutoff * 0.8;
+    return s * (0.3 + freq * 0.7) + s * sin(t * 50.0) * resonance * 0.1;
+}
+
+fn distort(s: f32, amount: f32) -> f32 {
+    if (amount < 0.01) { return s; }
+    let drive = 1.0 + amount * 5.0;
+    let driven = s * drive;
+    return mix(s, driven / (1.0 + abs(driven)), amount);
+}
+
+fn chorus(s: f32, t: f32, rate: f32, depth: f32) -> f32 {
+    if (depth < 0.01) { return s; }
+    let lfo1 = sin(t * rate) * depth;
+    let lfo2 = sin(t * rate * 1.3 + 1.57) * depth;
+    return (s + s * (1.0 + lfo1 * 0.5) * 0.4 + s * (1.0 + lfo2 * 0.3) * 0.3) / 1.7;
+}
+
+fn reverb(s: f32, mix_amt: f32, t: f32) -> f32 {
+    if (mix_amt < 0.01) { return s; }
+    let r = s * 0.7
+        + s * sin(t * 100.0) * 0.15 * mix_amt
+        + s * sin(t * 150.0 + 0.08) * 0.1 * mix_amt
+        + s * sin(t * 80.0 + 0.15) * 0.08 * mix_amt;
+    return mix(s, r, mix_amt);
+}
+
+fn delay_fx(s: f32, t: f32, del_time: f32, feedback: f32) -> f32 {
+    if (feedback < 0.01) { return s; }
+    let dt = t - del_time;
+    return s + s * sin(dt * 10.0) * feedback * 0.6 + s * sin(dt * 15.0) * feedback * 0.12;
+}
+
+fn kick(t: f32, tempo: f32) -> f32 {
+    let beat_t = fract(t / (60.0 / tempo));
+    if (beat_t < 0.1) {
+        let env = exp(-beat_t * 30.0);
+        let freq = mix(40.0, 120.0, exp(-beat_t * 40.0));
+        return sin(TAU * freq * beat_t) * env * 0.25;
+    }
+    return 0.0;
+}
+
+fn synthSample(t: f32) -> vec2<f32> {
+    var sum: f32 = 0.0;
+    var num_active: f32 = 0.0;
+
+    for (var i = 0u; i < 9u; i++) {
+        let k = get_key(i);
+        let press_time = k.x;
+        let release_time = k.y;
+
+        let env = adsr_envelope(t, press_time, release_time);
+        if (env > 0.0005) {
+            let freq = get_note_frequency(i, params.octave);
+            let detune = (f32(i) - 4.0) * 0.002;
+            let adj_freq = freq * (1.0 + detune);
+            let phase_offset = f32(i) * 0.61803;
+            let phase = (t * adj_freq + phase_offset) * TAU;
+
+            var s = generate_waveform(phase, params.waveform_type);
+            s = lowpass(s, params.filter_cutoff, params.filter_resonance, t);
+            s = distort(s, params.distortion_amount);
+            s = chorus(s, t + f32(i) * 0.1, params.chorus_rate, params.chorus_depth);
+
+            sum += s * env * 0.6;
+            num_active += 1.0;
         }
     }
-}
 
-fn get_voice_time(key_state: f32, key_decay: f32, global_time: f32) -> f32 {
-    // Use key_decay as a simple time progression value
-    // When key pressed: key_decay stays at 1.0 (sustain phase)
-    // When key released: key_decay slowly decreases (release phase)
-    return key_decay * 2.0;
+    if (num_active > 1.0) { sum /= sqrt(num_active); }
+
+    if (params.beat_enabled > 0u) {
+        sum += kick(t, params.tempo);
+    }
+
+    sum = delay_fx(sum, t, params.delay_time, params.delay_feedback);
+    sum = reverb(sum, params.reverb_mix, t);
+
+    sum *= params.volume;
+    let clipped = sum / (1.0 + abs(sum));
+
+    let stereo_offset = sin(t * params.chorus_rate * 0.7) * params.chorus_depth * 0.1;
+    return vec2<f32>(clipped - stereo_offset, clipped + stereo_offset);
 }
 
 @compute @workgroup_size(16, 16, 1)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
     let dims = textureDimensions(output);
-    let coord = vec2<i32>(global_id.xy);
-    
-    if coord.x >= i32(dims.x) || coord.y >= i32(dims.y) {
-        return;
-    }
-    
-    let uv = vec2<f32>(f32(coord.x) / f32(dims.x), f32(coord.y) / f32(dims.y));
-    
-    var beat_sample = 0.0;
-    var key_sample = 0.0;
-    var dominant_freq = 440.0;
-    var max_key_amp = 0.0;
-    var active_keys = 0.0;
-    
-    let beat_amp = select(0.0, get_background_beat(u_time.time, params.tempo), params.beat_enabled > 0u);
-    beat_sample = beat_amp;
-    for (var i = 0u; i < 9u; i++) {
-        let vec_idx = i / 4u;
-        let comp_idx = i % 4u;
-        
-        var key_state = 0.0;
-        var key_decay_val = 0.0;
-        
-        if comp_idx == 0u {
-            key_state = params.key_states[vec_idx].x;
-            key_decay_val = params.key_decay[vec_idx].x;
-        } else if comp_idx == 1u {
-            key_state = params.key_states[vec_idx].y;
-            key_decay_val = params.key_decay[vec_idx].y;
-        } else if comp_idx == 2u {
-            key_state = params.key_states[vec_idx].z;
-            key_decay_val = params.key_decay[vec_idx].z;
-        } else {
-            key_state = params.key_states[vec_idx].w;
-            key_decay_val = params.key_decay[vec_idx].w;
-        }
-        
-        if key_state > 0.5 || key_decay_val > 0.01 {
-            let freq = get_note_frequency(i, params.octave);
-            
-            // Simple envelope calculation
-            let envelope = piano_envelope(
-                key_state,
-                key_decay_val,
-                params.attack_time, 
-                params.decay_time, 
-                params.sustain_level, 
-                params.release_time
-            );
-            
-            // Anti-crackling: detuning and phase offsets for all waveforms to prevent interference
-            var adjusted_freq = freq;
-            var phase_offset = 0.0;
-            
-            // Apply subtle detuning to each voice to prevent phase alignment crackling
-            let detune_amount = (f32(i) - 4.0) * 0.002; // Small detuning per voice
-            adjusted_freq = freq * (1.0 + detune_amount);
-            
-            // Golden ratio phase offset for natural harmonic spacing
-            phase_offset = f32(i) * 0.61803398875;
-            
-            let phase = (u_time.time * adjusted_freq + phase_offset) * 2.0 * PI;
-            var waveform_sample = generate_waveform(phase, params.waveform_type);
-            
-            waveform_sample = apply_lowpass_filter(waveform_sample, params.filter_cutoff, params.filter_resonance, u_time.time);
-            waveform_sample = apply_distortion(waveform_sample, params.distortion_amount);
-            waveform_sample = apply_chorus(waveform_sample, u_time.time + f32(i) * 0.1, params.chorus_rate, params.chorus_depth);
-            waveform_sample = apply_delay(waveform_sample, u_time.time + f32(i) * 0.05, params.delay_time, params.delay_feedback);
-            waveform_sample = apply_reverb(waveform_sample, params.reverb_mix, u_time.time);
-            
-            let key_amp = envelope * 0.6;
-            
-            key_sample += waveform_sample * key_amp;
-            active_keys += 1.0;
-            
-            if envelope > max_key_amp {
-                max_key_amp = envelope;
-                dominant_freq = freq;
-            }
+    if (g.x >= dims.x || g.y >= dims.y) { return; }
+
+    if (g.x == 0u && g.y == 0u) {
+        let sr = f32(params.sample_rate);
+        let n = params.samples_to_generate;
+        for (var i = 0u; i < n; i++) {
+            let global_sample = params.sample_offset + i;
+            let t = f32(global_sample) / sr;
+            let stereo = synthSample(t);
+            audio_buffer[i * 2u] = stereo.x;
+            audio_buffer[i * 2u + 1u] = stereo.y;
         }
     }
-    
-    if active_keys > 1.0 {
-        key_sample = key_sample / sqrt(active_keys);
-    }
-    
-    var mixed_sample = beat_sample * 0.2 + key_sample;
-    
-    mixed_sample = apply_reverb(mixed_sample, params.reverb_mix * 0.4, u_time.time);
-    mixed_sample = apply_delay(mixed_sample, u_time.time, params.delay_time * 0.8, params.delay_feedback * 0.5);
-    
-    mixed_sample = mixed_sample * params.volume * 4.0;
-    
-    // Simple limiting
-    let limit = 0.9;
-    if abs(mixed_sample) > limit {
-        mixed_sample = sign(mixed_sample) * limit;
-    }
-    
-    let final_amplitude = abs(mixed_sample);
-    
-    if global_id.x == 0u && global_id.y == 0u {
-        audio_buffer[0] = dominant_freq;
-        audio_buffer[1] = final_amplitude;
-        audio_buffer[2] = f32(params.waveform_type);
-        
-        // Output per-voice frequencies and smooth envelope amplitudes
-        for (var i = 0u; i < 9u; i++) {
-            let vec_idx = i / 4u;
-            let comp_idx = i % 4u;
-            
-            var key_state = 0.0;
-            var key_decay_val = 0.0;
-            
-            if comp_idx == 0u {
-                key_state = params.key_states[vec_idx].x;
-                key_decay_val = params.key_decay[vec_idx].x;
-            } else if comp_idx == 1u {
-                key_state = params.key_states[vec_idx].y;
-                key_decay_val = params.key_decay[vec_idx].y;
-            } else if comp_idx == 2u {
-                key_state = params.key_states[vec_idx].z;
-                key_decay_val = params.key_decay[vec_idx].z;
-            } else {
-                key_state = params.key_states[vec_idx].w;
-                key_decay_val = params.key_decay[vec_idx].w;
-            }
-            
-            let frequency = get_note_frequency(i, params.octave);
-            audio_buffer[3 + i] = frequency;
-            
-            // Calculate and output smooth envelope amplitude for each voice
-            if key_state > 0.5 || key_decay_val > 0.01 {
-                let envelope = piano_envelope(
-                    key_state,
-                    key_decay_val,
-                    params.attack_time, 
-                    params.decay_time, 
-                    params.sustain_level, 
-                    params.release_time
-                );
-                
-                audio_buffer[12 + i] = envelope * params.volume * 0.4;
-            } else {
-                audio_buffer[12 + i] = 0.0;
-            }
-        }
-        
-        audio_buffer[21] = beat_sample;
-        audio_buffer[22] = params.tempo * 2.0;
-        
-        audio_buffer[23] = params.reverb_mix;
-        audio_buffer[24] = params.delay_time;
-        audio_buffer[25] = params.delay_feedback;
-        audio_buffer[26] = params.filter_cutoff;
-        audio_buffer[27] = params.distortion_amount;
-        audio_buffer[28] = params.chorus_rate;
-        audio_buffer[29] = params.chorus_depth;
-    }
-    
+
+    let uv = vec2<f32>(f32(g.x) / f32(dims.x), f32(g.y) / f32(dims.y));
+
     var color = vec3<f32>(0.02, 0.02, 0.1) * (1.0 - uv.y * 0.3);
-    
-    let bar_top = 0.9;
-    let bar_max_height = 0.6;
-    let bar_width = 0.08;
-    let bar_spacing = 0.02;
-    let total_width = 9.0 * bar_width + 8.0 * bar_spacing;
-    let start_x = (1.0 - total_width) * 0.5;
+
+    if (params.beat_enabled > 0u && uv.y > 0.98) {
+        let beat_t = fract(u_time.time / (60.0 / params.tempo));
+        let pulse = exp(-beat_t * 10.0) * 0.8;
+        color = vec3<f32>(pulse, pulse * 0.5, pulse * 0.2);
+    }
+
+    let bar_top: f32 = 0.9;
+    let bar_max_h: f32 = 0.6;
+    let bar_w: f32 = 0.08;
+    let bar_sp: f32 = 0.02;
+    let total_w = 9.0 * bar_w + 8.0 * bar_sp;
+    let start_x = (1.0 - total_w) * 0.5;
+
     for (var i = 0u; i < 9u; i++) {
-        let bar_x_left = start_x + f32(i) * (bar_width + bar_spacing);
-        let bar_x_right = bar_x_left + bar_width;
-        
-        let vec_idx = i / 4u;
-        let comp_idx = i % 4u;
-        
-        var key_state = 0.0;
-        var key_decay_val = 0.0;
-        
-        if comp_idx == 0u {
-            key_state = params.key_states[vec_idx].x;
-            key_decay_val = params.key_decay[vec_idx].x;
-        } else if comp_idx == 1u {
-            key_state = params.key_states[vec_idx].y;
-            key_decay_val = params.key_decay[vec_idx].y;
-        } else if comp_idx == 2u {
-            key_state = params.key_states[vec_idx].z;
-            key_decay_val = params.key_decay[vec_idx].z;
-        } else {
-            key_state = params.key_states[vec_idx].w;
-            key_decay_val = params.key_decay[vec_idx].w;
-        }
-        
-        let key_active = key_state > 0.5;
-        let intensity = max(0.1, key_decay_val);
-        let bar_height = bar_max_height * intensity;
-        let bar_bottom = bar_top - bar_height;
-        if uv.x >= bar_x_left && uv.x <= bar_x_right && uv.y >= bar_bottom && uv.y <= bar_top {
-            if key_active && key_decay_val > 0.1 {
-                let key_hue = f32(i) / 8.0 * 6.28;
-                let rainbow_color = vec3<f32>(
-                    0.5 + 0.5 * sin(key_hue),
-                    0.5 + 0.5 * sin(key_hue + 2.094),
-                    0.5 + 0.5 * sin(key_hue + 4.188)
-                );
-                
-                let height_factor = (bar_top - uv.y) / bar_height;
-                let gradient = 1.0 - height_factor * 0.3;
+        let bx = start_x + f32(i) * (bar_w + bar_sp);
+        let k = get_key(i);
+        let env = adsr_envelope(u_time.time, k.x, k.y);
+        let is_held = k.x > 0.0 && k.y == 0.0;
+        let intensity = max(0.1, env);
+        let bar_h = bar_max_h * intensity;
+        let bar_bot = bar_top - bar_h;
+
+        if (uv.x >= bx && uv.x <= bx + bar_w && uv.y >= bar_bot && uv.y <= bar_top) {
+            let hue = f32(i) / 8.0 * TAU;
+            let rc = vec3<f32>(
+                0.5 + 0.5 * sin(hue),
+                0.5 + 0.5 * sin(hue + 2.094),
+                0.5 + 0.5 * sin(hue + 4.188)
+            );
+            let grad = 1.0 - (bar_top - uv.y) / bar_h * 0.3;
+            if (is_held) {
                 let pulse = sin(u_time.time * 10.0) * 0.1 + 0.9;
-                color = rainbow_color * intensity * gradient * pulse;
+                color = rc * intensity * grad * pulse;
             } else {
-                let key_hue = f32(i) / 8.0;
-                let height_factor = (bar_top - uv.y) / bar_height;
-                let gradient = 1.0 - height_factor * 0.5;
-                color = vec3<f32>(0.1 + key_hue * 0.3, 0.2, 0.4 - key_hue * 0.1) * gradient;
+                color = rc * intensity * grad * 0.5;
             }
         }
-        
-        if uv.x >= bar_x_left && uv.x <= bar_x_right && uv.y >= 0.92 && uv.y <= 0.98 {
+
+        if (uv.x >= bx && uv.x <= bx + bar_w && uv.y >= 0.92 && uv.y <= 0.98) {
             color = vec3<f32>(0.8, 0.8, 0.9);
         }
     }
-    
-    if params.beat_enabled > 0u && uv.y > 0.98 {
-        let beat_intensity = beat_amp * 8.0;
-        color = vec3<f32>(beat_intensity, beat_intensity * 0.5, beat_intensity * 0.2);
-    }
-    
-    
-    if uv.y < 0.05 {
-        var waveform_color = vec3<f32>(0.5, 0.5, 0.5);
+
+    if (uv.y < 0.05) {
+        var wc = vec3<f32>(0.5);
         switch params.waveform_type {
-            case 0u: {
-                waveform_color = vec3<f32>(0.3, 0.8, 0.3);
-            }
-            case 1u: {
-                waveform_color = vec3<f32>(0.8, 0.8, 0.3);
-            }
-            case 2u: {
-                waveform_color = vec3<f32>(0.8, 0.3, 0.3);
-            }
-            case 3u: {
-                waveform_color = vec3<f32>(0.3, 0.3, 0.8);
-            }
-            case 4u: {
-                waveform_color = vec3<f32>(0.8, 0.3, 0.8);
-            }
-            default: {
-                waveform_color = vec3<f32>(0.3, 0.8, 0.3);
-            }
+            case 0u: { wc = vec3<f32>(0.3, 0.8, 0.3); }
+            case 1u: { wc = vec3<f32>(0.8, 0.8, 0.3); }
+            case 2u: { wc = vec3<f32>(0.8, 0.3, 0.3); }
+            case 3u: { wc = vec3<f32>(0.3, 0.3, 0.8); }
+            case 4u: { wc = vec3<f32>(0.8, 0.3, 0.8); }
+            default: {}
         }
-        
-        let effect_intensity = max(params.reverb_mix, max(params.delay_feedback, params.distortion_amount));
-        waveform_color = waveform_color * (1.0 + effect_intensity * 0.5);
-        color = waveform_color;
+        color = wc;
     }
-    
-    if uv.y > 0.05 && uv.y < 0.08 {
-        let filter_viz = params.filter_cutoff;
-        let resonance_viz = params.filter_resonance;
-        let filter_color = vec3<f32>(filter_viz, resonance_viz, 0.5);
-        color = mix(color, filter_color, 0.3);
-    }
-    
-    textureStore(output, global_id.xy, vec4<f32>(color, 1.0));
+
+    textureStore(output, g.xy, vec4<f32>(color, 1.0));
 }
