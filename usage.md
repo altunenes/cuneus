@@ -441,10 +441,13 @@ compute_shader.update_input_texture(&tm.view, &tm.sampler, &core.device);
 ```wgsl
 @group(2) @binding(0) var channel0: texture_2d<f32>;
 @group(2) @binding(1) var channel0_sampler: sampler;
+@group(2) @binding(2) var channel1: texture_2d<f32>;
+@group(2) @binding(3) var channel1_sampler: sampler;
 ```
 
 ```rust
 compute_shader.update_channel_texture(0, &tm.view, &tm.sampler, &core.device, &core.queue);
+compute_shader.update_channel_texture(1, &tm2.view, &tm2.sampler, &core.device, &core.queue);
 ```
 
 *See `kuwahara.wgsl` where `channel0` is sampled from multiple passes via a helper function.*
@@ -455,6 +458,23 @@ compute_shader.update_channel_texture(0, &tm.view, &tm.sampler, &core.device, &c
 |-------------------------|-------------|--------------------------|-------------------------------|
 | `.with_input_texture()` | All passes  | `main_image` only        | All stages                    |
 | `.with_channels()`      | All passes  | All passes               | All stages                    |
+
+### Loading Textures From Code
+
+Textures don't require egui or drag-and-drop. Call `base.load_media(core, path)` in `init()` to embed assets — it auto-detects format (PNG, JPG, HDR, EXR, MP4, etc.). You can still override via drag-and-drop at runtime.
+
+```rust
+// Single embedded texture — works with .with_input_texture() or .with_channels(1)
+let mut base = RenderKit::new(core);
+base.load_media(core, "assets/sky.hdr").ok(); // HDRI, image, or video
+
+// Multiple independent channels — each bound separately
+let mut cs = cuneus::compute_shader!(core, "shaders/my.wgsl", config); // config has .with_channels(2)
+let img = image::open("assets/albedo.png").unwrap().into_rgba8();
+let tex = TextureManager::new(&core.device, &core.queue, &img, &base.texture_bind_group_layout);
+cs.update_channel_texture(0, &tex.view, &tex.sampler, &core.device, &core.queue); // channel0
+// channel1 left empty (1x1 magenta fallback) or loaded the same way
+```
 
 ### Audio Spectrum Analysis (`.with_audio_spectrum()`)
 
