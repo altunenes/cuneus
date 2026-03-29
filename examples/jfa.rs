@@ -33,7 +33,8 @@ cuneus::uniform_params! {
 struct JfaShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: JfaParams}
+    current_params: JfaParams,
+}
 
 impl ShaderManager for JfaShader {
     fn init(core: &Core) -> Self {
@@ -43,14 +44,14 @@ impl ShaderManager for JfaShader {
             c: 0.2,
             d: 0.2,
             scale: 0.3,
-            n: 10.0,
+            n: 0.1,
             gamma: 2.1,
             color_intensity: 1.0,
             color_r: 1.0,
             color_g: 2.0,
             color_b: 3.0,
             color_w: 4.0,
-            accumulation_speed: 0.1,
+            accumulation_speed: 0.01,
             fade_speed: 0.99,
             freeze_accumulation: 0.0,
             pattern_floor_add: 1.0,
@@ -65,11 +66,26 @@ impl ShaderManager for JfaShader {
         };
         let base = RenderKit::new(core);
 
-        // Create multipass system: seed_points -> flood_step -> color_accumulate -> main_image
+        // The fully unrolled JFA Pipeline
         let passes = vec![
-            PassDescription::new("seed_points", &["seed_points"]), // self-feedback
-            PassDescription::new("flood_step", &["seed_points", "flood_step"]), // reads seed_points + self-feedback
-            PassDescription::new("color_accumulate", &["seed_points", "flood_step", "color_accumulate"]), // reads all 3
+            PassDescription::new("seed_points", &["seed_points"]),
+            PassDescription::new("flood_init", &[]),
+            
+            // JFA Unroll: input_texture0 = "seed_points", input_texture1 = previous step
+            PassDescription::new("flood_1024", &["seed_points", "flood_init"]),
+            PassDescription::new("flood_512",  &["seed_points", "flood_1024"]),
+            PassDescription::new("flood_256",  &["seed_points", "flood_512"]),
+            PassDescription::new("flood_128",  &["seed_points", "flood_256"]),
+            PassDescription::new("flood_64",   &["seed_points", "flood_128"]),
+            PassDescription::new("flood_32",   &["seed_points", "flood_64"]),
+            PassDescription::new("flood_16",   &["seed_points", "flood_32"]),
+            PassDescription::new("flood_8",    &["seed_points", "flood_16"]),
+            PassDescription::new("flood_4",    &["seed_points", "flood_8"]),
+            PassDescription::new("flood_2",    &["seed_points", "flood_4"]),
+            PassDescription::new("flood_1",    &["seed_points", "flood_2"]),
+
+            // Reads seed_points, completed JFA (flood_1), and its own feedback
+            PassDescription::new("color_accumulate", &["seed_points", "flood_1", "color_accumulate"]),
             PassDescription::new("main_image", &["color_accumulate"]),
         ];
 
@@ -89,11 +105,11 @@ impl ShaderManager for JfaShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params}
+            current_params: initial_params,
+        }
     }
 
     fn update(&mut self, core: &Core) {
-        // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
 
         let current_time = self.base.controls.get_time(&self.base.start_time);
@@ -109,12 +125,15 @@ impl ShaderManager for JfaShader {
     fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
 
-        // Execute multi-pass compute shader: seed_points -> flood_step -> color_accumulate -> main_image
+        // Executes the entire unrolled JFA per frame automatically
         self.compute_shader.dispatch(&mut frame.encoder, core);
 
-        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
+        self.base.renderer.render_to_view(
+            &mut frame.encoder,
+            &frame.view,
+            &self.compute_shader.get_output_texture().bind_group,
+        );
 
-        // Handle UI and controls
         let mut params = self.current_params;
         let mut changed = false;
         let mut should_start_export = false;
@@ -128,7 +147,7 @@ impl ShaderManager for JfaShader {
             self.base.render_ui(core, |ctx| {
                 RenderKit::apply_default_style(ctx);
 
-                egui::Window::new("JFA - Simplified")
+                egui::Window::new("JFA - Fully Unrolled")
                     .collapsible(true)
                     .resizable(true)
                     .default_width(280.0)
@@ -138,8 +157,8 @@ impl ShaderManager for JfaShader {
                             .show(ui, |ui| {
                                 changed |= ui
                                     .add(
-                                        egui::Slider::new(&mut params.n, 1.0..=50.0)
-                                            .text("N (Frame Cycle)"),
+                                        egui::Slider::new(&mut params.n, 0.01..=1.0)
+                                            .text("Pattern Speed (N)"),
                                     )
                                     .changed();
                                 ui.separator();
@@ -147,7 +166,7 @@ impl ShaderManager for JfaShader {
                                     .add(
                                         egui::Slider::new(
                                             &mut params.accumulation_speed,
-                                            0.0..=3.0,
+                                            0.01..=0.1,
                                         )
                                         .text("Accumulation Speed"),
                                     )
@@ -228,14 +247,13 @@ impl ShaderManager for JfaShader {
 
                         ui.separator();
                         ui.label(format!("Frame: {}", self.compute_shader.current_frame));
-                        ui.label("JFA with Clifford Attractor (Simplified)");
+                        ui.label("15-Pass Realtime Unrolled JFA");
                     });
             })
         } else {
             self.base.render_ui(core, |_ctx| {})
         };
 
-        // Handle control requests
         if controls_request.is_paused != (params.freeze_accumulation > 0.5) {
             params.freeze_accumulation = if controls_request.is_paused { 1.0 } else { 0.0 };
             changed = true;
@@ -243,7 +261,6 @@ impl ShaderManager for JfaShader {
 
         self.base.export_manager.apply_ui_request(export_request);
         if controls_request.should_clear_buffers {
-            // Reset frame count to restart accumulation
             self.compute_shader.current_frame = 0;
         }
         self.base.apply_control_request(controls_request);

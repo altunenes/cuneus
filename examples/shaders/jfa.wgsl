@@ -97,7 +97,7 @@ fn seed_points(@builtin(global_invocation_id) gid: vec3<u32>) {
     
     let U = v2(f32(gid.x), f32(gid.y));
     
-    let frame_cycle = f32(time_data.frame / u32(params.n));
+    let frame_cycle = f32(time_data.frame / max(1u, u32(params.n)));
     
     let h0 = hash(v4(U, frame_cycle, 1.0)) - 1.0;
     var V = v3(h0.xy, h0.z);
@@ -143,46 +143,53 @@ fn seed_points(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(output, gid.xy, Q);
 }
 
-// Flood step - Jump Flooding Algorithm (reads seed_points + self-feedback)
+// JFA Initialization Step
+@compute @workgroup_size(16, 16, 1)
+fn flood_init(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let dims = textureDimensions(output);
+    if (gid.x >= dims.x || gid.y >= dims.y) { return; }
+    let U = v2(f32(gid.x), f32(gid.y));
+    // Every pixel points to itself initially
+    textureStore(output, gid.xy, v4(U, 0.0, 1.0));
+}
+
 fn Y(inout_Q: ptr<function, v4>, U: v2, v: v2) {
-    let x = sample_input1(U + v).xy; // Read from previous flood_step
-    // Compare distance to a point in the seed point cloud
+    let x = sample_input1(U + v).xy; // Read from previous flood step
     if (distance(U, sample_input0(x).xy) < distance(U, sample_input0((*inout_Q).xy).xy)) {
         (*inout_Q).x = x.x;
         (*inout_Q).y = x.y;
     }
 }
 
-@compute @workgroup_size(16, 16, 1)
-fn flood_step(@builtin(global_invocation_id) gid: vec3<u32>) {
+// Core JFA Step Logic
+fn do_flood_step(gid: vec3<u32>, jump_size: f32) {
     let dims = textureDimensions(output);
-    R = v2(dims);
-    
     if (gid.x >= dims.x || gid.y >= dims.y) { return; }
     
     let U = v2(f32(gid.x), f32(gid.y));
-    let N = i32(params.n);
+    var Q = sample_input1(U); // Read previous JFA state
     
-    var Q: v4;
-    
-    if (i32(time_data.frame) % N == 0) {
-        // JFA Reset: Every pixel points to itself.
-        Q = v4(U, 0.0, 1.0);
-    } else {
-        // JFA Propagation Step
-        // Read previous state
-        Q = sample_input1(U);
-        let k = exp2(f32(N - 1 - (i32(time_data.frame) % N)));
-        Y(&Q, U, v2(0.0, k));
-        Y(&Q, U, v2(k, 0.0));
-        Y(&Q, U, v2(0.0, -k));
-        Y(&Q, U, v2(-k, 0.0));
-    }
+    Y(&Q, U, v2(0.0, jump_size));
+    Y(&Q, U, v2(jump_size, 0.0));
+    Y(&Q, U, v2(0.0, -jump_size));
+    Y(&Q, U, v2(-jump_size, 0.0));
     
     textureStore(output, gid.xy, Q);
 }
 
-// Color accumulation based on JFA results (reads seed_points + flood_step + self-feedback)
+@compute @workgroup_size(16, 16, 1) fn flood_1024(@builtin(global_invocation_id) gid: vec3<u32>) { do_flood_step(gid, 1024.0); }
+@compute @workgroup_size(16, 16, 1) fn flood_512(@builtin(global_invocation_id) gid: vec3<u32>) { do_flood_step(gid, 512.0); }
+@compute @workgroup_size(16, 16, 1) fn flood_256(@builtin(global_invocation_id) gid: vec3<u32>) { do_flood_step(gid, 256.0); }
+@compute @workgroup_size(16, 16, 1) fn flood_128(@builtin(global_invocation_id) gid: vec3<u32>) { do_flood_step(gid, 128.0); }
+@compute @workgroup_size(16, 16, 1) fn flood_64(@builtin(global_invocation_id) gid: vec3<u32>) { do_flood_step(gid, 64.0); }
+@compute @workgroup_size(16, 16, 1) fn flood_32(@builtin(global_invocation_id) gid: vec3<u32>) { do_flood_step(gid, 32.0); }
+@compute @workgroup_size(16, 16, 1) fn flood_16(@builtin(global_invocation_id) gid: vec3<u32>) { do_flood_step(gid, 16.0); }
+@compute @workgroup_size(16, 16, 1) fn flood_8(@builtin(global_invocation_id) gid: vec3<u32>) { do_flood_step(gid, 8.0); }
+@compute @workgroup_size(16, 16, 1) fn flood_4(@builtin(global_invocation_id) gid: vec3<u32>) { do_flood_step(gid, 4.0); }
+@compute @workgroup_size(16, 16, 1) fn flood_2(@builtin(global_invocation_id) gid: vec3<u32>) { do_flood_step(gid, 2.0); }
+@compute @workgroup_size(16, 16, 1) fn flood_1(@builtin(global_invocation_id) gid: vec3<u32>) { do_flood_step(gid, 1.0); }
+
+
 @compute @workgroup_size(16, 16, 1)
 fn color_accumulate(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dims = textureDimensions(output);
@@ -191,56 +198,40 @@ fn color_accumulate(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= dims.x || gid.y >= dims.y) { return; }
     
     let U = v2(f32(gid.x), f32(gid.y));
-    let N = i32(params.n);
-    let frame_in_cycle = i32(time_data.frame) % N;
-    
     var Q: v4;
 
-    // Only reset for the first few cycles, then allow accumulation to stabilize
-    let cycle_count = i32(time_data.frame) / N;
-     // Only reset for first 3 cycles
-    let should_reset = (cycle_count < 3) && (frame_in_cycle == 0);
-    
-    if (should_reset) {
+    if (time_data.frame < 10u) {
+        // Clear artifacting for the first few frames
         Q = v4(0.0);
     } else {
         Q = sample_input2(U); // Read old color (self-feedback)
-        // Apply fade to prevent infinite accumulation after stabilization
-        // But only if accumulation is not frozen
-        if (cycle_count >= 3 && params.freeze_accumulation < 0.5) {
+        
+        if (params.freeze_accumulation < 0.5) {
             Q *= params.fade_speed;
+            
+            // sample_input1 is the completed JFA from flood_1
+            // sample_input0 is the raw seed data
+            let a = sample_input0(sample_input1(U).xy);
+            
+            let color_term = max(0.5 + 0.5 * sin(-2.0 + 3.0 * a.z + v4(params.color_r, params.color_g, params.color_b, params.color_w)), v4(0.0));
+            let distance_term = exp(-length(U - a.xy));
+            
+            Q += color_term * distance_term * params.accumulation_speed;
         }
-    }
-
-    // On the *last* frame of the JFA cycle, add the new color information.
-    // But only if accumulation is not frozen
-    if (frame_in_cycle == (N - 1) && params.freeze_accumulation < 0.5) {
-        // sample_input1(U) is the result of the completed JFA from flood_step
-        // sample_input0(...) is looking up that point's data from seed_points
-        let a = sample_input0(sample_input1(U).xy);
-        
-        let color_term = max(0.5 + 0.5 * sin(-2.0 + 3.0 * a.z + v4(params.color_r, params.color_g, params.color_b, params.color_w)), v4(0.0));
-        let distance_term = exp(-length(U - a.xy));
-        
-        Q += color_term * distance_term * params.accumulation_speed;
     }
     
     textureStore(output, gid.xy, Q);
 }
 
-// Main image (reads color_accumulate)
+// Main image
 @compute @workgroup_size(16, 16, 1)
 fn main_image(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dims = textureDimensions(output);
     R = v2(dims);
     
     if (gid.x >= dims.x || gid.y >= dims.y) { return; }
-    
     let U = v2(f32(gid.x), f32(gid.y));
-    
-
     var Q = sample_input2(U);
-    
     Q *= 4.0 * params.color_intensity;
     Q = pow(max(Q, vec4<f32>(0.0)), vec4<f32>(params.gamma));
     
