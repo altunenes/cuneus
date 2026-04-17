@@ -658,6 +658,12 @@ impl RenderKit {
         if self.forward_to_egui(core, event) {
             return true;
         }
+        if let WindowEvent::DroppedFile(path) = event {
+            if let Err(e) = self.load_media(core, path) {
+                error!("Failed to load dropped file {path:?}: {e:?}");
+            }
+            return true;
+        }
         if let WindowEvent::KeyboardInput { event, .. } = event {
             return self.key_handler.handle_keyboard_input(core.window(), event);
         }
