@@ -349,9 +349,6 @@ impl ShaderManager for FFTShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self.base.default_handle_input(core, event) {
-            return true;
-        }
         if let WindowEvent::DroppedFile(path) = event {
             if let Err(e) = self.base.load_media(core, path) {
                 error!("Failed to load dropped file: {e:?}");
@@ -360,7 +357,7 @@ impl ShaderManager for FFTShader {
             }
             return true;
         }
-        false
+        self.base.default_handle_input(core, event)
     }
 }
 
