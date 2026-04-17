@@ -365,9 +365,6 @@ impl ShaderManager for GaussianShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self.base.default_handle_input(core, event) {
-            return true;
-        }
         if let WindowEvent::DroppedFile(path) = event {
             if let Err(e) = self.base.load_media(core, path) {
                 error!("Failed to load dropped file: {e:?}");
@@ -377,7 +374,7 @@ impl ShaderManager for GaussianShader {
             self.compute_shader.set_custom_params(self.current_params, &core.queue);
             return true;
         }
-        false
+        self.base.default_handle_input(core, event)
     }
 }
 

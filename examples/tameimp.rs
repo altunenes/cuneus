@@ -353,10 +353,6 @@ impl ShaderManager for ExperimentShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &cuneus::WindowEvent) -> bool {
-        if self.base.default_handle_input(core, event) {
-            return true;
-        }
-        
         if let cuneus::WindowEvent::DroppedFile(path) = event {
             if let Err(e) = self.base.load_media(core, path) {
                 error!("Failed to load dropped file: {e:?}");
@@ -364,8 +360,7 @@ impl ShaderManager for ExperimentShader {
             self.should_reset_accumulation = true;
             return true;
         }
-        
-        false
+        self.base.default_handle_input(core, event)
     }
 }
 
