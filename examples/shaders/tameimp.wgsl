@@ -20,264 +20,412 @@ struct Params {
     distortion_amt: f32,
     noise_amt: f32,
     stream_width: f32,
-    speed: f32,
     scale: f32,
     angle: f32,
+    
     line_freq: f32,
     cam_height: f32,
     cam_distance: f32,
     cam_fov: f32,
-    rim_intensity: f32,
-    spotlight_intensity: f32,
-    spotlight_height: f32,
+    
+    ball_roughness: f32,
+    ball_metalness: f32,
     gamma: f32,
     saturation: f32,
+    
+    exposure: f32,
     contrast: f32,
-    orbital_enabled: u32,
-    orbital_speed: f32,
-    orbital_radius: f32,
-    _pad: vec2<f32>,
+    max_bounces: u32,
+    samples_per_pixel: u32,
+    
+    accumulate: u32,
+    time_offset: f32,
+    dof_strength: f32,
+    focal_distance: f32,
+    
+    rotation_x: f32,
+    rotation_y: f32,
+    use_hdri: u32,
+    animate_flow: u32,
 };
 
 @group(1) @binding(0) var out: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(1) var<uniform> p: Params;
 
+@group(2) @binding(0) var channel0: texture_2d<f32>;
+@group(2) @binding(1) var channel0_sampler: sampler;
+
+@group(3) @binding(0) var input_texture0: texture_2d<f32>;
+@group(3) @binding(1) var input_sampler0: sampler;
+
 alias v2 = vec2<f32>;
 alias v3 = vec3<f32>;
 alias v4 = vec4<f32>;
-const pi = 3.14159265;
+alias m3 = mat3x3<f32>;
+const pi = 3.14159265359;
+const tau = 6.28318530718;
 
-// hash, hash3, cc: dave hoskins, shadertoy
-fn h(u:v2)->f32{return fract(sin(dot(u,v2(12.9898,78.233)))*43758.5453);}
-fn h3(u:v2)->v3{return v3(h(u),h(u+v2(127.1,311.7)),h(u+v2(269.5,183.3)));}
+var<private> seed: u32;
 
-// noise
-fn nz(u:v2)->f32{
-    let i=floor(u);let f=fract(u);let w=f*f*(3.-2.*f);
-    return mix(mix(h(i+v2(0.,0.)),h(i+v2(1.,0.)),w.x),
-               mix(h(i+v2(0.,1.)),h(i+v2(1.,1.)),w.x),w.y);
+fn hash_u(_a: u32) -> u32 {
+    var a = _a;
+    a ^= a >> 16;
+    a *= 0x7feb352du;
+    a ^= a >> 15;
+    a *= 0x846ca68bu;
+    a ^= a >> 16;
+    return a;
 }
 
-// fbm
-fn f(u:v2)->f32{
-    var v=0.;var a=.5;var q=u;let m=mat2x2<f32>(.8,.6,-.6,.8);
-    for(var i=0;i<4;i++){v+=a*nz(q);q=m*q*2.;a*=.5;}
+fn hash_f() -> f32 {
+    var s = hash_u(seed);
+    seed = s;
+    return (f32(s) / f32(0xffffffffu));
+}
+
+fn hash_v2() -> v2 { return v2(hash_f(), hash_f()); }
+
+fn hash22(p_in: v2) -> v2 {
+    var p_mod = p_in + 1.61803398875;
+    var p3 = fract(v3(p_mod.x, p_mod.y, p_mod.x) * v3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.xx + p3.yz) * p3.zy);
+}
+
+fn random_unit_vector() -> v3 {
+    let a = hash_f() * tau;
+    let z = hash_f() * 2.0 - 1.0;
+    let r = sqrt(1.0 - z*z);
+    return v3(r * cos(a), r * sin(a), z);
+}
+
+fn rnd_unit2(rnd: v2) -> v2 {
+    let h_val = rnd * v2(1.0, tau);
+    let phi = h_val.y;
+    let r = sqrt(h_val.x);
+    return r * v2(sin(phi), cos(phi));
+}
+
+fn rot(v: v2, a: f32) -> v2 {
+    let s = sin(a); let c = cos(a);
+    return v2(v.x * c - v.y * s, v.x * s + v.y * c);
+}
+
+fn pal(t: f32) -> v3 {
+    return v3(0.5) + v3(0.5) * cos(tau * (v3(1.0) * t + v3(0.0, 0.33, 0.67)));
+}
+
+fn h(u: v2) -> f32 { return fract(sin(dot(u, v2(12.9898, 78.233))) * 43758.5453); }
+fn nz(u: v2) -> f32 {
+    let i = floor(u); let f_val = fract(u); let w = f_val * f_val * (3.0 - 2.0 * f_val);
+    return mix(mix(h(i + v2(0., 0.)), h(i + v2(1., 0.)), w.x),
+               mix(h(i + v2(0., 1.)), h(i + v2(1., 1.)), w.x), w.y);
+}
+fn f(u: v2) -> f32 {
+    var v = 0.0; var a = 0.5; var q = u; let m = mat2x2<f32>(0.8, 0.6, -0.6, 0.8);
+    for(var i = 0; i < 4; i++) { v += a * nz(q); q = m * q * 2.0; a *= 0.5; }
     return v;
 }
 
-// rot=rotate2D, rY=rotateY
-fn rot(v:v2,a:f32)->v2{let s=sin(a);let c=cos(a);return v2(v.x*c-v.y*s,v.x*s+v.y*c);}
-fn rY(v:v3,a:f32)->v3{let s=sin(a);let c=cos(a);return v3(v.x*c-v.z*s,v.y,v.x*s+v.z*c);}
-
-// pal=iridescent palette
-fn pal(t:f32)->v3{
-    return v3(.5)+v3(.5)*cos(6.28318*(v3(1.)*t+v3(0.,.33,.67)));
-}
-
-fn getRay(uv:v2,ro:v3,ta:v3,fov:f32)->v3{
-    let f=normalize(ta-ro);let r=normalize(cross(v3(0.,1.,0.),f));let u=cross(f,r);
-    return normalize(f+r*uv.x*tan(fov*.5)+u*uv.y*tan(fov*.5));
-}
-
-// iPln=intersectPlane, iSph=intersectSphere
-fn iPln(ro:v3,rd:v3,y:f32)->v3{
-    if(abs(rd.y)<1e-4){return v3(1e5);}
-    let t=(y-ro.y)/rd.y;
-    return select(v3(1e5),ro+rd*t,t>=0.);
-}
-fn iSph(ro:v3,rd:v3,c:v3,r:f32)->f32{
-    let oc=ro-c;let b=dot(oc,rd);let h=b*b-(dot(oc,oc)-r*r);
-    return select(-b-sqrt(h),-1.,h<0.);
-}
-fn nSph(p:v3,c:v3)->v3{return normalize(p-c);}
-
-// PBR: D=GGX, G=Smith, F=Fresnel
-fn D_ggx(nh:f32,r:f32)->f32{let a=r*r;let a2=a*a;let d=nh*nh*(a2-1.)+1.;return a2/(pi*d*d+1e-4);}
-fn G_sch(nv:f32,r:f32)->f32{let k=((r+1.)*(r+1.))/8.;return nv/(nv*(1.-k)+k+1e-4);}
-fn G_sm(nv:f32,nl:f32,r:f32)->f32{return G_sch(nv,r)*G_sch(nl,r);}
-fn F_sch(ct:f32,f0:v3)->v3{return f0+(1.-f0)*pow(clamp(1.-ct,0.,1.),5.);}
-
-// occ=occlusion, shd=softShadow
-fn occ(p:v3,n:v3,c:v3,r:f32)->f32{
-    let d=c-p;let l=length(d);if(l<1e-3){return 0.;}
-    return clamp(1.-(dot(n,d)*(r*r)/(l*l*l))*1.5,0.,1.);
-}
-fn shd(p:v3,ld:v3,c:v3,r:f32,k:f32)->f32{
-    let oc=p-c;let b=dot(oc,ld);let h=b*b-(dot(oc,oc)-r*r);
-    if(h<0.){return 1.;}
-    let d=sqrt(max(0.,r*r-h))-r;let t=-b-sqrt(max(h,0.));
-    let v=select(.5+.5*clamp(k*d/max(t,1e-3),-1.,1.),1.,b>0.);
-    return v*v*(3.-2.*v);
-}
-
-// lSpot= spot light
-fn lSpot(hp:v3,n:v3,vd:v3,bc:v3,br:f32,ruf:f32,si:f32,sh:f32)->v3{
-    let sp=v3(bc.x,sh,bc.z)+v3(0.,0.,-.3);let tl=sp-hp;let ld=normalize(tl);
-    let att=1./(1.+.3*length(tl)+.1*dot(tl,tl));
-    let sa=dot(-ld,normalize(v3(bc.x,0.,bc.z)-sp));
-    let sf=smoothstep(.7,.85,sa);
-    let nl=max(dot(n,ld),0.);let hv=normalize(ld+vd);
-    let spec=(D_ggx(max(dot(n,hv),0.),ruf)*G_sm(max(dot(n,vd),1e-3),nl,ruf))/(4.*max(dot(n,vd),1e-3)*nl+1e-4);
-    return v3(1.,.95,.85)*si*(nl*.3+spec*nl)*att*sf;
-}
-
-// sFlu=shade fluid
-fn sFlu(col:v3,hp:v3,n:v3,vd:v3,ld:v3,ruf:f32,met:f32,ist:f32,ang:f32,bc:v3,br:f32,si:f32,sh:f32)->v3{
-    let f0=mix(v3(.04),col,met);
-    let nv=max(dot(n,vd),1e-3);let nl=max(dot(n,ld),0.);
-    let hv=normalize(ld+vd);let nh=max(dot(n,hv),0.);let hv_d=max(dot(hv,vd),0.);
-    let spec=(D_ggx(nh,ruf)*G_sm(nv,nl,ruf)*F_sch(hv_d,f0))/(4.*nv*nl+1e-4);
+fn cosineDirection(n: v3) -> v3 {
+    let r = hash_v2();
+    let u = normalize(cross(n, v3(0.0, 1.0, 1.0)));
+    let v_vec = cross(u, n);
     
-    let kd=(v3(1.)-F_sch(hv_d,f0))*(1.-met);
-    var lo=(kd*col/pi+spec)*v3(1.2,1.14,1.08)*nl; // Main light
-
-    // Side light
-    let ls=normalize(rY(v3(.8,.4,-.3),ang));let nls=max(dot(n,ls),0.);
-    let hs=normalize(ls+vd);
-    let sps=(D_ggx(max(dot(n,hs),0.),ruf+.1)*G_sm(nv,nls,ruf+.1)*F_sch(hv_d,f0))/(4.*nv*nls+1e-4);
-    lo+=(kd*col/pi+sps)*v3(.5,.4,.7)*nls*.4;
-    
-    let spot=lSpot(hp,n,vd,bc,br,ruf,si,sh);
-    lo+=spot*(col*.5+.5);
-
-    let sky=mix(v3(.12,.08,.2),v3(.25,.2,.35),reflect(-vd,n).y*.5+.5);
-    var fin=lo+sky*F_sch(nv,f0)*.25+col*v3(.06,.05,.1);
-    
-    return fin+col*ist*.12;
+    let ra = sqrt(r.y);
+    let rx = ra * cos(tau * r.x); 
+    let ry = ra * sin(tau * r.x);
+    let rz = sqrt(1.0 - r.y);
+    return normalize(rx * u + ry * v_vec + rz * n);
 }
 
-// sBal=shadeBall
-fn sBal(n:v3,vd:v3,ld:v3,hp:v3,bc:v3,ri:f32,t:f32,ang:f32)->v3{
-    let ruf=.12;let met=.98;let col=v3(.96,.96,.98);let f0=mix(v3(.04),col,met);
-    let nv=max(dot(n,vd),1e-3);let nl=max(dot(n,ld),1e-3);
-    let hv=normalize(ld+vd);let nh=max(dot(n,hv),0.);
-
-    let rf=reflect(-vd,n);let rref=rY(rf,ang);
-    let sky=mix(mix(mix(v3(.32,.32,.35),v3(.42,.3,.38),smoothstep(0.,-1.,rf.y)),v3(.58,.35,.32),smoothstep(-.35,-.95,rf.y)),
-               mix(v3(.58,.6,.68),v3(.92,.94,1.),smoothstep(.35,.95,rf.y)),smoothstep(0.,1.,rf.y));
-    let env=mix(sky,mix(sky,v3(.92,.94,1.),smoothstep(.35,.95,rf.y)),smoothstep(-.1,.1,rf.y))*(.92+.08*sin(atan2(rref.z,rref.x)*2.));
-    
-    let spec=(D_ggx(nh,ruf)*G_sm(nv,nl,ruf)*F_sch(max(dot(hv,vd),0.),f0))/(4.*nv*nl+1e-4);
-    let lo=((v3(1.)-F_sch(max(dot(hv,vd),0.),f0))*(1.-met)*col/pi+spec)*v3(2.8,2.74,2.66)*nl;
-    
-    // Fill/Side lights
-    let lb=normalize(rY(v3(.1,-.8,.2),ang));
-    let fill=v3(.58,.35,.32)*D_ggx(max(dot(n,normalize(lb+vd)),0.),ruf+.15)*max(dot(n,lb),0.)*.7;
-    let ls=normalize(rY(v3(-.6,.3,.5),ang));
-    let side=v3(.4,.45,.55)*D_ggx(max(dot(n,normalize(ls+vd)),0.),ruf+.1)*max(dot(n,ls),0.)*.4;
-
-    var fin=lo+env*F_sch(nv,f0)*.75+fill+side+v3(1.,.99,.97)*pow(nh,600.)*5.;
-    let rim=mix(v3(.42,.3,.38),v3(.6,.62,.68),smoothstep(-.3,.5,n.y))*pow(1.-nv,5.)*ri*.12;
-    return fin+rim+(h(hp.xz*900.+hp.y*350.+t*.02)-.5)*.01;
+fn sample_background(dir: v3) -> v3 {
+    let phi = atan2(dir.z, dir.x);
+    let theta = asin(clamp(dir.y, -1.0, 1.0));
+    let u = (phi + pi) / tau;
+    let v = 1.0 - (theta + pi / 2.0) / pi; 
+    return textureSampleLevel(channel0, channel0_sampler, v2(u, v), 0.0).rgb;
 }
 
-// op=oscillationPattern
-fn op(mn:f32,mx:f32,int:f32,pd:f32,ct:f32)->f32{
-    let c=2.*int+pd;let t=ct%c;
-    if(t<int){return mix(mx,mn,.5-.5*cos(pi*(t/int)));}
-    if(t<int+pd){return mn;}
-    return mix(mn,mx,.5-.5*cos(pi*((t-int-pd)/int)));
+struct Hit {
+    dist: f32,
+    geom_normal: v3,
+    id: i32, 
+    pos: v3,
 }
 
-@compute @workgroup_size(16,16,1)
-fn main(@builtin(global_invocation_id) gid:vec3<u32>){
-    let dim=textureDimensions(out);
-    if(gid.x>=dim.x||gid.y>=dim.y){return;}
-    let res=v2(f32(dim.x),f32(dim.y));
-    var uv=(v2(f32(gid.x),f32(gid.y))/res-.5)*v2(res.x/res.y,-1.);
-    
-    // Params extraction
-    let T=u_t.time*p.speed;let S=p.scale;let A=p.angle;
-    
-    // cam
-    var ro=v3(0.,p.cam_height,-2.);var ta=v3(.3,0.,.5);
-    let bc_orb=v3(.3+p.ball_offset_x*.5,0.,.5+p.ball_offset_y*.5);
-    
-    if(p.orbital_enabled==1u){
-        let oa=u_t.time*p.orbital_speed;
-        ro=v3(bc_orb.x+sin(oa)*p.orbital_radius,p.cam_height+sin(u_t.time)*.5,bc_orb.z+cos(oa)*p.orbital_radius);
-        ta=bc_orb;
+fn iPln(ro: v3, rd: v3, y: f32) -> f32 {
+    if (abs(rd.y) < 1e-4) { return 1e5; }
+    let t = (y - ro.y) / rd.y;
+    return select(1e5, t, t >= 0.0);
+}
+
+fn iSph(ro: v3, rd: v3, c: v3, r: f32) -> f32 {
+    let oc = ro - c;
+    let b = dot(oc, rd);
+    let h_val = b * b - (dot(oc, oc) - r * r);
+    if (h_val < 0.0) { return 1e5; }
+    let t = -b - sqrt(h_val);
+    return select(1e5, t, t > 1e-4);
+}
+
+fn map_scene(ro: v3, rd: v3) -> Hit {
+    var hit = Hit(1e5, v3(0.0), 0, v3(0.0));
+
+    let t_pln = iPln(ro, rd, 0.0);
+    if (t_pln < hit.dist) {
+        hit.dist = t_pln;
+        hit.id = 1;
+        hit.pos = ro + rd * t_pln;
+        hit.geom_normal = v3(0.0, 1.0, 0.0); 
     }
-    let rd=getRay(uv,ro,ta,p.cam_fov);let vd=-rd;
 
-    // Ball Logic
-    let br=.25*S;
-    var bc=v3(.3+p.ball_offset_x*.5,0.,.5+p.ball_offset_y*.5);
-    let sink=sin(u_t.time*3.2)*.5+.5;
-    bc.y=br*mix(.2,.6,sink)*p.ball_sink+sin(T*.8)*.01;
+    let br = 0.25 * p.scale;
+    let sink = sin(p.time_offset * 3.2) * 0.1 + 0.1;
+    let bc = v3(0.3 + p.ball_offset_x * 0.5, br * mix(0.2, 0.6, sink) * p.ball_sink, 0.5 + p.ball_offset_y * 0.5);
+    
+    let t_sph = iSph(ro, rd, bc, br);
+    if (t_sph < hit.dist) {
+        hit.dist = t_sph;
+        hit.id = 2;
+        hit.pos = ro + rd * t_sph;
+        hit.geom_normal = normalize(hit.pos - bc);
+    }
 
-    // Plane Intersection
-    let ph=iPln(ro,rd,0.);
-    var col=v3(.02,.01,.05);
-    let b2=v2(bc.x,bc.z);let wl_r=sqrt(max(0.,br*br-bc.y*bc.y));
-    let ld=normalize(rY(v3(-.4,.8,-.4),A));
+    return hit;
+}
 
-    if(ph.x<1e4){
-        // Domain warp
-        var puv=rot(v2(ph.x,ph.z),A);let bp=rot(b2,A);
-        let dst=puv-bp;let r2=dot(dst,dst);let r=sqrt(r2);
-        let pr=wl_r;
-        let dfo=smoothstep(pr*8.,pr*1.5,r);
-        let disp=dst*((pr*pr)/max(r2,1e-3)*dfo);
-        var fuv=puv-disp;
+struct Material {
+    albedo: v3,
+    roughness: f32,
+    reflectance: f32, 
+    mat_normal: v3, 
+    emission: v3,
+}
 
-        // Turbulence
-        let iw=smoothstep(pr*1.2,pr*5.,dst.x)*smoothstep(pr*12.,pr*5.,dst.x);
-        let wm=iw*smoothstep(pr*7.,0.,abs(dst.y));
-        let ed=smoothstep(0.,1.,1.-abs(fuv.y)*.3);
-        let nuv=fuv*4.5-v2(T*4.,0.);
-        let n1=f(nuv);let n2=f(nuv+v2(5.2,1.3));
-        let ts=p.distortion_amt*.02*wm*ed;
-        fuv+=v2((n2-.5)*.5,n1-.5)*ts;
+fn get_plane_material(hit_pos: v3) -> Material {
+    var mat = Material(v3(0.0), 0.1, 0.0, v3(0.0, 1.0, 0.0), v3(0.0));
+    
+    let S = p.scale;
+    let A = p.angle;
+    let T = p.time_offset;
+    
+    let br = 0.25 * S;
+    let sink = sin(T * 3.2) * 0.1 + 0.1;
+    let ball_y = br * mix(0.2, 0.6, sink) * p.ball_sink;
+    let bc = v3(0.3 + p.ball_offset_x * 0.5, ball_y, 0.5 + p.ball_offset_y * 0.5);
+    let b2 = v2(bc.x, bc.z);
+    
+    var puv = rot(v2(hit_pos.x, hit_pos.z), A);
+    let bp = rot(b2, A);
+    let dst = puv - bp;
+    let r2 = dot(dst, dst);
+    let r = sqrt(r2);
+    
+    let wl_r = sqrt(max(0.0, br * br - bc.y * bc.y));
+    let pr = wl_r;
+    let dfo = smoothstep(pr * 8.0, pr * 1.5, r);
+    let disp = dst * ((pr * pr) / max(r2, 1e-3) * dfo);
+    var fuv = puv - disp;
 
-        // Normals & Colors
-        let fr=p.line_freq/S;let sw=sin(fuv.y*fr);
-        
-        let pt=rot(v2((n1-.5)*10.12*wm,cos(fuv.y*fr)*.5+(n2-.5)*10.12*wm),-A);
-        let sn=normalize(v3(pt.x,1.,pt.y));
-         // sharp line
-        let sl=pow(.5+.5*sw,8.);
+    let iw = smoothstep(pr * 1.2, pr * 5.0, dst.x) * smoothstep(pr * 12.0, pr * 5.0, dst.x);
+    let wm = iw * smoothstep(pr * 7.0, 0.0, abs(dst.y));
+    let ed = smoothstep(0.0, 1.0, 1.0 - abs(fuv.y) * 0.3);
+    
+    var flow_time = T;
+    if (p.animate_flow == 1u) {
+        flow_time += f32(u_t.frame) * 0.033;
+    }
+    
+    let nuv = fuv * 4.5 - v2(flow_time * 4.0, 0.0);
+    let n1 = f(nuv);
+    let n2 = f(nuv + v2(5.2, 1.3) + v2(flow_time * 0.3, flow_time * 0.1)); 
 
-        let cBg=p.col_bg.rgb;let cLn=p.col_line.rgb;
-        let cCo=p.col_core.rgb;let cAm=p.col_amber.rgb;
-        
-        let oil=smoothstep(.2,.8,abs(n1-.5)*2.*wm);
-        var bCol=mix(cBg,mix(cLn,pal(n1+T*.1),oil*.6),sl);
+    let ts = p.distortion_amt * 0.02 * wm * ed;
+    fuv += v2((n2 - 0.5) * 0.5, n1 - 0.5) * ts;
 
-        // Stream
-        let swd=p.stream_width;let swW=swd+swd*.4*smoothstep(0.,2.,dst.x);
-        let isT=1.-smoothstep(swW*.8,swW,abs(fuv.y-bp.y));
-        if(isT>.01){
-            let sc=mix(cCo,cAm,smoothstep(0.,3.,dst.x));
-            bCol=mix(bCol,mix(sc*.1,sc*1.5,sl),isT);
+    let fr = p.line_freq / S;
+    let line_val = sin(fuv.y * fr);
+    let sl = smoothstep(-0.5, 0.8, line_val); 
+    
+    let oil = smoothstep(0.2, 0.8, abs(n1 - 0.5) * 2.0 * wm);
+    var bCol = mix(p.col_bg.rgb, mix(p.col_line.rgb, pal(n1 + T * 0.1), oil * 0.6), sl);
+
+    let swd = p.stream_width;
+    let swW = swd + swd * 0.4 * smoothstep(0.0, 2.0, dst.x);
+    let isT = 1.0 - smoothstep(swW * 0.8, swW, abs(fuv.y - bp.y));
+    var em_str = 0.5;
+    
+    if (isT > 0.01) {
+        let sc = mix(p.col_core.rgb, p.col_amber.rgb, smoothstep(0.0, 3.0, dst.x));
+        bCol = mix(bCol, mix(sc * 0.2, sc * 1.2, sl), isT);
+        em_str = 1.5;
+    }
+
+    let pt = rot(v2((n1 - 0.5) * 10.12 * wm, cos(fuv.y * fr) * 0.5 + (n2 - 0.5) * 10.12 * wm), -A);
+    mat.mat_normal = normalize(v3(pt.x * 0.05, 1.0, pt.y * 0.05));
+
+    mat.albedo = bCol;
+    mat.roughness = mix(0.8, 0.2, sl); 
+    mat.reflectance = 0.04; 
+    mat.emission = bCol * sl * em_str;
+    
+    return mat;
+}
+
+fn env(dir: v3) -> v3 {
+    if (p.use_hdri == 1u) {
+        return sample_background(dir) * 1.5; 
+    } else {
+        let top_light = smoothstep(0.8, 0.99, dir.y) * 4.0 * v3(1.0, 0.95, 0.9);
+        let rim_light = smoothstep(0.8, 0.99, -dir.z) * 1.5 * v3(0.5, 0.6, 1.0);
+        let ambient = p.col_bg.rgb * mix(0.1, 0.4, dir.y * 0.5 + 0.5);
+        return top_light + rim_light + ambient;
+    }
+}
+
+fn draw(frag_coord: v2, frame_idx: u32, R: v2) -> v3 {
+    seed = u32(frag_coord.x) + u32(frag_coord.y) * u32(R.x) + frame_idx * 719393u;
+    let initial_seed = hash22(frag_coord + f32(frame_idx) * 1.732);
+
+    let jitter = 2.0 * (initial_seed - 0.5) / R;
+    let uv = v2(2.0 * frag_coord.x - R.x, R.y - 2.0 * frag_coord.y) / R.y + jitter;
+
+    let cam_pos = v3(0.0, p.cam_height, -p.cam_distance * 0.5);
+    let cam_tar = v3(0.3 + p.ball_offset_x * 0.5, 0.0, 0.5 + p.ball_offset_y * 0.5);
+
+    let cx = cos(p.rotation_x); let sx = sin(p.rotation_x);
+    let cy = cos(p.rotation_y); let sy = sin(p.rotation_y);
+    let rotY = m3(cy, 0.0, sy, 0.0, 1.0, 0.0, -sy, 0.0, cy);
+    let rotX = m3(1.0, 0.0, 0.0, 0.0, cx, -sx, 0.0, sx, cx);
+    
+    let ro = rotY * rotX * cam_pos;
+    
+    let ww = normalize(cam_tar - ro);
+    let uu = normalize(cross(v3(0.0, 1.0, 0.0), ww));
+    let vv = normalize(cross(ww, uu));
+    let cam_mat = m3(uu, vv, ww);
+
+    var rd = normalize(cam_mat * v3(uv, p.cam_fov));
+    var origin = ro;
+
+    if (p.dof_strength > 0.0) {
+        let focal_point = origin + rd * p.focal_distance;
+        origin += cam_mat * v3(rnd_unit2(initial_seed), 0.0) * p.dof_strength;
+        rd = normalize(focal_point - origin);
+    }
+
+    var col = v3(0.0);
+    var throughput = v3(1.0);
+
+    for (var bounce = 0u; bounce < p.max_bounces; bounce++) {
+        let hit = map_scene(origin, rd);
+
+        if (hit.id == 0) { 
+            col += throughput * env(rd);
+            break;
         }
 
-        col=sFlu(bCol,ph,sn,vd,ld,mix(.4,.25,sl),0.,isT,A,bc,br,p.spotlight_intensity,p.spotlight_height);
+        var mat: Material;
+        if (hit.id == 1) { 
+            mat = get_plane_material(hit.pos);
+        } else if (hit.id == 2) { 
+            mat = Material(v3(0.9), p.ball_roughness, p.ball_metalness, hit.geom_normal, v3(0.0));
+        }
 
-        // Meniscus/Shadows
-        let ovr=smoothstep(wl_r*.95,wl_r,r)*smoothstep(wl_r*1.15,wl_r*1.02,r);
-        col+=v3(.9,.5,.7)*ovr*.5*(.7+.3*sin(atan2(dst.y,dst.x)*2.+1.));
-        col*=1.-(smoothstep(wl_r*1.3,wl_r*1.05,r)*smoothstep(wl_r*.8,wl_r,r))*.25; // inner shadow
+        col += throughput * mat.emission;
 
-        let ao=occ(ph,sn,bc,br);let sh=shd(ph,ld,bc,br,10.);
-        col*=(op(.4,1.4,5.,1.,u_t.time)+.6*ao)*(.55+.45*sh);
-        col=mix(col,v3(.02,.01,.05),smoothstep(3.,p.cam_distance,length(ph-ro)));
+        let fre = dot(rd, mat.mat_normal); 
+        let rd0 = reflect(rd, mat.mat_normal);
+        let rd1 = cosineDirection(mat.mat_normal);
+        
+        let refProb = mat.reflectance + (1.0 - mat.reflectance) * pow(clamp(1.0 + fre, 0.0, 1.0), 5.0);
+        
+        var scatter_dir: v3;
+        
+        if (hash_f() < refProb) {
+            scatter_dir = normalize(rd0 + mat.roughness * random_unit_vector());
+            let spec_color = mix(v3(1.0), mat.albedo, mat.reflectance);
+            throughput *= spec_color; 
+        } else {
+            scatter_dir = rd1;
+            let diffuse_color = mat.albedo * (1.0 - mat.reflectance);
+            throughput *= diffuse_color;
+        }
+
+        if (dot(scatter_dir, hit.geom_normal) < 0.0) {
+            scatter_dir = reflect(scatter_dir, hit.geom_normal);
+        }
+
+        origin = hit.pos + hit.geom_normal * 0.001;
+        rd = scatter_dir;
+        
+        if (bounce > 2u) {
+            let prob = max(throughput.x, max(throughput.y, throughput.z));
+            if (hash_f() > prob) { break; }
+            throughput /= prob;
+        }
     }
 
-    // Sphere 
-    let st=iSph(ro,rd,bc,br);
-    if(st>0.){
-        let hp=ro+rd*st;
-        if(hp.y>=0.){col=sBal(nSph(hp,bc),vd,ld,hp,bc,p.rim_intensity,T,A);}
+    return col;
+}
+
+@compute @workgroup_size(16, 16, 1)
+fn accumulate(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let dim = textureDimensions(out);
+    let R = v2(f32(dim.x), f32(dim.y));
+
+    if (global_id.x >= dim.x || global_id.y >= dim.y) { return; }
+    let frag_coord = v2(f32(global_id.x), f32(global_id.y)) + 0.5;
+
+    var pixel_color = v3(0.0);
+
+    for (var s = 0u; s < p.samples_per_pixel; s++) {
+        pixel_color += draw(frag_coord, u_t.frame * p.samples_per_pixel + s, R);
+    }
+    pixel_color /= f32(p.samples_per_pixel);
+
+    var final_color = v4(pixel_color, 1.0);
+
+    if (p.accumulate > 0u && u_t.frame > 0u) {
+        let last_col = textureLoad(input_texture0, vec2<i32>(global_id.xy), 0);
+        
+        var blend_factor: f32;
+        if (p.animate_flow == 1u) {
+            blend_factor = 0.15; 
+        } else {
+            blend_factor = 1.0 / f32(u_t.frame + 1u); 
+        }
+        
+        final_color = v4(mix(last_col.rgb, pixel_color, blend_factor), 1.0);
     }
 
-    // Post
-    col*=(1.-length(uv)*.35);
-    col+=(h(uv+T)-.5)*.012;
-    let lum=dot(col,v3(.299,.587,.114));
-    col=mix(v3(lum),col,p.saturation);
-    col=(col-.5)*p.contrast+.5;
-    col=pow(max(col+0.012*(1.-max(col,v3(0.))),v3(0.)),v3(1./p.gamma));
+    textureStore(out, vec2<i32>(global_id.xy), final_color);
+}
 
-    textureStore(out,gid.xy,v4(col,1.));
+fn aces_tonemap(x: v3) -> v3 {
+    let a = 2.51; let b = 0.03; let c = 2.43; let d = 0.59; let e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), v3(0.0), v3(1.0));
+}
+
+@compute @workgroup_size(16, 16, 1)
+fn main_image(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let dim = textureDimensions(out);
+    if (global_id.x >= dim.x || global_id.y >= dim.y) { return; }
+
+    let tex = textureLoad(input_texture0, vec2<i32>(global_id.xy), 0);
+    var col = tex.rgb / max(tex.a, 1.0);
+
+    col *= p.exposure;
+    col = aces_tonemap(col);
+    
+    let lum = dot(col, v3(0.299, 0.587, 0.114));
+    col = mix(v3(lum), col, p.saturation);
+    
+    col = (col - 0.5) * p.contrast + 0.5;
+    col = max(col, v3(0.0));
+
+    col = pow(col, v3(1.0 / p.gamma));
+
+    textureStore(out, vec2<i32>(global_id.xy), v4(col, 1.0));
 }

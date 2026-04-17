@@ -24,7 +24,7 @@ jobs:
           - group: "no-media" 
             features: "--no-default-features"
             gstreamer_required: false
-            shaders: "buddhabrot,lich,mandelbulb,sdvert,sinh,orbits,nebula,rorschach,tree,2dneuron,spiralchaos,cliffordcompute,volumepassage,currents,jfa,system,tameimp,gaussian3d,fluidsim"
+            shaders: "buddhabrot,lich,mandelbulb,sdvert,sinh,orbits,nebula,rorschach,tree,2dneuron,spiralchaos,cliffordcompute,volumepassage,jfa,system,tameimp,gaussian3d,physarum"
         
         include:
           - os: ubuntu-latest
