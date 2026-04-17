@@ -655,13 +655,43 @@ impl RenderKit {
         (capture_texture, output_buffer)
     }
     pub fn default_handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self.egui_state.on_window_event(core.window(), event).consumed {
+        if self.forward_to_egui(core, event) {
             return true;
         }
         if let WindowEvent::KeyboardInput { event, .. } = event {
             return self.key_handler.handle_keyboard_input(core.window(), event);
         }
         false
+    }
+
+    /// Forwards `event` to egui and returns `true` if egui actually owns it.
+    ///
+    /// For pointer events, ignores egui's `consumed` when the cursor is over
+    /// the implicit background layer that `Context::run_ui` allocates in
+    /// egui 0.34 — otherwise every click on empty space would be swallowed.
+    pub fn forward_to_egui(&mut self, core: &Core, event: &WindowEvent) -> bool {
+        let response = self.egui_state.on_window_event(core.window(), event);
+        if !response.consumed {
+            return false;
+        }
+        match event {
+            WindowEvent::MouseInput { .. }
+            | WindowEvent::MouseWheel { .. }
+            | WindowEvent::CursorMoved { .. } => self.pointer_over_egui(),
+            _ => true,
+        }
+    }
+
+    /// True when the cursor is over a foreground egui layer (Window, Panel,
+    /// menu, tooltip), not the background layer that `run_ui` allocates.
+    pub fn pointer_over_egui(&self) -> bool {
+        let Some(pos) = self.context.input(|i| i.pointer.interact_pos()) else {
+            return false;
+        };
+        match self.context.layer_id_at(pos) {
+            Some(layer) => layer.order != egui::Order::Background,
+            None => false,
+        }
     }
 
     pub fn default_resize(&mut self, core: &Core, compute_shader: &mut ComputeShader) {

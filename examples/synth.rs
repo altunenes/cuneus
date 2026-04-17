@@ -300,12 +300,7 @@ impl ShaderManager for SynthManager {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        if self
-            .base
-            .egui_state
-            .on_window_event(core.window(), event)
-            .consumed
-        {
+        if self.base.forward_to_egui(core, event) {
             return true;
         }
 
