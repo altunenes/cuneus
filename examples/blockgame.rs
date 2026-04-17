@@ -206,11 +206,7 @@ impl ShaderManager for BlockTowerGame {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        let ui_handled = self
-            .base
-            .egui_state
-            .on_window_event(core.window(), event)
-            .consumed;
+        let ui_handled = self.base.forward_to_egui(core, event);
 
         if self.base.handle_mouse_input(core, event, ui_handled) {
             return true;
