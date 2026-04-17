@@ -6,7 +6,6 @@
 //  SPIR-V-based Stockham + mixed-radix kernels   https://github.com/DTolm/VkFFT
 //  Moreland, K., & Angel, E. (2003). The FFT on a GPU. SIGGRAPH/EUROGRAPHICS Conference On Graphics Hardware.
 
-
 const RADIX = 4;
 
 struct TimeUniform {
@@ -533,10 +532,10 @@ fn main_image(@builtin(global_invocation_id) id: vec3u) {
     let N = params.resolution;
     
     // Calculate position in FFT image (centered)
-    var p = vec2i(id.xy) - vec2i(dimensions) / 2 + vec2i(N / 2u);
+    var p = vec2i(id.xy) - vec2i(dimensions) / 2 + vec2i(i32(N / 2u));
     
     // Check if position is within the FFT image bounds
-    if (any((p < vec2i(0)) | (p >= vec2i(N)))) {
+    if (any((p < vec2i(0)) | (p >= vec2i(i32(N))))) {
         textureStore(output, id.xy, vec4(0.0, 0.0, 0.0, 1.0));
         return;
     }
