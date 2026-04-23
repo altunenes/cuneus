@@ -1,7 +1,9 @@
 use crate::compute::ComputeShader;
 use crate::radix_sort::RadixSorter;
-use crate::{Core, ExportSettings};
-use log::error;
+use crate::{Core, ExportSettings, ShaderHotReload};
+use log::{error, info};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// GPU Sorter for Gaussian depth ordering
 pub struct GaussianSorter {
@@ -108,7 +110,10 @@ impl GaussianSorter {
 
 pub struct GaussianRenderer {
     pipeline: wgpu::RenderPipeline,
+    pipeline_layout: wgpu::PipelineLayout,
     bind_group_layout: wgpu::BindGroupLayout,
+    texture_format: wgpu::TextureFormat,
+    hot_reload: Option<ShaderHotReload>,
 }
 
 impl GaussianRenderer {
@@ -116,11 +121,6 @@ impl GaussianRenderer {
     ///
     /// The shader_source should contain `vs_main` and `fs_main` entry points.
     pub fn new(device: &wgpu::Device, texture_format: wgpu::TextureFormat, shader_source: &str) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Gaussian Render Shader"),
-            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
-        });
-
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Gaussian Render Bind Group Layout"),
             entries: &[
@@ -177,17 +177,47 @@ impl GaussianRenderer {
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline = Self::build_pipeline(device, &pipeline_layout, texture_format, shader_source);
+
+        Self {
+            pipeline,
+            pipeline_layout,
+            bind_group_layout,
+            texture_format,
+            hot_reload: None,
+        }
+    }
+
+    fn build_pipeline(
+        device: &wgpu::Device,
+        pipeline_layout: &wgpu::PipelineLayout,
+        texture_format: wgpu::TextureFormat,
+        shader_source: &str,
+    ) -> wgpu::RenderPipeline {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Gaussian Render Shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
+        Self::build_pipeline_from_module(device, pipeline_layout, texture_format, &shader)
+    }
+
+    fn build_pipeline_from_module(
+        device: &wgpu::Device,
+        pipeline_layout: &wgpu::PipelineLayout,
+        texture_format: wgpu::TextureFormat,
+        shader: &wgpu::ShaderModule,
+    ) -> wgpu::RenderPipeline {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Gaussian Render Pipeline"),
-            layout: Some(&pipeline_layout),
+            layout: Some(pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: shader,
                 entry_point: Some("vs_main"),
                 buffers: &[],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: texture_format,
@@ -215,12 +245,45 @@ impl GaussianRenderer {
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
-        });
+        })
+    }
 
-        Self {
-            pipeline,
-            bind_group_layout,
-        }
+    /// Watch `path` and recompile `vs_main`/`fs_main` on change. Call
+    /// `check_hot_reload` each frame to pick up edits.
+    pub fn enable_hot_reload(
+        &mut self,
+        device: Arc<wgpu::Device>,
+        path: PathBuf,
+    ) -> Result<(), notify::Error> {
+        let dummy = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Gaussian Render Hot Reload Placeholder"),
+            source: wgpu::ShaderSource::Wgsl("".into()),
+        });
+        self.hot_reload = Some(ShaderHotReload::new_compute(
+            device,
+            path,
+            dummy,
+            "vs_main",
+        )?);
+        Ok(())
+    }
+
+
+    pub fn check_hot_reload(&mut self, device: &wgpu::Device) -> bool {
+        let Some(hot_reload) = &mut self.hot_reload else {
+            return false;
+        };
+        let Some(new_module) = hot_reload.reload_compute_shader() else {
+            return false;
+        };
+        self.pipeline = Self::build_pipeline_from_module(
+            device,
+            &self.pipeline_layout,
+            self.texture_format,
+            new_module,
+        );
+        info!("Gaussian render shader hot reloaded");
+        true
     }
 
     /// for rendering
