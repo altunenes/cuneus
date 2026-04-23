@@ -221,11 +221,17 @@ impl ShaderManager for Gaussian3DShader {
             mapped_at_creation: false});
 
         let sorter = GaussianSorter::new_16bit(&core.device);
-        let renderer = GaussianRenderer::new(
+        let mut renderer = GaussianRenderer::new(
             &core.device,
             core.config.format,
             include_str!("shaders/gaussian3d.wgsl"),
         );
+        if let Err(e) = renderer.enable_hot_reload(
+            core.device.clone(),
+            std::path::PathBuf::from("examples/shaders/gaussian3d.wgsl"),
+        ) {
+            log::warn!("Failed to enable gaussian render hot reload: {e}");
+        }
 
         Self {
             base,
@@ -242,6 +248,7 @@ impl ShaderManager for Gaussian3DShader {
 
     fn update(&mut self, core: &Core) {
         self.preprocess.check_hot_reload(&core.device);
+        self.renderer.check_hot_reload(&core.device);
 
         if let Some((frame, time)) = self.base.export_manager.try_get_next_frame() {
             self.export_frame(core, frame, time);
