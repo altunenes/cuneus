@@ -24,11 +24,14 @@ cuneus::uniform_params! {
     tint_y: f32,
 
     tint_z: f32,
-    _pad_final1: f32,
-    _pad_final2: f32,
-    _pad_final3: f32}
+    animate: f32,
+    turbulence: f32,
+    evaporation: f32,
+    light_intensity: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32}
 }
-
 struct RorschachShader {
     base: RenderKit,
     compute_shader: ComputeShader,
@@ -36,7 +39,7 @@ struct RorschachShader {
 
 impl ShaderManager for RorschachShader {
     fn init(core: &Core) -> Self {
-        let initial_params = RorschachParams {
+    let initial_params = RorschachParams {
             seed: 87.0,
             zoom: 5.2,
             threshold: 0.383,
@@ -48,7 +51,7 @@ impl ShaderManager for RorschachShader {
             color_r: 0.58,
             color_g: 0.12,
             color_b: 0.12,
-            gamma: 0.2,
+            gamma: 0.4,
             style: 1.0, 
             
             fbm_octaves: 5.0,
@@ -56,9 +59,14 @@ impl ShaderManager for RorschachShader {
             tint_y: 0.04,
             tint_z: 0.28,
 
-            _pad_final1: 0.0,
-            _pad_final2: 0.0,
-            _pad_final3: 0.0};
+            animate: 0.0,
+            turbulence: 1.2,
+            evaporation: 1.0,
+            
+            light_intensity: 1.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+            _pad3: 0.0};
         let base = RenderKit::new(core);
 
         let passes = vec![
@@ -122,6 +130,17 @@ impl ShaderManager for RorschachShader {
                     .resizable(true)
                     .default_width(280.0)
                     .show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            let mut is_anim = params.animate > 0.5;
+                            if ui.checkbox(&mut is_anim, "dynamic").changed() {
+                                params.animate = if is_anim { 1.0 } else { 0.0 };
+                                params.evaporation = if is_anim { 0.992 } else { 1.0 };
+                                changed = true;
+                                should_reset = true;
+                            }
+                        });
+                        ui.separator();
+
                         egui::CollapsingHeader::new("Shape")
                             .default_open(true)
                             .show(ui, |ui| {
@@ -139,9 +158,14 @@ impl ShaderManager for RorschachShader {
                         egui::CollapsingHeader::new("Particle Tracer")
                             .default_open(false)
                             .show(ui, |ui| {
-                                changed |= ui.add(egui::Slider::new(&mut params.particle_speed, 0.0..=5.0).text("brush")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.trace_steps, 1.0..=100.0).text("Density")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.particle_speed, 0.0..=5.0).text("Brush Speed")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.trace_steps, 1.0..=100.0).text("Density/Steps")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.particle_life, 0.8..=0.999).text("Trail Life")).changed();
+                                
+                                if params.animate > 0.5 {
+                                    changed |= ui.add(egui::Slider::new(&mut params.evaporation, 0.9..=1.0).text("Evaporation")).changed();
+                                    changed |= ui.add(egui::Slider::new(&mut params.turbulence, 0.0..=3.0).text("Turbulence")).changed();
+                                }
                             });
 
                         egui::CollapsingHeader::new("Visual Settings")
@@ -158,6 +182,7 @@ impl ShaderManager for RorschachShader {
                                 changed |= ui.add(egui::Slider::new(&mut params.contrast, 0.5..=6.0).text("Contrast")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.gamma, 0.1..=2.0).text("Gamma")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.style, 0.0..=1.0).text("Blend")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.light_intensity, 0.1..=3.0).text("Light Intensity")).changed();
 
                                 ui.separator();
                                 ui.horizontal(|ui| {

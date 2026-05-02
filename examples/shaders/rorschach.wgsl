@@ -21,9 +21,13 @@ struct RorschachParams {
     tint_x: f32,
     tint_y: f32,
     tint_z: f32,
-    _pad_final1: f32,
-    _pad_final2: f32,
-    _pad_final3: f32,
+    animate: f32,
+    turbulence: f32,
+    evaporation: f32,
+    light_intensity: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
 }
 
 @group(1) @binding(0) var out: texture_storage_2d<rgba16float, write>;
@@ -82,13 +86,12 @@ fn shape(@builtin(global_invocation_id) id:vec3<u32>){
     if(id.x>=dim.x||id.y>=dim.y){return;}
     let uv=(v2(id.xy)-.5*v2(f32(dim.x),f32(dim.y)))/f32(dim.y);
     let sym=v2(abs(uv.x),uv.y)*p.zoom;
-    let val=wrp(sym,p.seed);
+    let val=wrp(sym,p.seed+(u_t.time*.15*p.animate));
     let shp=smoothstep(p.threshold-.1,p.threshold+.1,val);
     textureStore(out,id.xy,v4(shp,0.,0.,1.));
 }
 
 // B: Vector Field
-// I calculate the gradient (slope) of the ink shape to determine flow direction.
 @compute @workgroup_size(16,16,1)
 fn flow_field(@builtin(global_invocation_id) id:vec3<u32>){
     let dim=textureDimensions(out);
@@ -108,7 +111,7 @@ fn ink_trace(@builtin(global_invocation_id) id:vec3<u32>){
     if(id.x>=dim.x||id.y>=dim.y){return;}
     
     // Feedback
-    let old=textureLoad(tex0,iv2(id.xy),0);
+    let old=textureLoad(tex0,iv2(id.xy),0)*p.evaporation;
     
     // Spawn
     let seed=v2(id.xy)+v2(u_t.time*15.,f32(u_t.frame));
@@ -116,7 +119,7 @@ fn ink_trace(@builtin(global_invocation_id) id:vec3<u32>){
     
     // Analysis
     let uv=(pos-.5*v2(f32(dim.x),f32(dim.y)))/f32(dim.y);
-    let val=wrp(v2(abs(uv.x),uv.y)*p.zoom,p.seed);
+    let val=wrp(v2(abs(uv.x),uv.y)*p.zoom,p.seed+(u_t.time*.15*p.animate));
     let msk=smoothstep(p.threshold-.1,p.threshold+.1,val);
     
     var acc=v3(0.);var den=0.;
@@ -132,7 +135,14 @@ fn ink_trace(@builtin(global_invocation_id) id:vec3<u32>){
         
         let flow=normalize(v2(-grad.y,grad.x)+grad*.2);
         let n=nz(pos*.05+p.seed)-.5;
-        let dir=select(v2(cos(n*6.28),sin(n*6.28)),flow,gl>.001);
+        let base_dir=select(v2(cos(n*6.28),sin(n*6.28)),flow,gl>.001);
+        
+        let e=v2(.2,0.);let ps=pos*.02+p.seed+(u_t.time*p.animate*.2);
+        let dx=nz(ps+e.xy)-nz(ps-e.xy);
+        let dy=nz(ps+e.yx)-nz(ps-e.yx);
+        let trb=v2(-dy,dx)*p.turbulence*p.animate;
+        
+        let dir=normalize(base_dir+trb);
         pos+=dir*spd;
         
         let prg=f32(i)/f32(stp);
@@ -151,28 +161,74 @@ fn ink_trace(@builtin(global_invocation_id) id:vec3<u32>){
     textureStore(out,id.xy,select(res,v4(0.),u_t.frame==0u));
 }
 
+fn aces(x:v3)->v3{return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),v3(0.),v3(1.));}
+
 // MAIN: Compositing
-// I map the accumulated dynamic range ink onto a paper texture using log tone mapping.
+// I map the accumulated density into a 3D physical height map to calculate normals, 
+// then apply dual-light GGX specular and ACES tone mapping for a thick oil paint look.
 @compute @workgroup_size(16,16,1)
 fn main_image(@builtin(global_invocation_id) id:vec3<u32>){
     let dim=textureDimensions(out);
     if(id.x>=dim.x||id.y>=dim.y){return;}
     
+    let R=v2(f32(dim.x),f32(dim.y));
+    let U=v2(f32(id.x),f32(id.y));
+    let uv=U/R;let px=1./R;
+
     let dat=textureLoad(tex0,iv2(id.xy),0);
     let ink=dat.rgb;let den=dat.a;
     
+    // I calculate multi-scale normals from the density to build the impasto texture.
+    let hN=textureSampleLevel(tex0,sam0,clamp(uv+v2(0.,px.y),v2(0.),v2(1.)),0.).a;
+    let hS=textureSampleLevel(tex0,sam0,clamp(uv-v2(0.,px.y),v2(0.),v2(1.)),0.).a;
+    let hE=textureSampleLevel(tex0,sam0,clamp(uv+v2(px.x,0.),v2(0.),v2(1.)),0.).a;
+    let hW=textureSampleLevel(tex0,sam0,clamp(uv-v2(px.x,0.),v2(0.),v2(1.)),0.).a;
+    let fin=v2(hE-hW,hN-hS);
+
+    let hN3=textureSampleLevel(tex0,sam0,clamp(uv+v2(0.,px.y*3.),v2(0.),v2(1.)),0.).a;
+    let hS3=textureSampleLevel(tex0,sam0,clamp(uv-v2(0.,px.y*3.),v2(0.),v2(1.)),0.).a;
+    let hE3=textureSampleLevel(tex0,sam0,clamp(uv+v2(px.x*3.,0.),v2(0.),v2(1.)),0.).a;
+    let hW3=textureSampleLevel(tex0,sam0,clamp(uv-v2(px.x*3.,0.),v2(0.),v2(1.)),0.).a;
+    let crs=v2(hE3-hW3,hN3-hS3)/3.;
+
+    let grd=mix(crs,fin,smoothstep(0.,.05,length(fin)));
+    
+    // Canvas texture mixed into the normal map
+    let fGrd=grd+v2(nz(uv*800.)*.02);
+    let z=mix(.1,.5,smoothstep(0.,.1,length(fGrd)));
+    let nor=normalize(v3(-fGrd.x,-fGrd.y,z));
+
+    // I set up a key light and a fill light, then calculate GGX specular for wet oil reflections.
+    let key=normalize(v3(1.5,-1.5,2.));
+    let fil=normalize(v3(-2.,1.5,1.));
+    let viw=v3(0.,0.,1.);
+
+    let ndk=max(dot(nor,key),0.);
+    let ndf=max(dot(nor,fil),0.);
+    let dif=.15+(ndk*.7)+(ndf*.3);
+
+    let H=normalize(key+viw);
+    let ndh=max(dot(nor,H),0.);
+    
+    // Shininess is driven by the paint thickness (density)
+    let rgh=mix(.6,.2,smoothstep(0.,2.,den));
+    let a2=rgh*rgh;
+    let dnm=ndh*ndh*(a2-1.)+1.;
+    let spc=(a2/(3.14159*dnm*dnm+1e-6))*.15*p.contrast*ndk;
+
     // Paper
-    let g=nz(v2(id.xy)*.5)*.04;
+    let g=nz(uv*500.)*.05;
     let pap=v3(.96,.95,.92)-v3(g);
     
-    // Tone Map
-    let map=v3(1.)-exp(-ink*(p.contrast*.5));
-    let op=smoothstep(0.,1.,den*.5);
-    var col=mix(pap,map*pap,op);
-    
+    // Tone Map & Comp
+    let lit=(ink*dif*p.light_intensity)+v3(spc);
+    let op=smoothstep(0.,.5,den*.5);
+    var col=mix(pap,lit,op);
+
+    col=aces(col);
+
     // Post
-    let uv=v2(id.xy)/v2(dim);
     let v=uv*(1.-uv);
     col*=pow(v.x*v.y*15.,.2);
-    textureStore(out,id.xy,v4(pow(col,v3(1./p.gamma)),1.));
+    textureStore(out,id.xy,v4(pow(max(col,v3(0.)),v3(1./p.gamma)),1.));
 }
