@@ -44,7 +44,7 @@ cuneus::uniform_params! {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     cuneus::gst::init()?;
     env_logger::init();
-    let (app, event_loop) = ShaderApp::new("voronoi", 1280, 720);
+    let (app, event_loop) = ShaderApp::new("voronoi", 800, 600);
     app.run(event_loop, Voronoi::init)
 }
 
