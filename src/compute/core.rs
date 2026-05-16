@@ -1745,6 +1745,21 @@ impl ComputeShader {
                     info!("Export: resizing compute from {}x{} to {}x{}", current_w, current_h, export_w, export_h);
                     self.resize(core, export_w, export_h);
                 }
+
+                // Run offline audio analysis (and audio extraction) up front so
+                // every captured frame can sample audio data at its own time.
+                #[cfg(feature = "media")]
+                {
+                    render_kit.begin_export_audio();
+                }
+            }
+
+            // Each frame: replace the live spectrum data with offline sampled
+            // data at this frame's media time, then push to the GPU buffer.
+            #[cfg(feature = "media")]
+            if render_kit.export_audio_active {
+                render_kit.apply_offline_audio_at(&core.queue, time as f64);
+                self.update_audio_spectrum(&render_kit.resolution_uniform.data, &core.queue);
             }
 
             match self.capture_export_frame(
@@ -1771,6 +1786,8 @@ impl ComputeShader {
                 info!("Export complete: resizing compute back to {}x{}", core.size.width, core.size.height);
                 self.resize(core, core.size.width, core.size.height);
             }
+            #[cfg(feature = "media")]
+            render_kit.end_export_audio();
             render_kit.export_manager.complete_export();
         }
     }
@@ -1796,6 +1813,17 @@ impl ComputeShader {
                     info!("Export: resizing compute from {}x{} to {}x{}", current_w, current_h, export_w, export_h);
                     self.resize(core, export_w, export_h);
                 }
+
+                #[cfg(feature = "media")]
+                {
+                    render_kit.begin_export_audio();
+                }
+            }
+
+            #[cfg(feature = "media")]
+            if render_kit.export_audio_active {
+                render_kit.apply_offline_audio_at(&core.queue, time as f64);
+                self.update_audio_spectrum(&render_kit.resolution_uniform.data, &core.queue);
             }
 
             match self.capture_export_frame(core, time, render_kit, Some(custom_dispatch)) {
@@ -1817,6 +1845,8 @@ impl ComputeShader {
                 info!("Export complete: resizing compute back to {}x{}", core.size.width, core.size.height);
                 self.resize(core, core.size.width, core.size.height);
             }
+            #[cfg(feature = "media")]
+            render_kit.end_export_audio();
             render_kit.export_manager.complete_export();
         }
     }
