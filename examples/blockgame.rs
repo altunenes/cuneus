@@ -4,36 +4,36 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 use winit::event::ElementState;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct BlockGameParams {
-    // 0=menu, 1=playing, 2=game_over
-    game_state: i32,
-    score: u32,
-    current_block: u32,
-    total_blocks: u32,
+cuneus::uniform_params! {
+    struct BlockGameParams {
+        // 0=menu, 1=playing, 2=game_over
+        game_state: i32,
+        score: u32,
+        current_block: u32,
+        total_blocks: u32,
 
-    block_x: f32,
-    block_y: f32,
-    block_z: f32,
+        block_x: f32,
+        block_y: f32,
+        block_z: f32,
 
-    block_width: f32,
-    block_height: f32,
-    block_depth: f32,
+        block_width: f32,
+        block_height: f32,
+        block_depth: f32,
 
-    movement_speed: f32,
-    movement_range: f32,
-    drop_triggered: i32,
+        movement_speed: f32,
+        movement_range: f32,
+        drop_triggered: i32,
 
-    camera_height: f32,
-    camera_angle: f32,
-    camera_scale: f32,
+        camera_height: f32,
+        camera_angle: f32,
+        camera_scale: f32,
 
-    // Game mech
-    perfect_placement: i32,
-    game_over: i32,
+        // Game mech
+        perfect_placement: i32,
+        game_over: i32,
 
-    _padding: [f32; 2],
+        _padding: [f32; 2],
+    }
 }
 
 impl Default for BlockGameParams {
@@ -65,12 +65,6 @@ impl Default for BlockGameParams {
 
             _padding: [0.0; 2],
         }
-    }
-}
-
-impl UniformProvider for BlockGameParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
     }
 }
 
