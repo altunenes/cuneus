@@ -1,20 +1,20 @@
 use cuneus::compute::{ComputeShader, COMPUTE_TEXTURE_FORMAT_RGBA16};
 use cuneus::{
-    Core, ExportManager, RenderKit, ShaderApp, ShaderControls, ShaderManager, UniformProvider,
+    Core, ExportManager, RenderKit, ShaderApp, ShaderControls, ShaderManager,
 };
 use cuneus::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct AudioVisParams {
-    red_power: f32,
-    green_power: f32,
-    blue_power: f32,
-    green_boost: f32,
-    contrast: f32,
-    gamma: f32,
-    glow: f32,
-    _padding: f32,
+cuneus::uniform_params! {
+    struct AudioVisParams {
+        red_power: f32,
+        green_power: f32,
+        blue_power: f32,
+        green_boost: f32,
+        contrast: f32,
+        gamma: f32,
+        glow: f32,
+        _padding: f32,
+    }
 }
 
 impl Default for AudioVisParams {
@@ -29,12 +29,6 @@ impl Default for AudioVisParams {
             glow: 0.05,
             _padding: 0.0,
         }
-    }
-}
-
-impl UniformProvider for AudioVisParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
     }
 }
 

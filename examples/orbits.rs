@@ -1,33 +1,28 @@
 use cuneus::prelude::ComputeShader;
-use cuneus::{Core, ExportManager, RenderKit, ShaderApp, ShaderControls, ShaderManager, UniformProvider};
+use cuneus::{Core, ExportManager, RenderKit, ShaderApp, ShaderControls, ShaderManager};
 use cuneus::WindowEvent;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct ShaderParams {
-    base_color: [f32; 3],
-    x: f32,
-    rim_color: [f32; 3],
-    y: f32,
-    accent_color: [f32; 3],
-    gamma_correction: f32,
-    travel_speed: f32,
-    iteration: i32,
-    col_ext: f32,
-    zoom: f32,
-    trap_pow: f32,
-    trap_x: f32,
-    trap_y: f32,
-    trap_c1: f32,
-    aa: i32,
-    trap_s1: f32,
-    wave_speed: f32,
-    fold_intensity: f32,
-}
 
-impl UniformProvider for ShaderParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
+cuneus::uniform_params! {
+    pub struct ShaderParams {
+        base_color: [f32; 3],
+        x: f32,
+        rim_color: [f32; 3],
+        y: f32,
+        accent_color: [f32; 3],
+        gamma_correction: f32,
+        travel_speed: f32,
+        iteration: i32,
+        col_ext: f32,
+        zoom: f32,
+        trap_pow: f32,
+        trap_x: f32,
+        trap_y: f32,
+        trap_c1: f32,
+        aa: i32,
+        trap_s1: f32,
+        wave_speed: f32,
+        fold_intensity: f32,
     }
 }
 

@@ -145,11 +145,24 @@ macro_rules! uniform_params {
         }
     ) => {
         #[repr(C)]
-        #[derive(Copy, Clone, Debug, $crate::bytemuck::Pod, $crate::bytemuck::Zeroable)]
+        #[derive(Copy, Clone, Debug)]
         $(#[$meta])*
         $vis struct $name {
             $($field_vis $field : $ty),*
         }
+
+        // Hand implement Pod/Zeroable via the re-exported traits. The derive
+        // macros from `bytemuck_derive` emit unqualified `bytemuck::` paths
+        // that require consumers to depend on bytemuck themselves; trait
+        // impls accept the full `$crate::bytemuck::...` path, so consumers
+        // need only depend on cuneus.
+        //
+        // Safety: `#[repr(C)]` + `Copy` are required above; the 16-byte size
+        // assert below catches padding-related mistakes. Callers are
+        // responsible for using only Pod field types (no references,
+        // pointers, enums, etc etc...).
+        unsafe impl $crate::bytemuck::Zeroable for $name {}
+        unsafe impl $crate::bytemuck::Pod for $name {}
 
         impl $crate::UniformProvider for $name {
             fn as_bytes(&self) -> &[u8] {

@@ -1,28 +1,28 @@
 use cuneus::compute::{ComputeShader, ComputeShaderBuilder, PassDescription, StorageBufferSpec, COMPUTE_TEXTURE_FORMAT_RGBA16};
 use cuneus::{Core, RenderKit, ShaderApp, ShaderControls, ShaderManager};
-use cuneus::{ExportManager, UniformProvider};
+use cuneus::ExportManager;
 use log::error;
 use cuneus::WindowEvent;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct GaussianParams {
-    num_gaussians: u32,
-    learning_rate: f32,
-    color_learning_rate: f32,
-    reset_training: u32,
-    show_target: u32,
-    show_error: u32,
-    temperature: f32,
-    error_scale: f32,
-    min_sigma: f32,
-    max_sigma: f32,
-    position_noise: f32,
-    random_seed: u32,
-    iteration: u32,
-    sigma_learning_rate: f32,
-    _padding0: u32,
-    _padding1: u32,
+cuneus::uniform_params! {
+    struct GaussianParams {
+        num_gaussians: u32,
+        learning_rate: f32,
+        color_learning_rate: f32,
+        reset_training: u32,
+        show_target: u32,
+        show_error: u32,
+        temperature: f32,
+        error_scale: f32,
+        min_sigma: f32,
+        max_sigma: f32,
+        position_noise: f32,
+        random_seed: u32,
+        iteration: u32,
+        sigma_learning_rate: f32,
+        _padding0: u32,
+        _padding1: u32,
+    }
 }
 
 impl Default for GaussianParams {
@@ -58,12 +58,6 @@ impl Default for GaussianParams {
             _padding0: 0,
             _padding1: 0,
         }
-    }
-}
-
-impl UniformProvider for GaussianParams {
-    fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
     }
 }
 
