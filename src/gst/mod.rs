@@ -1,6 +1,8 @@
 #[cfg(feature = "media")]
 pub mod audio;
 #[cfg(feature = "media")]
+pub mod offline_audio;
+#[cfg(feature = "media")]
 pub mod video;
 #[cfg(feature = "media")]
 pub mod webcam;
