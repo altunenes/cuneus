@@ -15,6 +15,7 @@ A GPU compute engine for creating, tweaking, and shipping WGSL shader programs. 
 - Audio/Visual synchronization: Spectrum and BPM detection
 - Real-time audio synthesis: Generate music directly from wgsl shaders
 - Export HQ frames via egui
+- Frame-accurate audio sync on export: pre analyzed spectrum/BPM per frame for perfect mux with the source audio
 
 ### Builder Pattern
 
