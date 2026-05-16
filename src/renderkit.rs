@@ -64,6 +64,10 @@ pub struct RenderKit {
     pub export_manager: ExportManager,
     pub controls: ShaderControls,
     pub spectrum_analyzer: SpectrumAnalyzer,
+    #[cfg(feature = "media")]
+    pub offline_audio_analysis: Option<crate::gst::offline_audio::OfflineAudioAnalysis>,
+    #[cfg(feature = "media")]
+    pub export_audio_active: bool,
     pub compute_shader: Option<ComputeShader>,
     pub fps_tracker: fps::FpsTracker,
     pub mouse_tracker: MouseTracker,
@@ -221,6 +225,10 @@ impl RenderKit {
             export_manager: ExportManager::new(),
             controls: ShaderControls::new(),
             spectrum_analyzer: SpectrumAnalyzer::new(),
+            #[cfg(feature = "media")]
+            offline_audio_analysis: None,
+            #[cfg(feature = "media")]
+            export_audio_active: false,
             compute_shader: None,
             fps_tracker,
             mouse_tracker,
@@ -723,12 +731,89 @@ impl RenderKit {
     }
     #[cfg(feature = "media")]
     pub fn update_audio_spectrum(&mut self, queue: &wgpu::Queue) {
+        // During export, audio is driven by handle_export per-frame from the
+        // offline analysis so the spectrum lines up with the time of the frame
+        // being captured. Skip the live path to avoid clobbering that data.
+        if self.export_audio_active {
+            return;
+        }
         self.spectrum_analyzer.update_spectrum(
             queue,
             &mut self.resolution_uniform,
             &self.video_texture_manager,
             self.using_video_texture,
         );
+    }
+
+    /// Feed a single offline analyzed audio frame (looked up at media time
+    /// `time_secs`) into the spectrum analyzer's processing pipeline. Used by
+    /// the export path so each rendered frame sees audio data sampled at its
+    /// own timeline position rather than wherever live playback happens to be.
+    #[cfg(feature = "media")]
+    pub fn apply_offline_audio_at(&mut self, queue: &wgpu::Queue, time_secs: f64) {
+        if let Some(analysis) = &self.offline_audio_analysis {
+            if let Some(sample) = analysis.sample(time_secs) {
+                self.spectrum_analyzer.apply_offline_sample(
+                    queue,
+                    &mut self.resolution_uniform,
+                    &sample,
+                );
+            }
+        }
+    }
+
+    /// Run the offline audio analyzer for the currently loaded media file so
+    /// the export path can sample frame-time-aligned spectrum/level/BPM data.
+    /// Called once at the start of export. Returns true if analysis succeeded.
+    #[cfg(feature = "media")]
+    pub fn begin_export_audio(&mut self) -> bool {
+        let path_opt = self
+            .video_texture_manager
+            .as_ref()
+            .filter(|vm| vm.has_audio())
+            .map(|vm| vm.path().to_owned());
+        let media_path = match path_opt {
+            Some(p) => p,
+            None => return false,
+        };
+
+        // Pause live playback so its bus traffic doesn't compete with the
+        // offline pipeline and so the user doesn't hear audio drift while
+        // export runs.
+        let _ = self.pause_video();
+        self.spectrum_analyzer.reset_smoothing();
+
+        info!("Pre-analyzing audio for export: {}", media_path);
+        match crate::gst::offline_audio::OfflineAudioAnalysis::analyze(
+            &media_path, 128, -60, 50,
+        ) {
+            Ok(analysis) => {
+                self.offline_audio_analysis = Some(analysis);
+                self.export_audio_active = true;
+                true
+            }
+            Err(e) => {
+                error!("Offline audio analysis failed: {e}");
+                self.offline_audio_analysis = None;
+                self.export_audio_active = false;
+                let _ = self.play_video();
+                false
+            }
+        }
+    }
+
+    /// Drop any offline analysis state and resume live playback. Called when
+    /// export finishes.
+    #[cfg(feature = "media")]
+    pub fn end_export_audio(&mut self) {
+        if self.offline_audio_analysis.is_some() {
+            self.offline_audio_analysis = None;
+        }
+        if self.export_audio_active {
+            self.export_audio_active = false;
+            self.spectrum_analyzer.reset_smoothing();
+            let _ = self.play_video();
+        }
     }
     #[cfg(feature = "media")]
     pub fn handle_video_requests(&mut self, core: &Core, request: &ControlsRequest) {
