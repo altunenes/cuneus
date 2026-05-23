@@ -12,7 +12,7 @@ categories = ["graphics", "rendering"]
 
 [dependencies]
 wgpu = "29.0.1"
-winit = "0.30.12"
+winit = "0.30.13"
 bytemuck = { version = "1.23.2", features = ["derive"] }
 egui-wgpu = "0.34.0"
 egui = "0.34.0"
