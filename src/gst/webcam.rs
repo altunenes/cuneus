@@ -1,10 +1,11 @@
+use crate::gst::video::{AudioLevel, SpectrumData};
 use crate::texture::TextureManager;
 use anyhow::{anyhow, Result};
 use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
-use log::{debug, info};
+use log::{debug, info, warn};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use wgpu;
@@ -31,6 +32,13 @@ pub struct WebcamTextureManager {
     frame_count: usize,
     /// Webcam device name/index
     device_name: String,
+    /// Whether the pipeline successfully attached a microphone branch.
+    /// We only post-process spectrum/level when this is true.
+    has_audio: bool,
+    /// Spectrum analysis data from the mic input (same shape as video.rs).
+    spectrum_data: Arc<Mutex<SpectrumData>>,
+    /// Audio level (RMS/peak) from the mic input.
+    audio_level: Arc<Mutex<AudioLevel>>,
 }
 
 impl WebcamTextureManager {
@@ -143,6 +151,12 @@ impl WebcamTextureManager {
         ])
         .map_err(|_| anyhow!("Failed to link webcam elements"))?;
 
+        // Audio branch: microphone → audioconvert → audioresample → 44.1kHz caps
+        // → spectrum (FFT) → level (RMS/peak) → fakesink. Posts spectrum and
+        // level messages on the bus identical to gst/video.rs so RenderKit's
+        // audio spectrum path treats webcam mic and video audio uniformly.
+        let has_audio = Self::try_attach_audio_branch(&pipeline);
+
         // Create shared state
         let current_frame = Arc::new(Mutex::new(None));
         let current_frame_clone = current_frame.clone();
@@ -222,6 +236,9 @@ impl WebcamTextureManager {
             texture_initialized: false,
             frame_count: 0,
             device_name,
+            has_audio,
+            spectrum_data: Arc::new(Mutex::new(SpectrumData::default())),
+            audio_level: Arc::new(Mutex::new(AudioLevel::default())),
         };
 
         info!("Webcam texture manager created successfully");
@@ -283,6 +300,7 @@ impl WebcamTextureManager {
         if !*self.is_active.lock().unwrap() {
             return Ok(false);
         }
+        let _ = self.poll_audio_messages();
 
         // Check if we have a NEW frame to process
         let frame_to_process = {
@@ -345,6 +363,248 @@ impl WebcamTextureManager {
 
     pub fn device_name(&self) -> &str {
         &self.device_name
+    }
+
+    /// Whether the pipeline successfully attached the mic branch.
+    pub fn has_audio(&self) -> bool {
+        self.has_audio
+    }
+
+    /// Current spectrum data from the mic.
+    pub fn spectrum_data(&self) -> SpectrumData {
+        self.spectrum_data.lock().map(|d| d.clone()).unwrap_or_default()
+    }
+
+    /// Current RMS/peak from the mic.
+    pub fn audio_level(&self) -> AudioLevel {
+        self.audio_level.lock().map(|l| l.clone()).unwrap_or_default()
+    }
+
+    /// BPM is not meaningful for live mic input
+    pub fn get_bpm(&self) -> f32 {
+        0.0
+    }
+
+    /// mic → spectrum + level → fakesink
+    /// if fail:
+    /// (no mic, missing element, permission denied) leave video working
+    /// and just skip audio rather than aborting can aboty
+    fn try_attach_audio_branch(pipeline: &gst::Pipeline) -> bool {
+        // Platform-specific microphone source.
+        #[cfg(target_os = "linux")]
+        let mic_factory = "pulsesrc";
+        #[cfg(target_os = "macos")]
+        let mic_factory = "osxaudiosrc";
+        #[cfg(target_os = "windows")]
+        let mic_factory = "wasapisrc";
+
+        let mic = match gst::ElementFactory::make(mic_factory).name("mic_source").build() {
+            Ok(e) => e,
+            Err(_) => {
+                warn!("Webcam: no microphone source available ({mic_factory}); audio disabled");
+                return false;
+            }
+        };
+
+        let audioconvert = match gst::ElementFactory::make("audioconvert").build() {
+            Ok(e) => e,
+            Err(_) => {
+                warn!("Webcam: failed to create audioconvert; audio disabled");
+                return false;
+            }
+        };
+        let audioresample = match gst::ElementFactory::make("audioresample").build() {
+            Ok(e) => e,
+            Err(_) => {
+                warn!("Webcam: failed to create audioresample; audio disabled");
+                return false;
+            }
+        };
+        let audio_caps_filter = match gst::ElementFactory::make("capsfilter").build() {
+            Ok(e) => e,
+            Err(_) => {
+                warn!("Webcam: failed to create audio capsfilter; audio disabled");
+                return false;
+            }
+        };
+        let audio_caps = gst::Caps::builder("audio/x-raw")
+            .field("rate", 44100i32)
+            .field("channels", 1i32)
+            .build();
+        audio_caps_filter.set_property("caps", &audio_caps);
+
+        let spectrum = match gst::ElementFactory::make("spectrum")
+            .name("webcam_spectrum")
+            .property("bands", 128u32)
+            .property("threshold", -60i32)
+            .property("post-messages", true)
+            .property("message-magnitude", true)
+            .property("message-phase", false)
+            .property("interval", 50000000u64) // 50ms — matches video pipeline
+            .build()
+        {
+            Ok(e) => e,
+            Err(_) => {
+                warn!("Webcam: failed to create spectrum element; audio disabled");
+                return false;
+            }
+        };
+
+        let level = match gst::ElementFactory::make("level")
+            .name("webcam_level")
+            .property("interval", 50000000u64)
+            .property("message", true)
+            .property("post-messages", true)
+            .build()
+        {
+            Ok(e) => e,
+            Err(_) => {
+                warn!("Webcam: failed to create level element; audio disabled");
+                return false;
+            }
+        };
+
+        let audio_sink = match gst::ElementFactory::make("fakesink")
+            .name("webcam_audio_sink")
+            .property("sync", false)
+            .property("async", false)
+            .build()
+        {
+            Ok(e) => e,
+            Err(_) => {
+                warn!("Webcam: failed to create fakesink; audio disabled");
+                return false;
+            }
+        };
+
+        if pipeline
+            .add_many([
+                &mic,
+                &audioconvert,
+                &audioresample,
+                &audio_caps_filter,
+                &spectrum,
+                &level,
+                &audio_sink,
+            ])
+            .is_err()
+        {
+            warn!("Webcam: failed to add audio elements to pipeline; audio disabled");
+            return false;
+        }
+
+        if gst::Element::link_many([
+            &mic,
+            &audioconvert,
+            &audioresample,
+            &audio_caps_filter,
+            &spectrum,
+            &level,
+            &audio_sink,
+        ])
+        .is_err()
+        {
+            warn!("Webcam: failed to link audio chain; audio disabled");
+            return false;
+        }
+
+        info!("Webcam: microphone audio branch attached ({mic_factory})");
+        true
+    }
+
+    /// Poll the GStreamer bus for spectrum/level messages from the webcam's
+    /// audio branch. Mirrors VideoTextureManager::poll_audio_messages but
+    /// drops BPM handling (not meaningful for live mic).
+    pub fn poll_audio_messages(&mut self) -> bool {
+        if !self.has_audio {
+            return false;
+        }
+
+        let mut updated = false;
+        let Some(bus) = self.pipeline.bus() else { return false };
+
+        while let Some(message) = bus.pop() {
+            if let gst::MessageView::Element(element) = message.view() {
+                let Some(structure) = element.structure() else { continue };
+
+                if structure.name() == "spectrum" {
+                    let mut magnitude_values: Vec<f32> = Vec::with_capacity(128);
+
+
+                    let struct_str = structure.to_string();
+                    if let Some(start_idx) = struct_str.find("magnitude=(float){") {
+                        if let Some(end_idx) = struct_str[start_idx..].find('}') {
+                            let magnitude_str = &struct_str
+                                [start_idx + "magnitude=(float){".len()..start_idx + end_idx];
+                            for value_str in magnitude_str.split(',') {
+                                if let Ok(value) = value_str.trim().parse::<f32>() {
+                                    magnitude_values.push(value);
+                                }
+                            }
+                        }
+                    }
+
+                    // Fall back to indexed field access.
+                    if magnitude_values.is_empty() {
+                        for i in 0..128 {
+                            let field_name = format!("magnitude[{i}]");
+                            if let Ok(value) = structure.get::<f32>(&field_name) {
+                                magnitude_values.push(value);
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+
+                    if !magnitude_values.is_empty() {
+                        let bands = magnitude_values.len();
+                        if let Ok(mut data) = self.spectrum_data.lock() {
+                            *data = SpectrumData {
+                                bands,
+                                magnitudes: magnitude_values,
+                                phases: None,
+                                timestamp: structure.get("timestamp").ok(),
+                            };
+                        }
+                        updated = true;
+                    }
+                }
+
+                if structure.name() == "level" {
+                    let mut rms_db_val = None;
+                    let mut peak_val = None;
+
+                    if let Ok(rms_list) = structure.get::<gst::glib::ValueArray>("rms") {
+                        for val in rms_list.iter() {
+                            if let Ok(rms_db) = val.get::<f64>() {
+                                rms_db_val = Some(rms_db);
+                                break;
+                            }
+                        }
+                    }
+                    if let Ok(peak_list) = structure.get::<gst::glib::ValueArray>("peak") {
+                        for val in peak_list.iter() {
+                            if let Ok(peak_db) = val.get::<f64>() {
+                                peak_val = Some(10.0_f64.powf(peak_db / 20.0));
+                                break;
+                            }
+                        }
+                    }
+                    if let (Some(rms_db), Some(peak)) = (rms_db_val, peak_val) {
+                        let rms_linear = 10.0_f64.powf(rms_db / 20.0);
+                        if let Ok(mut lvl) = self.audio_level.lock() {
+                            *lvl = AudioLevel {
+                                rms: rms_linear,
+                                rms_db,
+                                peak,
+                            };
+                        }
+                        updated = true;
+                    }
+                }
+            }
+        }
+        updated
     }
 
     /// Get available webcam devices:

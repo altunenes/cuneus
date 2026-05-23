@@ -742,6 +742,8 @@ impl RenderKit {
             &mut self.resolution_uniform,
             &self.video_texture_manager,
             self.using_video_texture,
+            &self.webcam_texture_manager,
+            self.using_webcam_texture,
         );
     }
 
