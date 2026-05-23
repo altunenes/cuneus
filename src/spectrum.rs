@@ -5,6 +5,8 @@ use crate::gst::offline_audio::AudioSample;
 #[cfg(feature = "media")]
 use crate::gst::video::VideoTextureManager;
 #[cfg(feature = "media")]
+use crate::gst::webcam::WebcamTextureManager;
+#[cfg(feature = "media")]
 use crate::ResolutionUniform;
 #[cfg(feature = "media")]
 use crate::UniformBinding;
@@ -44,6 +46,8 @@ impl SpectrumAnalyzer {
         resolution_uniform: &mut UniformBinding<ResolutionUniform>,
         video_texture_manager: &Option<VideoTextureManager>,
         using_video_texture: bool,
+        webcam_texture_manager: &Option<WebcamTextureManager>,
+        using_webcam_texture: bool,
     ) {
         // Initialize audio data arrays to zero
         for i in 0..32 {
@@ -66,6 +70,26 @@ impl SpectrumAnalyzer {
                             spectrum_data.bands,
                             audio_level.rms_db as f32,
                             bpm,
+                            /* log_live = */ true,
+                        );
+                    }
+                }
+            }
+
+            resolution_uniform.update(queue);
+        } else if using_webcam_texture {
+            // Webcam mic path: same but BPM stays at 0
+            if let Some(webcam_manager) = webcam_texture_manager {
+                if webcam_manager.has_audio() {
+                    let spectrum_data = webcam_manager.spectrum_data();
+                    let audio_level = webcam_manager.audio_level();
+                    if !spectrum_data.magnitudes.is_empty() {
+                        self.process_audio_sample(
+                            resolution_uniform,
+                            &spectrum_data.magnitudes,
+                            spectrum_data.bands,
+                            audio_level.rms_db as f32,
+                            0.0,
                             /* log_live = */ true,
                         );
                     }
