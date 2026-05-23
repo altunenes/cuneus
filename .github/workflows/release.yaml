@@ -53,7 +53,7 @@ jobs:
         if: runner.os == 'macOS' && matrix.shader_config.gstreamer_required
         run: |
           # Download and install official GStreamer packages
-          GSTREAMER_VERSION="1.28.1"
+          GSTREAMER_VERSION="1.28.3"
           curl -L "https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION/gstreamer-1.0-$GSTREAMER_VERSION-universal.pkg" -o gstreamer.pkg
           curl -L "https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION/gstreamer-1.0-devel-$GSTREAMER_VERSION-universal.pkg" -o gstreamer-devel.pkg
           
@@ -90,7 +90,7 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Starting GStreamer installation process..."
-          $gstVer = "1.28.1"
+          $gstVer = "1.28.3"
           $tempDir = "C:\gst-temp"
           $installDir = "C:\gstreamer"
 
@@ -211,7 +211,8 @@ jobs:
               "libgio-2.0.0.dylib" "libgmodule-2.0.0.dylib" "libintl.8.dylib" "libffi.7.dylib"
               "libpcre2-8.0.dylib" "liborc-0.4.0.dylib" "libz.1.dylib" "libbz2.1.dylib"
               "libavformat.61.dylib" "libavutil.59.dylib" "libavcodec.61.dylib"
-              "libavfilter.10.dylib" "libswresample.5.dylib" "libSoundTouch.2.dylib" "libMoltenVK.dylib"
+              "libavfilter.10.dylib" "libswresample.5.dylib" "libswscale.8.dylib"
+              "libSoundTouch.2.dylib" "libMoltenVK.dylib"
             )
             
             # Plugins (macOS)
