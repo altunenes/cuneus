@@ -83,9 +83,10 @@ fn sdPentagon(p: vec2<f32>, r: f32, angle: f32) -> f32 {
     return max(d, 0.1);
 }
 
-fn getpent(uv: vec2<f32>, size: f32, angle: f32) -> array<vec2<f32>, 5> {
+//get light
+fn gl(uv: vec2<f32>, pentagon: f32, layer: f32, time: f32, angle: f32) -> f32 {
     var vertices: array<vec2<f32>, 5>;
-    let r = size * 0.8;
+    let r = layer * 0.8;
 
     for(var i: i32 = 0; i < 5; i = i + 1) {
         let a = (f32(i) / 5.0) * 2.0 * PI;
@@ -96,12 +97,6 @@ fn getpent(uv: vec2<f32>, size: f32, angle: f32) -> array<vec2<f32>, 5> {
     for(var i: i32 = 0; i < 5; i = i + 1) {
         vertices[i] = rot * vertices[i] + uv;
     }
-
-    return vertices;
-}
-//get light
-fn gl(uv: vec2<f32>, pentagon: f32, layer: f32, time: f32, angle: f32) -> f32 {
-    let vertices = getpent(uv, layer, angle);
 
     let phaseShift1 = sin(layer * 13.37 + time * 0.3);
     let phaseShift2 = cos(layer * 7.54 - time * 0.4);
