@@ -1,4 +1,4 @@
-use cuneus::{Core,Renderer,ShaderApp, ShaderManager, UniformProvider, UniformBinding, RenderKit,ExportManager,ShaderHotReload,ShaderControls};
+use cuneus::{Core,Renderer,ShaderApp, ShaderManager, UniformProvider, UniformBinding, RenderKit,ExportManager,ShaderHotReload,ShaderControls,RemoteCommand,RemoteControl};
 use winit::event::*;
 use std::path::PathBuf;
 
@@ -33,6 +33,7 @@ struct Shader {
     time_bind_group_layout: wgpu::BindGroupLayout,    
     resolution_bind_group_layout: wgpu::BindGroupLayout,
     params_bind_group_layout: wgpu::BindGroupLayout,
+    remote_control: Option<RemoteControl>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -242,6 +243,7 @@ impl ShaderManager for Shader {
             time_bind_group_layout,
             resolution_bind_group_layout,
             params_bind_group_layout,
+            remote_control: RemoteControl::from_env(),
         }
     }
 
@@ -279,6 +281,24 @@ impl ShaderManager for Shader {
         
         let mut params = self.params_uniform.data;
         let mut changed = false;
+        if let Some(remote_control) = &self.remote_control {
+            for command in remote_control.drain() {
+                match command {
+                    RemoteCommand::SetF32 { id, value } => {
+                        changed |= apply_remote_f32(&mut params, &id, value);
+                    }
+                    RemoteCommand::SetColor3 { id, value } => {
+                        if id == "background_color" {
+                            params.background_color = value;
+                            changed = true;
+                        }
+                    }
+                    RemoteCommand::Pulse { .. } |
+                    RemoteCommand::Note { .. } |
+                    RemoteCommand::Transport { .. } => {}
+                }
+            }
+        }
         let mut should_start_export = false;
         let mut export_request = self.base.export_manager.get_ui_request();
         let mut controls_request = self.base.controls.get_ui_request(
@@ -380,4 +400,16 @@ impl ShaderManager for Shader {
         }
         false
     }
+}
+
+fn apply_remote_f32(params: &mut ShaderParams, id: &str, value: f32) -> bool {
+    match id {
+        "square_size" => params.square_size = value.clamp(0.05, 0.5),
+        "circle_radius" => params.circle_radius = value.clamp(0.05, 0.2),
+        "edge_thickness" => params.edge_thickness = value.clamp(0.001, 0.01),
+        "animation_speed" => params.animation_speed = value.clamp(1.0, 30.0),
+        "edge_color_intensity" => params.edge_color_intensity = value.clamp(0.1, 2.0),
+        _ => return false,
+    }
+    true
 }

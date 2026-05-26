@@ -24,6 +24,8 @@ mod export;
 mod hot;
 mod controls;
 mod atomic;
+mod capi;
+mod remote;
 #[cfg(feature = "media")]
 pub mod gst;
 pub mod compute;
@@ -45,6 +47,7 @@ pub use export::{ExportSettings, ExportManager, ExportError, ExportUiState, save
 pub use hot::ShaderHotReload;
 pub use controls::{ControlsRequest, ShaderControls};
 pub use atomic::AtomicBuffer;
+pub use remote::{RemoteCommand, RemoteControl};
 pub use mouse::*;
 pub use hdri::*;
 pub use font::{FontSystem, FontUniforms, CharInfo};
@@ -101,7 +104,7 @@ impl Core {
     pub async fn new(window: Window) -> Self {
         let size = window.inner_size();
         let instance_desc = wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends: wgpu::Backends::DX12,
             backend_options: wgpu::BackendOptions::default(),
             ..Default::default()
         };
