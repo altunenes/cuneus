@@ -152,41 +152,34 @@ fn cuneus(p: vec2<f32>, off: f32) -> f32 {
     return d;
 }
 
-// Get letter position keypoints for lighting
-fn texlight(uv: vec2<f32>, scale: f32, time: f32) -> array<vec2<f32>, 8> {
-    var positions: array<vec2<f32>, 8>;
-    let baseOffset = 3.0 + 3.0 * scale;
+fn getLightIntensity(uv: vec2<f32>, textDist: f32, layer: f32, time: f32) -> f32 {
+    var lightPositions: array<vec2<f32>, 8>;
+    let baseOffset = 3.0 + 3.0 * layer;
     
     // C
-    positions[0] = vec2<f32>(-baseOffset + 0.5, 0.5);
+    lightPositions[0] = vec2<f32>(-baseOffset + 0.5, 0.5);
     
     // U
-    positions[1] = vec2<f32>(-baseOffset + 1.55, 0.5);
+    lightPositions[1] = vec2<f32>(-baseOffset + 1.55, 0.5);
     
     // N
-    positions[2] = vec2<f32>(-baseOffset + 2.65, 0.5);
+    lightPositions[2] = vec2<f32>(-baseOffset + 2.65, 0.5);
     
     // E
-    positions[3] = vec2<f32>(-baseOffset + 3.65, 0.5);
+    lightPositions[3] = vec2<f32>(-baseOffset + 3.65, 0.5);
     
     // U
-    positions[4] = vec2<f32>(-baseOffset + 4.65, 0.5);
+    lightPositions[4] = vec2<f32>(-baseOffset + 4.65, 0.5);
     
     // S
-    positions[5] = vec2<f32>(-baseOffset + 5.525, 0.5);
+    lightPositions[5] = vec2<f32>(-baseOffset + 5.525, 0.5);
     
     // Additional dynamic points
-    positions[6] = vec2<f32>(-baseOffset + oscillate(0.0, 6.0, 8.0, time), 
+    lightPositions[6] = vec2<f32>(-baseOffset + oscillate(0.0, 6.0, 8.0, time), 
                     oscillate(0.0, 1.0, 5.0, time));
     
-    positions[7] = vec2<f32>(-baseOffset + oscillate(6.0, 0.0, 7.0, time), 
+    lightPositions[7] = vec2<f32>(-baseOffset + oscillate(6.0, 0.0, 7.0, time), 
                     oscillate(1.0, 0.0, 6.0, time));
-    
-    return positions;
-}
-
-fn getLightIntensity(uv: vec2<f32>, textDist: f32, layer: f32, time: f32) -> f32 {
-    let lightPositions = texlight(uv, layer, time);
     
     let phaseShift1 = sin(layer * 13.37 + time * 0.3);
     let phaseShift2 = cos(layer * 7.54 - time * 0.4);
