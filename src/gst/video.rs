@@ -5,10 +5,85 @@ use gstreamer as gst;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
 use log::{debug, error, info, warn};
+use std::collections::VecDeque;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use wgpu;
+
+/// Cap raw PCM buffer at ~10 seconds so memory stays bounded when the
+/// consumer is slow or absent. Oldest samples drop first.
+const PCM_BUFFER_CAP: usize = 44100 * 10;
+
+/// Raw PCM tap output rate — mono `f32` samples. Consumers that need a
+/// different rate should resample on their side.
+const PCM_SAMPLE_RATE: u32 = 44100;
+
+/// Elements that make up the parallel raw PCM tap branch. Built optimistically
+/// when audio first arrives; if construction fails the analyzer chain still
+/// runs but the tap is reported absent via `has_pcm`.
+struct PcmTapBranch {
+    tee: gst::Element,
+    queue_main: gst::Element,
+    queue_pcm: gst::Element,
+    audioconvert2: gst::Element,
+    audioresample2: gst::Element,
+    caps_filter: gst::Element,
+    appsink: gst_app::AppSink,
+}
+
+/// Try to construct the PCM tap elements. Returns `None` if any element
+/// fails to build — caller falls back to the plain analyzer chain.
+fn build_pcm_branch() -> Option<PcmTapBranch> {
+    let tee = gst::ElementFactory::make("tee").name("video_audio_tee").build().ok()?;
+    let queue_main = gst::ElementFactory::make("queue").name("video_q_main").build().ok()?;
+    let queue_pcm = gst::ElementFactory::make("queue").name("video_q_pcm").build().ok()?;
+    let audioconvert2 = gst::ElementFactory::make("audioconvert")
+        .name("video_pcm_convert")
+        .build()
+        .ok()?;
+    let audioresample2 = gst::ElementFactory::make("audioresample")
+        .name("video_pcm_resample")
+        .build()
+        .ok()?;
+    let caps_filter = gst::ElementFactory::make("capsfilter")
+        .name("video_pcm_caps")
+        .build()
+        .ok()?;
+    caps_filter.set_property(
+        "caps",
+        &gst::Caps::builder("audio/x-raw")
+            .field("format", "F32LE")
+            .field("rate", PCM_SAMPLE_RATE as i32)
+            .field("channels", 1i32)
+            .build(),
+    );
+    let raw_sink = gst::ElementFactory::make("appsink")
+        .name("video_pcm_sink")
+        .build()
+        .ok()?;
+    let appsink = raw_sink.dynamic_cast::<gst_app::AppSink>().ok()?;
+    appsink.set_caps(Some(
+        &gst::Caps::builder("audio/x-raw")
+            .field("format", "F32LE")
+            .field("rate", PCM_SAMPLE_RATE as i32)
+            .field("channels", 1i32)
+            .build(),
+    ));
+    appsink.set_max_buffers(8);
+    appsink.set_drop(true);
+    appsink.set_sync(false);
+    Some(PcmTapBranch {
+        tee,
+        queue_main,
+        queue_pcm,
+        audioconvert2,
+        audioresample2,
+        caps_filter,
+        appsink,
+    })
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct SpectrumData {
@@ -85,6 +160,13 @@ pub struct VideoTextureManager {
     bpm_value: Arc<Mutex<f32>>,
     /// Whether video track was found
     has_video: Arc<Mutex<bool>>,
+    /// Whether the parallel raw PCM appsink branch attached successfully.
+    /// Set inside the lazy audio-pipeline builder when the tap wires up.
+    has_pcm: Arc<AtomicBool>,
+    /// Bounded ring buffer of raw `f32` mono PCM samples at
+    /// `PCM_SAMPLE_RATE`. Drained with `pop_pcm_samples` — oldest samples
+    /// drop when the buffer fills.
+    pcm_samples: Arc<Mutex<VecDeque<f32>>>,
 }
 
 impl VideoTextureManager {
@@ -192,6 +274,13 @@ impl VideoTextureManager {
         let spectrum_data = Arc::new(Mutex::new(SpectrumData::default()));
         let audio_level = Arc::new(Mutex::new(AudioLevel::default()));
 
+        // Raw PCM tap state — captured into the pad-added closure so the
+        // appsink callback can write into it. `has_pcm` flips to true if
+        // the tap successfully attaches when the audio pad arrives.
+        let has_pcm = Arc::new(AtomicBool::new(false));
+        let has_pcm_for_closure = has_pcm.clone();
+        let pcm_samples = Arc::new(Mutex::new(VecDeque::with_capacity(PCM_BUFFER_CAP)));
+        let pcm_samples_for_closure = pcm_samples.clone();
 
         decodebin.connect_pad_added(move |_, pad| {
             let caps = match pad.current_caps() {
@@ -332,29 +421,24 @@ impl VideoTextureManager {
                             }
                         };
 
-                        // Add elements to pipeline
-                        if let Err(e) = pad
+                        // Optional raw PCM tap. The tap lives on a parallel
+                        // branch of a tee after audioresample so the analyzer
+                        // chain and playback stay unchanged. If any of the
+                        // tap elements fail to build, we silently skip the
+                        // tap (audio playback / analysis still works) — only
+                        // the consumer-facing `has_pcm()` reports false.
+                        let pcm_branch = build_pcm_branch();
+
+                        let parent_pipeline = pad
                             .parent_element()
                             .unwrap()
                             .parent()
                             .unwrap()
                             .downcast_ref::<gst::Pipeline>()
                             .unwrap()
-                            .add_many([
-                                &audioconvert,
-                                &audioresample,
-                                &level,
-                                &bpmdetect,
-                                &spectrum,
-                                &volume,
-                                &audio_sink,
-                            ])
-                        {
-                            warn!("Failed to add audio elements: {e:?}");
-                            return;
-                        }
-                        // Link audio elements
-                        if let Err(e) = gst::Element::link_many([
+                            .clone();
+
+                        let analyzer_chain: &[&gst::Element] = &[
                             &audioconvert,
                             &audioresample,
                             &level,
@@ -362,9 +446,125 @@ impl VideoTextureManager {
                             &spectrum,
                             &volume,
                             &audio_sink,
-                        ]) {
-                            warn!("Failed to link audio elements: {e:?}");
+                        ];
+                        if let Err(e) = parent_pipeline.add_many(analyzer_chain) {
+                            warn!("Failed to add audio elements: {e:?}");
                             return;
+                        }
+
+                        let mut pcm_attached = false;
+                        if let Some(branch) = &pcm_branch {
+                            // Wire the appsink callback to the shared ring buffer.
+                            let pcm_buffer = pcm_samples_for_closure.clone();
+                            branch.appsink.set_callbacks(
+                                gst_app::AppSinkCallbacks::builder()
+                                    .new_sample(move |sink| {
+                                        let sample = sink
+                                            .pull_sample()
+                                            .map_err(|_| gst::FlowError::Eos)?;
+                                        let buffer = sample
+                                            .buffer()
+                                            .ok_or(gst::FlowError::Error)?;
+                                        let map = buffer
+                                            .map_readable()
+                                            .map_err(|_| gst::FlowError::Error)?;
+                                        let bytes = map.as_slice();
+                                        let samples: &[f32] =
+                                            bytemuck::cast_slice(bytes);
+                                        if let Ok(mut q) = pcm_buffer.lock() {
+                                            for &s in samples {
+                                                if q.len() >= PCM_BUFFER_CAP {
+                                                    q.pop_front();
+                                                }
+                                                q.push_back(s);
+                                            }
+                                        }
+                                        Ok(gst::FlowSuccess::Ok)
+                                    })
+                                    .build(),
+                            );
+
+                            // Add tap elements to the pipeline. Failure here
+                            // shouldn't kill the analyzer chain — drop the
+                            // tap and continue with the plain linear link.
+                            let add_ok = parent_pipeline
+                                .add_many([
+                                    &branch.tee,
+                                    &branch.queue_main,
+                                    &branch.queue_pcm,
+                                    &branch.audioconvert2,
+                                    &branch.audioresample2,
+                                    &branch.caps_filter,
+                                    branch.appsink.upcast_ref::<gst::Element>(),
+                                ])
+                                .is_ok();
+                            if add_ok {
+                                // Link audioconvert → audioresample → tee →
+                                //   queue_main → level → bpmdetect → spectrum → volume → audio_sink
+                                //   queue_pcm  → audioconvert2 → audioresample2 → caps → appsink
+                                let upstream_ok = gst::Element::link_many([
+                                    &audioconvert,
+                                    &audioresample,
+                                    &branch.tee,
+                                ])
+                                .is_ok();
+                                let main_ok = gst::Element::link_many([
+                                    &branch.tee,
+                                    &branch.queue_main,
+                                    &level,
+                                    &bpmdetect,
+                                    &spectrum,
+                                    &volume,
+                                    &audio_sink,
+                                ])
+                                .is_ok();
+                                let pcm_ok = gst::Element::link_many([
+                                    &branch.tee,
+                                    &branch.queue_pcm,
+                                    &branch.audioconvert2,
+                                    &branch.audioresample2,
+                                    &branch.caps_filter,
+                                    branch.appsink.upcast_ref::<gst::Element>(),
+                                ])
+                                .is_ok();
+
+                                if upstream_ok && main_ok && pcm_ok {
+                                    let _ = branch.tee.sync_state_with_parent();
+                                    let _ = branch.queue_main.sync_state_with_parent();
+                                    let _ = branch.queue_pcm.sync_state_with_parent();
+                                    let _ = branch.audioconvert2.sync_state_with_parent();
+                                    let _ = branch.audioresample2.sync_state_with_parent();
+                                    let _ = branch.caps_filter.sync_state_with_parent();
+                                    let _ = branch.appsink.sync_state_with_parent();
+                                    pcm_attached = true;
+                                } else {
+                                    warn!(
+                                        "Video: PCM tap link failed (up={upstream_ok} \
+                                         main={main_ok} pcm={pcm_ok}); falling back"
+                                    );
+                                }
+                            } else {
+                                warn!("Video: PCM tap add_many failed; falling back");
+                            }
+                        }
+
+                        if !pcm_attached {
+                            // Fallback path: original linear chain, no PCM tap.
+                            if let Err(e) = gst::Element::link_many([
+                                &audioconvert,
+                                &audioresample,
+                                &level,
+                                &bpmdetect,
+                                &spectrum,
+                                &volume,
+                                &audio_sink,
+                            ]) {
+                                warn!("Failed to link audio elements: {e:?}");
+                                return;
+                            }
+                        } else {
+                            has_pcm_for_closure.store(true, Ordering::Relaxed);
+                            info!("Video: raw PCM tap attached ({PCM_SAMPLE_RATE} Hz mono f32)");
                         }
 
                         // Set elements to PAUSED state
@@ -501,6 +701,8 @@ impl VideoTextureManager {
             audio_level,
             bpm_value: Arc::new(Mutex::new(0.0)),
             has_video: has_video.clone(),
+            has_pcm,
+            pcm_samples,
         };
         // Start pipeline in paused state to get video info
         if video_texture
@@ -1115,6 +1317,37 @@ impl VideoTextureManager {
             Err(_) => AudioLevel::default(),
         }
     }
+
+    /// Whether the raw PCM tap is delivering samples. False if the media
+    /// has no audio track or the appsink branch failed to attach — spectrum
+    /// and level may still be working in either case.
+    pub fn has_pcm(&self) -> bool {
+        self.has_pcm.load(Ordering::Relaxed)
+    }
+
+    /// Source sample rate of the raw PCM samples (44.1kHz). Consumers that
+    /// need a different rate should resample on their side.
+    pub fn pcm_sample_rate(&self) -> u32 {
+        PCM_SAMPLE_RATE
+    }
+
+    /// Number of raw PCM samples currently buffered. Useful when you need
+    /// to wait for a full chunk before processing.
+    pub fn pcm_available(&self) -> usize {
+        self.pcm_samples.lock().map(|q| q.len()).unwrap_or(0)
+    }
+
+    /// Drain up to `count` raw PCM samples in FIFO order. Returns fewer
+    /// than `count` (possibly zero) when the buffer is short. Samples are
+    /// mono `f32` in `[-1.0, 1.0]` at `pcm_sample_rate()`.
+    pub fn pop_pcm_samples(&mut self, count: usize) -> Vec<f32> {
+        let Ok(mut q) = self.pcm_samples.lock() else {
+            return Vec::new();
+        };
+        let n = count.min(q.len());
+        q.drain(..n).collect()
+    }
+
     pub fn get_bpm(&self) -> f32 {
         if !self.has_audio {
             return 0.0;

@@ -6,9 +6,19 @@ use gstreamer as gst;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
 use log::{debug, info, warn};
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use wgpu;
+
+/// Cap raw PCM buffer at ~10 seconds of 44.1kHz mono so memory stays bounded
+/// if the consumer is slow or absent. Oldest samples drop first.
+const PCM_BUFFER_CAP: usize = 44100 * 10;
+
+/// Pipeline sample rate for the raw PCM tap. Consumers that need a different
+/// rate should resample on their side — the engine ships raw samples at the
+/// source rate without making assumptions about the destination format.
+const PCM_SAMPLE_RATE: u32 = 44100;
 
 /// Manages a webcam texture that can be updated frame by frame. My approach is actually same for src/gst/video.rs
 pub struct WebcamTextureManager {
@@ -39,6 +49,12 @@ pub struct WebcamTextureManager {
     spectrum_data: Arc<Mutex<SpectrumData>>,
     /// Audio level (RMS/peak) from the mic input.
     audio_level: Arc<Mutex<AudioLevel>>,
+    /// Whether the parallel raw PCM appsink branch attached successfully.
+    has_pcm: bool,
+    /// Bounded ring buffer of raw f32 PCM samples from the mic at
+    /// `PCM_SAMPLE_RATE`. Drain with `pop_pcm_samples` — oldest samples drop
+    /// when the buffer fills (see `PCM_BUFFER_CAP`).
+    pcm_samples: Arc<Mutex<VecDeque<f32>>>,
 }
 
 impl WebcamTextureManager {
@@ -151,11 +167,14 @@ impl WebcamTextureManager {
         ])
         .map_err(|_| anyhow!("Failed to link webcam elements"))?;
 
-        // Audio branch: microphone → audioconvert → audioresample → 44.1kHz caps
-        // → spectrum (FFT) → level (RMS/peak) → fakesink. Posts spectrum and
-        // level messages on the bus identical to gst/video.rs so RenderKit's
-        // audio spectrum path treats webcam mic and video audio uniformly.
-        let has_audio = Self::try_attach_audio_branch(&pipeline);
+        // Audio branch: microphone → audioconvert → audioresample → 44.1kHz
+        // F32LE caps → tee → [spectrum/level → fakesink, raw PCM → appsink].
+        // The spectrum branch posts FFT magnitude/level messages on the bus
+        // for the shader-side audio path. The PCM branch fills a bounded
+        // ring buffer so consumers have the raw time-domain waveform
+        // available alongside the FFT.
+        let pcm_samples = Arc::new(Mutex::new(VecDeque::with_capacity(PCM_BUFFER_CAP)));
+        let (has_audio, has_pcm) = Self::try_attach_audio_branch(&pipeline, pcm_samples.clone());
 
         // Create shared state
         let current_frame = Arc::new(Mutex::new(None));
@@ -239,6 +258,8 @@ impl WebcamTextureManager {
             has_audio,
             spectrum_data: Arc::new(Mutex::new(SpectrumData::default())),
             audio_level: Arc::new(Mutex::new(AudioLevel::default())),
+            has_pcm,
+            pcm_samples,
         };
 
         info!("Webcam texture manager created successfully");
@@ -385,11 +406,50 @@ impl WebcamTextureManager {
         0.0
     }
 
-    /// mic → spectrum + level → fakesink
-    /// if fail:
-    /// (no mic, missing element, permission denied) leave video working
-    /// and just skip audio rather than aborting can aboty
-    fn try_attach_audio_branch(pipeline: &gst::Pipeline) -> bool {
+    /// Whether the raw PCM tap is delivering samples. False if the appsink
+    /// branch failed to attach (missing GStreamer plugin, format negotiation
+    /// failure, etc.) — spectrum/level may still be working in that case.
+    pub fn has_pcm(&self) -> bool {
+        self.has_pcm
+    }
+
+    /// Source sample rate of the raw PCM samples (44.1kHz at present).
+    /// Consumers requiring a different rate should resample on their side.
+    pub fn pcm_sample_rate(&self) -> u32 {
+        PCM_SAMPLE_RATE
+    }
+
+    /// Number of raw PCM samples currently buffered. Useful when you need
+    /// to wait for a full chunk before processing.
+    pub fn pcm_available(&self) -> usize {
+        self.pcm_samples.lock().map(|q| q.len()).unwrap_or(0)
+    }
+
+    /// Drain up to `count` raw PCM samples from the ring buffer in FIFO
+    /// order. Returns fewer than `count` (possibly zero) when the buffer
+    /// is short. The samples are mono `f32` in `[-1.0, 1.0]` at the rate
+    /// reported by `pcm_sample_rate`.
+    pub fn pop_pcm_samples(&mut self, count: usize) -> Vec<f32> {
+        let Ok(mut q) = self.pcm_samples.lock() else {
+            return Vec::new();
+        };
+        let n = count.min(q.len());
+        q.drain(..n).collect()
+    }
+
+    /// Build the audio branch:
+    ///   mic → audioconvert → audioresample → F32LE/44.1kHz/mono caps → tee
+    ///     ├── queue → spectrum (FFT) → level (RMS/peak) → fakesink
+    ///     └── queue → appsink (raw PCM into `pcm_samples`)
+    ///
+    /// Returns `(has_audio, has_pcm)`. If the mic itself can't open, both are
+    /// false and the webcam stays video-only. If the spectrum chain works but
+    /// the PCM tap fails, `has_audio=true, has_pcm=false` — degrading
+    /// gracefully rather than aborting.
+    fn try_attach_audio_branch(
+        pipeline: &gst::Pipeline,
+        pcm_samples: Arc<Mutex<VecDeque<f32>>>,
+    ) -> (bool, bool) {
         // Platform-specific microphone source.
         #[cfg(target_os = "linux")]
         let mic_factory = "pulsesrc";
@@ -402,7 +462,7 @@ impl WebcamTextureManager {
             Ok(e) => e,
             Err(_) => {
                 warn!("Webcam: no microphone source available ({mic_factory}); audio disabled");
-                return false;
+                return (false, false);
             }
         };
 
@@ -410,29 +470,49 @@ impl WebcamTextureManager {
             Ok(e) => e,
             Err(_) => {
                 warn!("Webcam: failed to create audioconvert; audio disabled");
-                return false;
+                return (false, false);
             }
         };
         let audioresample = match gst::ElementFactory::make("audioresample").build() {
             Ok(e) => e,
             Err(_) => {
                 warn!("Webcam: failed to create audioresample; audio disabled");
-                return false;
+                return (false, false);
             }
         };
         let audio_caps_filter = match gst::ElementFactory::make("capsfilter").build() {
             Ok(e) => e,
             Err(_) => {
                 warn!("Webcam: failed to create audio capsfilter; audio disabled");
-                return false;
+                return (false, false);
             }
         };
+        // F32LE upstream so the spectrum/level branch and the PCM appsink can
+        // share one conversion. spectrum accepts F32LE; the appsink reads it
+        // directly as `&[f32]`.
         let audio_caps = gst::Caps::builder("audio/x-raw")
-            .field("rate", 44100i32)
+            .field("format", "F32LE")
+            .field("rate", PCM_SAMPLE_RATE as i32)
             .field("channels", 1i32)
             .build();
         audio_caps_filter.set_property("caps", &audio_caps);
 
+        let tee = match gst::ElementFactory::make("tee").name("webcam_audio_tee").build() {
+            Ok(e) => e,
+            Err(_) => {
+                warn!("Webcam: failed to create tee; audio disabled");
+                return (false, false);
+            }
+        };
+
+        // Spectrum/level branch.
+        let queue_spec = match gst::ElementFactory::make("queue").name("webcam_q_spec").build() {
+            Ok(e) => e,
+            Err(_) => {
+                warn!("Webcam: failed to create spectrum queue; audio disabled");
+                return (false, false);
+            }
+        };
         let spectrum = match gst::ElementFactory::make("spectrum")
             .name("webcam_spectrum")
             .property("bands", 128u32)
@@ -446,10 +526,9 @@ impl WebcamTextureManager {
             Ok(e) => e,
             Err(_) => {
                 warn!("Webcam: failed to create spectrum element; audio disabled");
-                return false;
+                return (false, false);
             }
         };
-
         let level = match gst::ElementFactory::make("level")
             .name("webcam_level")
             .property("interval", 50000000u64)
@@ -460,10 +539,9 @@ impl WebcamTextureManager {
             Ok(e) => e,
             Err(_) => {
                 warn!("Webcam: failed to create level element; audio disabled");
-                return false;
+                return (false, false);
             }
         };
-
         let audio_sink = match gst::ElementFactory::make("fakesink")
             .name("webcam_audio_sink")
             .property("sync", false)
@@ -473,7 +551,7 @@ impl WebcamTextureManager {
             Ok(e) => e,
             Err(_) => {
                 warn!("Webcam: failed to create fakesink; audio disabled");
-                return false;
+                return (false, false);
             }
         };
 
@@ -483,6 +561,8 @@ impl WebcamTextureManager {
                 &audioconvert,
                 &audioresample,
                 &audio_caps_filter,
+                &tee,
+                &queue_spec,
                 &spectrum,
                 &level,
                 &audio_sink,
@@ -490,7 +570,7 @@ impl WebcamTextureManager {
             .is_err()
         {
             warn!("Webcam: failed to add audio elements to pipeline; audio disabled");
-            return false;
+            return (false, false);
         }
 
         if gst::Element::link_many([
@@ -498,18 +578,98 @@ impl WebcamTextureManager {
             &audioconvert,
             &audioresample,
             &audio_caps_filter,
-            &spectrum,
-            &level,
-            &audio_sink,
+            &tee,
         ])
         .is_err()
         {
-            warn!("Webcam: failed to link audio chain; audio disabled");
-            return false;
+            warn!("Webcam: failed to link mic chain; audio disabled");
+            return (false, false);
+        }
+        if gst::Element::link_many([&tee, &queue_spec, &spectrum, &level, &audio_sink]).is_err() {
+            warn!("Webcam: failed to link spectrum branch; audio disabled");
+            return (false, false);
         }
 
         info!("Webcam: microphone audio branch attached ({mic_factory})");
-        true
+
+        // Raw PCM appsink branch. Failures here degrade to has_pcm=false ──
+        // but leave the spectrum branch running.
+        let queue_pcm = match gst::ElementFactory::make("queue").name("webcam_q_pcm").build() {
+            Ok(e) => e,
+            Err(_) => {
+                warn!("Webcam: failed to create PCM queue; raw PCM disabled");
+                return (true, false);
+            }
+        };
+        let pcm_sink = match gst::ElementFactory::make("appsink")
+            .name("webcam_pcm_sink")
+            .build()
+        {
+            Ok(e) => e,
+            Err(_) => {
+                warn!("Webcam: failed to create PCM appsink; raw PCM disabled");
+                return (true, false);
+            }
+        };
+        let pcm_appsink = match pcm_sink.dynamic_cast::<gst_app::AppSink>() {
+            Ok(a) => a,
+            Err(_) => {
+                warn!("Webcam: failed to cast PCM sink; raw PCM disabled");
+                return (true, false);
+            }
+        };
+        pcm_appsink.set_caps(Some(
+            &gst::Caps::builder("audio/x-raw")
+                .field("format", "F32LE")
+                .field("rate", PCM_SAMPLE_RATE as i32)
+                .field("channels", 1i32)
+                .build(),
+        ));
+        pcm_appsink.set_max_buffers(8);
+        pcm_appsink.set_drop(true);
+        pcm_appsink.set_sync(false);
+
+        let pcm_buffer = pcm_samples.clone();
+        pcm_appsink.set_callbacks(
+            gst_app::AppSinkCallbacks::builder()
+                .new_sample(move |sink| {
+                    let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                    let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+                    let bytes = map.as_slice();
+                    // F32LE little-endian on all supported targets (x86_64,
+                    // aarch64) — direct cast is safe.
+                    let samples: &[f32] = bytemuck::cast_slice(bytes);
+                    if let Ok(mut q) = pcm_buffer.lock() {
+                        for &s in samples {
+                            if q.len() >= PCM_BUFFER_CAP {
+                                q.pop_front();
+                            }
+                            q.push_back(s);
+                        }
+                    }
+                    Ok(gst::FlowSuccess::Ok)
+                })
+                .build(),
+        );
+
+        if pipeline.add(&pcm_appsink).is_err() {
+            warn!("Webcam: failed to add PCM appsink; raw PCM disabled");
+            return (true, false);
+        }
+        if pipeline.add(&queue_pcm).is_err() {
+            warn!("Webcam: failed to add PCM queue; raw PCM disabled");
+            return (true, false);
+        }
+        if gst::Element::link_many([&tee, &queue_pcm, pcm_appsink.upcast_ref::<gst::Element>()])
+            .is_err()
+        {
+            warn!("Webcam: failed to link PCM branch; raw PCM disabled");
+            return (true, false);
+        }
+
+        info!("Webcam: raw PCM tap attached ({PCM_SAMPLE_RATE} Hz mono f32)");
+        (true, true)
     }
 
     /// Poll the GStreamer bus for spectrum/level messages from the webcam's
