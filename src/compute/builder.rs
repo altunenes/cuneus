@@ -228,6 +228,11 @@ impl ComputeShaderBuilder {
     ///
     /// A single `.dispatch()` call runs all passes in order.
     /// Overrides any entry point set by [`with_entry_point`].
+    ///
+    /// **Group 3 is exclusive.** If you also call [`with_storage_buffer`], Group 3
+    /// holds the storage buffer(s) and the multi-pass texture inputs
+    /// (`input_textureN`/`input_samplerN`) are not generated — passes share data
+    /// through the storage buffer instead.
     pub fn with_multi_pass(mut self, passes: &[PassDescription]) -> Self {
         self.config.passes = Some(passes.to_vec());
         self.config.entry_points = passes.iter().map(|p| p.name.clone()).collect();
@@ -313,8 +318,9 @@ impl ComputeShaderBuilder {
 
     /// Add a user-defined storage buffer to Group 3.
     ///
-    /// When used with `.with_multi_pass()`, the passes share these buffers
-    /// instead of using texture ping-pong for Group 3.
+    /// When combined with [`with_multi_pass`], passes share this buffer in place
+    /// of texture ping-pong — `input_textureN`/`input_samplerN` bindings are not
+    /// generated, and inter-pass communication goes through the storage buffer.
     pub fn with_storage_buffer(mut self, buffer: StorageBufferSpec) -> Self {
         self.config.storage_buffers.push(buffer);
         self

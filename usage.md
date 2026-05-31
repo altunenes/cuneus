@@ -53,6 +53,8 @@ The framework elegantly handles two types of multi-pass computation:
 2. **Storage-Buffer-Based (Shared Memory):** Ideal for GPU algorithms like FFT or simulations like CNNs. All passes read from and write to the same large, user-defined storage buffers. This is enabled by using `.with_multi_pass()` *and* `.with_storage_buffer()`.
    - *Examples: `fft.rs`, `cnn.rs`*
 
+**Group 3 holds one mode per shader.** Combining `.with_storage_buffer()` with `.with_multi_pass()` disables the ping-pong texture inputs (`input_textureN`/`input_samplerN`) — passes communicate through the storage buffer instead.
+
 ## Getting Started: Shader Structure
 
 Every shader application follows a similar pattern implementing the `ShaderManager` trait.
