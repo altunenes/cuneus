@@ -369,6 +369,8 @@ Cuneus supports **bidirectional GPU-CPU audio workflows** using two complementar
 - **Shader Access**: `@group(2) var<storage, read> audio_spectrum: array<f32>` (read-only)
 - **Use Case**: Audio visualizers like `audiovis.rs`
 
+**Raw PCM access (host-side):** both `WebcamTextureManager` and `VideoTextureManager` also expose the time-domain waveform via `pop_pcm_samples(n)` — mono `f32` at 44.1kHz in a bounded ring buffer. Use it when you need raw samples instead of FFT magnitudes. Samples stay host-side unless you upload them yourself. Check `has_pcm()` before draining.
+
 **2. Audio Synthesis (`.with_audio()`)** - Generate music on GPU:
 - **Flow**: GPU computes raw PCM samples per-frame → CPU reads back → `PcmStreamManager` streams to audio output
 - **Shader Access**: `@group(2) var<storage, read_write> audio_buffer: array<f32>` (read-write)
