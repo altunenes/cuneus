@@ -29,7 +29,11 @@ cuneus::uniform_params! {
     dye_intensity: f32,
     dye_radius: f32,
     bg_boil: f32,
-    _padding: f32
+    normal_amp: f32,
+    rim_strength: f32,
+    _padding: f32,
+    _padding2: f32,
+    _padding3: f32
 }
 }
 struct FluidShader {
@@ -42,7 +46,7 @@ impl ShaderManager for FluidShader {
         let initial_params = FluidParams {
             viscosity: 0.03,
             gravity: 0.002,
-            pressure_scale: 1.0,
+            pressure_scale: 0.1,
             vortex_strength: 0.18,
             turbulence: 0.0005,
             flow_speed: 2.0,
@@ -52,9 +56,9 @@ impl ShaderManager for FluidShader {
             spec_power: 36.0,
             spec_intensity: 2.0,
             color_vibrancy: 1.3,
-            vortex_radius: 0.006,
+            vortex_radius: 0.001,
             gamma: 1.1,
-            feedback: 0.93,
+            feedback: 0.99,
             vortex_speed: 0.03,
             force_mode: 0.5,
             force_harmony: 0.5,
@@ -67,7 +71,11 @@ impl ShaderManager for FluidShader {
             dye_intensity: 0.8,
             dye_radius: 1.5,
             bg_boil: 0.15,
-            _padding: 0.0
+            normal_amp: 8.0,
+            rim_strength: 2.5,
+            _padding: 0.0,
+            _padding2: 0.0,
+            _padding3: 0.0
         };
 
         let base = RenderKit::new(core);
@@ -146,7 +154,7 @@ impl ShaderManager for FluidShader {
                     .resizable(true)
                     .default_width(300.0)
                     .show(ctx, |ui| {
-                        egui::CollapsingHeader::new("Flow").default_open(true).show(ui, |ui| {
+                        egui::CollapsingHeader::new("Flow").default_open(false).show(ui, |ui| {
                             changed |= ui.add(egui::Slider::new(&mut params.flow_speed, 0.1..=5.0).text("Speed")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.viscosity, 0.0..=1.0).text("Viscosity")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.turbulence, 0.0..=0.01).text("Dissipation")).changed();
@@ -167,10 +175,10 @@ impl ShaderManager for FluidShader {
                             }
                             changed |= ui.add(egui::Slider::new(&mut params.vortex_strength, 0.0..=1.0).text("Confinement")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.force_harmony, 0.0..=2.0).text("Softness")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.vortex_radius, 0.001..=0.05).text("Radius")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.vortex_radius, 0.001..=0.1).text("Radius")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.vortex_speed, 0.005..=0.15).text("Speed")).changed();
                         });
-                        egui::CollapsingHeader::new("Distortion").default_open(true).show(ui, |ui| {
+                        egui::CollapsingHeader::new("Distortion").default_open(false).show(ui, |ui| {
                             changed |= ui.add(egui::Slider::new(&mut params.warp_amount, 0.5..=5.0).text("Warp")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.flow_intensity, 0.5..=5.0).text("Flow Intensity")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.color_advect, 0.0..=3.0).text("Color Advect")).changed();
@@ -186,6 +194,8 @@ impl ShaderManager for FluidShader {
                             changed |= ui.add(egui::Slider::new(&mut params.light_intensity, 0.3..=3.0).text("Light")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.spec_power, 4.0..=128.0).text("Spec Sharpness")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.spec_intensity, 0.0..=5.0).text("Spec Intensity")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.normal_amp, 0.5..=16.0).text("Relief")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.rim_strength, 0.0..=5.0).text("Rim")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.color_vibrancy, 0.5..=2.5).text("Saturation")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.contrast, 0.0..=0.8).text("Contrast")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.gamma, 0.5..=2.5).text("Gamma")).changed();

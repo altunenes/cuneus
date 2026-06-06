@@ -34,7 +34,11 @@ struct FluidParams {
     dye_intensity: f32,
     dye_radius: f32,
     bg_boil: f32,
+    normal_amp: f32,
+    rim_strength: f32,
     _padding: f32,
+    _padding2: f32,
+    _padding3: f32,
 };
 
 @group(1) @binding(0) var output: texture_storage_2d<rgba16float, write>;
@@ -447,8 +451,8 @@ fn color_map(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(output, id.xy, Q);
 }
 
-// 
-// Pass 6: main_image (gradient lighting + compositing)
+//
+// Pass 6: main_image (height field shading + compositing)
 // Reads: s0 = color_map
 //        s1 = project (.xy = velocity, .z = curl, .w = pressure)
 @compute @workgroup_size(16, 16, 1)
@@ -457,71 +461,60 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x >= dims.x || id.y >= dims.y) { return; }
     let R = vec2<f32>(dims);
     let U = vec2<f32>(id.xy);
+    let uv = U / R;
     let luma_w = vec3<f32>(0.299, 0.587, 0.114);
 
     let base = s0(U);
     let fluid = s1(U);
 
-    // Surface normals from lum grads 
-    let cn = dot(s0(U + vec2<f32>(0.0, 1.0)).rgb, luma_w);
-    let cs = dot(s0(U - vec2<f32>(0.0, 1.0)).rgb, luma_w);
-    let ce = dot(s0(U + vec2<f32>(1.0, 0.0)).rgb, luma_w);
-    let cw = dot(s0(U - vec2<f32>(1.0, 0.0)).rgb, luma_w);
-    let fine = vec2<f32>(ce - cw, cn - cs);
+    // Height field = local luminance + pressure
+    let pN = s1(clamp(U + vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0)).w;
+    let pS = s1(clamp(U - vec2<f32>(0.0, 1.0), vec2<f32>(0.0), R - 1.0)).w;
+    let pE = s1(clamp(U + vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0)).w;
+    let pW = s1(clamp(U - vec2<f32>(1.0, 0.0), vec2<f32>(0.0), R - 1.0)).w;
 
-    // Coarse scale
-    let cn3 = dot(s0(U + vec2<f32>(0.0, 3.0)).rgb, luma_w);
-    let cs3 = dot(s0(U - vec2<f32>(0.0, 3.0)).rgb, luma_w);
-    let ce3 = dot(s0(U + vec2<f32>(3.0, 0.0)).rgb, luma_w);
-    let cw3 = dot(s0(U - vec2<f32>(3.0, 0.0)).rgb, luma_w);
-    let coarse = vec2<f32>(ce3 - cw3, cn3 - cs3) / 3.0;
+    let hN = dot(s0(U + vec2<f32>(0.0, 1.0)).rgb, luma_w) + pN * 0.5;
+    let hS = dot(s0(U - vec2<f32>(0.0, 1.0)).rgb, luma_w) + pS * 0.5;
+    let hE = dot(s0(U + vec2<f32>(1.0, 0.0)).rgb, luma_w) + pE * 0.5;
+    let hW = dot(s0(U - vec2<f32>(1.0, 0.0)).rgb, luma_w) + pW * 0.5;
 
-    // Pressure height-field
-    let pN = s1(clamp(U + vec2<f32>(0.0, 2.0), vec2<f32>(0.0), R - 1.0)).w;
-    let pS = s1(clamp(U - vec2<f32>(0.0, 2.0), vec2<f32>(0.0), R - 1.0)).w;
-    let pE = s1(clamp(U + vec2<f32>(2.0, 0.0), vec2<f32>(0.0), R - 1.0)).w;
-    let pW = s1(clamp(U - vec2<f32>(2.0, 0.0), vec2<f32>(0.0), R - 1.0)).w;
-    let pressure_grad = vec2<f32>(pE - pW, pN - pS) * 0.5;
+    let dx = hE - hW;
+    let dy = hN - hS;
 
-    let color_grad = mix(coarse, fine, smoothstep(0.0, 0.02, length(fine)));
-    let grad = color_grad + pressure_grad * 0.6;
+    let amp = smoothstep(0.0, 0.3, sqrt(dx * dx + dy * dy)) * params.normal_amp;
+    let nor = normalize(vec3<f32>(-dx * amp, -dy * amp, 1.0));
 
-    let z = mix(0.2, 0.6, smoothstep(0.0, 0.05, length(grad)));
-    let normal = normalize(vec3<f32>(grad, z));
-
-    // Two-light setup
+    // Three-light setup
     let t = time_data.time;
-    let key_dir = normalize(vec3<f32>(
-        3.0 + 0.3 * sin(t * 0.3),
-        3.0 + 0.3 * cos(t * 0.25),
-        2.5
-    ));
-    let fill_dir = normalize(vec3<f32>(
-        -2.0 + 0.2 * cos(t * 0.2),
-        -1.5,
-        2.0
-    ));
+    let l1 = normalize(vec3<f32>(0.6 + 0.15 * sin(t * 0.3), 0.5, 1.0));
+    let l2 = normalize(vec3<f32>(-0.7, -0.4 + 0.15 * cos(t * 0.25), 0.8));
+    let l3 = normalize(vec3<f32>(0.0, 0.8, 0.2));
+    let vd = normalize(vec3<f32>(0.5 - uv.x, 0.5 - uv.y, 1.0));
 
-    let NdotL_key = max(dot(normal, key_dir), 0.0);
-    let NdotL_fill = max(dot(normal, fill_dir), 0.0);
+    let df = max(dot(nor, l1), 0.0)
+           + max(dot(nor, l2), 0.0) * 0.5
+           + max(dot(nor, l3), 0.0) * 0.3;
 
-    // Wrap diffuse
-    let ambient = 0.25;
-    let diff_key = NdotL_key * 0.65;
-    let diff_fill = NdotL_fill * 0.25;
-    let diffuse = ambient + diff_key + diff_fill;
+    let h1d = normalize(l1 + vd);
+    let h2d = normalize(l2 + vd);
+    let nh1 = max(dot(nor, h1d), 0.0);
+    let nh2 = max(dot(nor, h2d), 0.0);
+    let tS = (pow(nh1, max(params.spec_power, 1.0))
+            + pow(nh1, max(params.spec_power * 0.25, 1.0)) * 0.1
+            + pow(nh2, max(params.spec_power * 0.5, 1.0)) * 0.1) * params.spec_intensity;
 
-    // GGX specular
-    let V = vec3<f32>(0.0, 0.0, 1.0);
-    let H = normalize(key_dir + V);
-    let NdotH = max(dot(normal, H), 0.0);
-    let roughness = 1.0 / max(params.spec_power * 0.5, 1.0);
-    let a2 = roughness * roughness;
-    let denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
-    let D = a2 / (3.14159 * denom * denom + 1e-6);
-    let spec = D * params.spec_intensity * 0.08 * NdotL_key;
 
-    var col = base.rgb * diffuse * params.light_intensity + vec3<f32>(spec);
+    let lum_here = dot(base.rgb, luma_w);
+    let lum_wide = (dot(s0(U + vec2<f32>(0.0, 3.0)).rgb, luma_w)
+                  + dot(s0(U - vec2<f32>(0.0, 3.0)).rgb, luma_w)
+                  + dot(s0(U + vec2<f32>(3.0, 0.0)).rgb, luma_w)
+                  + dot(s0(U - vec2<f32>(3.0, 0.0)).rgb, luma_w)) * 0.25;
+    let ao = clamp(0.1 + 0.9 * (lum_here / (lum_wide + 0.01)), 0.0, 1.0);
+
+    var col = base.rgb * (df * 0.4 + 0.3) * params.light_intensity * ao;
+    col += vec3<f32>(1.0, 0.98, 0.95) * tS * .1 * ao;
+
+    col += base.rgb * pow(1.0 - max(dot(nor, vd), 0.0), 3.0) * params.rim_strength * ao;
 
     let vel_mag = length(fluid.xy);
     let curl_mag = abs(fluid.z);
