@@ -1,5 +1,5 @@
-use cuneus::prelude::ComputeShader;
-use cuneus::{Core, ExportManager, RenderKit, ShaderApp, ShaderControls, ShaderManager};
+use cuneus::prelude::*;
+use cuneus::compute::{ComputeShader, PassDescription};
 use cuneus::WindowEvent;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 
@@ -23,6 +23,30 @@ cuneus::uniform_params! {
         trap_s1: f32,
         wave_speed: f32,
         fold_intensity: f32,
+        lightdir_x: f32,
+        lightdir_y: f32,
+        spec_pow: f32,
+        spec_str: f32,
+        rim_str: f32,
+        ao_str: f32,
+        height_scale: f32,
+        light_r: f32,
+        light_g: f32,
+        light_b: f32,
+        ridge_amp: f32,
+        ridge_freq: f32,
+        _pad2: f32,
+        plateau_height: f32,
+        shadow_str: f32,
+        shadow_dist: f32,
+        bounce_str: f32,
+        roughness: f32,
+        metallic: f32,
+        reflection: f32,
+        rim_r: f32,
+        rim_g: f32,
+        rim_b: f32,
+        _pad1: f32,
     }
 }
 
@@ -35,24 +59,32 @@ struct Shader {
     zoom_level: f32,
     current_params: ShaderParams,
 }
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
-    let (app, event_loop) = ShaderApp::new("orbits", 800, 600);
+    let (app, event_loop) = ShaderApp::new("GGXbrot", 800, 600);
     app.run(event_loop, Shader::init)
 }
+
 impl ShaderManager for Shader {
     fn init(core: &Core) -> Self {
         let initial_zoom = 0.0004;
-        let initial_x = 2.14278;
-        let initial_y = 2.14278;
+        let initial_x = 1.8284;
+        let initial_y = 3.213;
 
-        // Create texture display layout
         let base = RenderKit::new(core);
 
+        let passes = vec![
+            PassDescription::new("compute_fractal", &[]),
+            PassDescription::new("prep", &["compute_fractal"]),
+            PassDescription::new("main_image", &["prep", "compute_fractal"]),
+        ];
+
         let config = ComputeShader::builder()
-            .with_entry_point("main")
+            .with_multi_pass(&passes)
             .with_custom_uniforms::<ShaderParams>()
             .with_mouse()
+            .with_label("Orbits 3D")
             .build();
 
         let compute_shader = cuneus::compute_shader!(core, "shaders/orbits.wgsl", config);
@@ -63,7 +95,7 @@ impl ShaderManager for Shader {
             rim_color: [0.0, 0.5, 1.0],
             y: initial_y,
             accent_color: [0.018, 0.018, 0.018],
-            gamma_correction: 0.4,
+            gamma_correction: 0.6,
             travel_speed: 1.0,
             iteration: 355,
             col_ext: 2.0,
@@ -76,6 +108,30 @@ impl ShaderManager for Shader {
             trap_s1: 0.8,
             wave_speed: 0.1,
             fold_intensity: 1.0,
+            lightdir_x: -0.25,
+            lightdir_y: -0.2,
+            spec_pow: 48.0,
+            spec_str: 8.0,
+            rim_str: 0.3,
+            ao_str: 0.36,
+            height_scale: 0.1,
+            light_r: 1.0,
+            light_g: 0.5,
+            light_b: 0.0,
+            ridge_amp: 0.5,
+            ridge_freq: 1.8,
+            _pad2: 0.0,
+            plateau_height: 5.0,
+            shadow_str: 5.5,
+            shadow_dist: 2.7,
+            bounce_str: 1.3,
+            roughness: 0.2,
+            metallic: 0.0,
+            reflection: 1.47,
+            rim_r: 0.8,
+            rim_g: 0.9,
+            rim_b: 1.0,
+            _pad1: 0.0,
         };
 
         compute_shader.set_custom_params(initial_params, &core.queue);
@@ -92,7 +148,6 @@ impl ShaderManager for Shader {
     }
 
     fn update(&mut self, core: &Core) {
-        // Handle export
         self.compute_shader.handle_export(core, &mut self.base);
     }
 
@@ -112,155 +167,116 @@ impl ShaderManager for Shader {
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
                 RenderKit::apply_default_style(ctx);
-                egui::Window::new("Orbits")
+                egui::Window::new("GGXbrot")
                     .collapsible(true)
                     .resizable(true)
-                    .default_width(280.0)
+                    .default_width(320.0)
                     .show(ctx, |ui| {
-                        egui::CollapsingHeader::new("Colors")
+                        egui::CollapsingHeader::new("Lights")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Light Color:");
+                                    let mut color = [params.light_r, params.light_g, params.light_b];
+                                    if ui.color_edit_button_rgb(&mut color).changed() {
+                                        params.light_r = color[0];
+                                        params.light_g = color[1];
+                                        params.light_b = color[2];
+                                        changed = true;
+                                    }
+                                });
+                                changed |= ui.add(egui::Slider::new(&mut params.lightdir_x, -1.0..=1.0).text("Light Dir X")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.lightdir_y, -1.0..=1.0).text("Light Dir Y")).changed();
+
+                                ui.separator();
+                                ui.label("FX");
+                                changed |= ui.add(egui::Slider::new(&mut params.shadow_str, 0.0..=10.0).text("Shadow Strength")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.shadow_dist, 0.1..=5.0).text("Shadow Length")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.bounce_str, 0.0..=3.0).text("Subsurface Bounce")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.ao_str, 0.0..=1.0).text("Ambient Occlusion")).changed();
+
+                                ui.separator();
+                                ui.label("mats");
+                                changed |= ui.add(egui::Slider::new(&mut params.spec_str, 0.0..=8.0).text("Spec Intensity")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.rim_str, 0.0..=3.0).text("back light")).changed();
+                                ui.horizontal(|ui| {
+                                    ui.label("Rim Color:");
+                                    let mut rc = [params.rim_r, params.rim_g, params.rim_b];
+                                    if ui.color_edit_button_rgb(&mut rc).changed() {
+                                        params.rim_r = rc[0];
+                                        params.rim_g = rc[1];
+                                        params.rim_b = rc[2];
+                                        changed = true;
+                                    }
+                                });
+                            });
+
+                        egui::CollapsingHeader::new("Metal")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                changed |= ui.add(egui::Slider::new(&mut params.metallic, 0.0..=1.0).text("Metallic")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.roughness, 0.04..=1.0).text("Roughness")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.reflection, 0.0..=2.0).text("Env Reflection")).changed();
+                            });
+
+                        egui::CollapsingHeader::new("3D Topography")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                changed |= ui.add(egui::Slider::new(&mut params.plateau_height, 5.0..=10.0).text("Thickness")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.ridge_amp, 0.0..=0.5).text("Ridge Amplitude")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.ridge_freq, 0.1..=10.0).text("Ridge Frequency")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.height_scale, 0.1..=10.0).text("Global Relief Mult")).changed();
+                            });
+
+                        egui::CollapsingHeader::new("Cols")
                             .default_open(false)
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label("Base:");
-                                    changed |=
-                                        ui.color_edit_button_rgb(&mut params.base_color).changed();
+                                    changed |= ui.color_edit_button_rgb(&mut params.base_color).changed();
                                 });
-                                ui.horizontal(|ui| {
-                                    ui.label("Orbit:");
-                                    changed |=
-                                        ui.color_edit_button_rgb(&mut params.rim_color).changed();
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Exterior:");
-                                    changed |= ui
-                                        .color_edit_button_rgb(&mut params.accent_color)
-                                        .changed();
-                                });
+                                changed |= ui.add(egui::Slider::new(&mut params.col_ext, 0.0..=10.0).text("Color Extension")).changed();
                             });
 
-                        egui::CollapsingHeader::new("Rendering")
+                        egui::CollapsingHeader::new("render")
                             .default_open(false)
                             .show(ui, |ui| {
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.iteration, 50..=500)
-                                            .text("Iterations"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.aa, 1..=4)
-                                            .text("Anti-aliasing"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.gamma_correction, 0.1..=2.0)
-                                            .text("Gamma"),
-                                    )
-                                    .changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.iteration, 50..=1000).text("Iterations")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.aa, 1..=4).text("Anti-aliasing")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.gamma_correction, 0.1..=3.0).text("Gamma")).changed();
                             });
 
-                        egui::CollapsingHeader::new("Traps")
+                        egui::CollapsingHeader::new("traps")
                             .default_open(false)
                             .show(ui, |ui| {
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.trap_x, -5.0..=5.0)
-                                            .text("Trap X"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.trap_y, -5.0..=5.0)
-                                            .text("Trap Y"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.trap_pow, 0.0..=3.0)
-                                            .text("Trap Power"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.trap_c1, 0.0..=1.0)
-                                            .text("Trap Mix"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.trap_s1, 0.0..=2.0)
-                                            .text("Trap Blend"),
-                                    )
-                                    .changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.trap_x, -5.0..=5.0).text("Trap X")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.trap_y, -5.0..=5.0).text("Trap Y")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.trap_pow, 0.0..=3.0).text("Trap Power")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.trap_c1, 0.0..=1.0).text("Trap Mix")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.trap_s1, 0.0..=2.0).text("Trap Blend")).changed();
                             });
 
-                        egui::CollapsingHeader::new("Animation")
+                        egui::CollapsingHeader::new("Nav")
                             .default_open(false)
                             .show(ui, |ui| {
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.travel_speed, 0.0..=2.0)
-                                            .text("Travel Speed"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.wave_speed, 0.0..=2.0)
-                                            .text("Wave Speed"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.fold_intensity, 0.0..=3.0)
-                                            .text("Fold Intensity"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.col_ext, 0.0..=10.0)
-                                            .text("Color Extension"),
-                                    )
-                                    .changed();
-                            });
+                                changed |= ui.add(egui::Slider::new(&mut params.travel_speed, 0.0..=2.0).text("Travel Speed")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.wave_speed, 0.0..=2.0).text("Wave Speed")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.fold_intensity, 0.0..=3.0).text("Fold Intensity")).changed();
 
-                        egui::CollapsingHeader::new("Navigation")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                ui.label("Left-click + drag: Pan view");
-                                ui.label("Mouse wheel: Zoom");
                                 ui.separator();
                                 let old_zoom = params.zoom;
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.zoom, 0.0001..=1.0)
-                                            .text("Zoom")
-                                            .logarithmic(true),
-                                    )
-                                    .changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.zoom, 0.0001..=1.0).text("Zoom").logarithmic(true)).changed();
                                 if old_zoom != params.zoom {
                                     self.zoom_level = params.zoom;
                                 }
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.x, 0.0..=3.0)
-                                            .text("X Position"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.y, 0.0..=6.0)
-                                            .text("Y Position"),
-                                    )
-                                    .changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.x, 0.0..=3.0).text("X Position")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.y, 0.0..=6.0).text("Y Position")).changed();
                             });
 
                         ui.separator();
                         ShaderControls::render_controls_widget(ui, &mut controls_request);
                         ui.separator();
-                        should_start_export =
-                            ExportManager::render_export_ui_widget(ui, &mut export_request);
+                        should_start_export = ExportManager::render_export_ui_widget(ui, &mut export_request);
                     });
             })
         } else {
@@ -279,30 +295,23 @@ impl ShaderManager for Shader {
             self.base.export_manager.start_export();
         }
 
-        // Create command encoder
-
-        // Update time uniform
         let current_time = self.base.controls.get_time(&self.base.start_time);
         let delta_time = 1.0 / 60.0;
-        self.compute_shader
-            .set_time(current_time, delta_time, &core.queue);
+        self.compute_shader.set_time(current_time, delta_time, &core.queue);
+        self.compute_shader.update_mouse_uniform(&self.base.mouse_tracker.uniform, &core.queue);
 
-        // Update mouse uniform
-        self.compute_shader
-            .update_mouse_uniform(&self.base.mouse_tracker.uniform, &core.queue);
-
-        // Dispatch compute shader
         self.compute_shader.dispatch(&mut frame.encoder, core);
 
         self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
-
         self.base.end_frame(core, frame, full_output);
 
         Ok(())
     }
+
     fn resize(&mut self, core: &Core) {
         self.base.default_resize(core, &mut self.compute_shader);
     }
+
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
         if self.base.default_handle_input(core, event) {
             return true;
@@ -370,7 +379,6 @@ impl ShaderManager for Shader {
                 }
                 self.base.handle_mouse_input(core, event, false)
             }
-
             _ => self.base.handle_mouse_input(core, event, false),
         }
     }
