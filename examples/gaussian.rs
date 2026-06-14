@@ -332,10 +332,18 @@ impl ShaderManager for GaussianShader {
 
         if should_start_export {
             self.base.export_manager.start_export();
+            params.iteration = 0;
+            params.random_seed = (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0) % 10000) as u32;
+            self.current_params = params;
+            self.compute_shader.set_custom_params(params, &core.queue);
         }
 
-
-        self.compute_shader.dispatch(&mut frame.encoder, core);
+        if !self.base.export_manager.is_exporting() {
+            self.compute_shader.dispatch(&mut frame.encoder, core);
+        }
 
         self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
 
