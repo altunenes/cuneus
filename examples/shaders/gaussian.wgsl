@@ -1,5 +1,7 @@
 // Enes Altun, 2025; MIT License
 // 2D Gaussian Splatting with Real-time Training
+// https://shader-slang.org/blog/2025/04/04/neural-gfx-in-an-afternoon/
+// https://shader-slang.org/blog/2025/04/30/neural-graphics-first-principles-performance/
 
 alias v2 = vec2<f32>;
 alias v3 = vec3<f32>;
@@ -8,9 +10,10 @@ alias m2 = mat2x2<f32>;
 
 const PI = 3.14159265;
 const MAX_G = 20000u;
-const G_PER_TILE = 2048u;
-const WX = 16u;
-const WY = 16u;
+const G_PER_TILE = 512u;
+const WX = 8u;
+const WY = 8u;
+const WG = WX * WY;
 
 
 struct TimeUniform {
@@ -30,11 +33,11 @@ struct GaussianParams {
     reset_training: u32,
     show_target: u32,
     show_error: u32,
-    temperature: f32,
+    opacity_learning_rate: f32,
     error_scale: f32,
     min_sigma: f32,
     max_sigma: f32,
-    position_noise: f32,
+    _reserved1: f32,
     random_seed: u32,
     iteration: u32,
     sigma_learning_rate: f32,
@@ -66,9 +69,10 @@ struct GaussianData {
 var<workgroup> b_cnt_atom: atomic<u32>;
 var<workgroup> b_cnt: u32;
 var<workgroup> b_idx: array<u32, G_PER_TILE>;
-// I use this buffer to sum gradients within the workgroup first. 
+// I use this buffer to sum gradients within the workgroup first.
 // This drastically reduces atomic contention since only thread 0 writes to global memory.
-var<workgroup> red_buf: array<f32, 256>;
+// v3 packed: one reduction handles 3 gradient components at once
+var<workgroup> red_buf: array<v3, WG>;
 
 // helpers
 
@@ -112,7 +116,15 @@ fn sep(pa:array<v2,4>, pb:array<v2,4>, ax:m2)->bool {
     }
     return false;
 }
-// gauss bounds 
+// Cheap conservative broad-phase: a 3-sigma bounding circle vs the axis-aligned tile.
+// Returns true if they definitely DON'T overlap, so we can skip the expensive OBB SAT
+// (and the cos/sin in get_bounds) for the vast majority of Gaussians far from the tile.
+fn aabb_miss(center:v2, rad:f32, tl:v2, th:v2)->bool {
+    return (center.x + rad < tl.x) || (center.x - rad > th.x) ||
+           (center.y + rad < tl.y) || (center.y - rad > th.y);
+}
+
+// gauss bounds
 fn get_bounds(g:GaussianData)->OBB {
     let s = v2(g.sigma_xx, g.sigma_yy) * 3.; // 3 std devs
     let c = cos(g.sigma_xy); let sn = sin(g.sigma_xy);
@@ -171,17 +183,21 @@ fn add_grad(idx:u32, v:f32) {
     }
 }
 
-fn reduce_grad(lid:u32, g_idx:u32, v:f32) {
-    red_buf[lid] = clamp(v, -100., 100.);
+fn reduce_grad3(lid:u32, base:u32, off:u32, val:v3) {
+    red_buf[lid] = clamp(val, v3(-100.), v3(100.));
     workgroupBarrier();
-    // Parallel reduction (log2(256) = 8 steps)
-
-    var s = 128u;
+    // Parallel reduction over the WG threads (log2(WG) steps)
+    var s = WG / 2u;
     while(s>0u){
         if(lid<s){ red_buf[lid] += red_buf[lid+s]; }
         workgroupBarrier(); s/=2u;
     }
-    if(lid==0u){ add_grad(g_idx, red_buf[0]); }
+    if(lid==0u){
+        let r = red_buf[0];
+        add_grad(base+off+0u, r.x);
+        add_grad(base+off+1u, r.y);
+        add_grad(base+off+2u, r.z);
+    }
     workgroupBarrier();
 }
 
@@ -231,7 +247,8 @@ fn calc_grads(g:GaussianData, uv:v2, go:v4)->Grads {
 @compute @workgroup_size(256, 1, 1)
 fn init_gaussians(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if (i >= p.num_gaussians) { return; }
+    // Initialize the whole capacity
+    if (i >= MAX_G) { return; }
     if (p.reset_training == 0u && p.iteration > 1u) { return; }
 
     let s = f32(p.random_seed);
@@ -256,7 +273,7 @@ fn init_gaussians(@builtin(global_invocation_id) gid: vec3<u32>) {
 // The main engine. It performs tile-based culling and sorting for performance.
 // It runs the forward pass to get the pixel color, calculates the error against the target,
 // and then immediately runs the backward pass to compute gradients.
-@compute @workgroup_size(16, 16, 1)
+@compute @workgroup_size(8, 8, 1)
 fn render_display(
     @builtin(global_invocation_id) gid: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>,
@@ -283,11 +300,13 @@ fn render_display(
     // Culling
     var i = li;
     while(i < p.num_gaussians){
-        if(obb_hit(get_bounds(g_data[i]), tb)){
+        let gg = g_data[i];
+        let rad = 3. * max(gg.sigma_xx, gg.sigma_yy);
+        if(!aabb_miss(gg.center, rad, tl, th) && obb_hit(get_bounds(gg), tb)){
             let idx = atomicAdd(&b_cnt_atom, 1u);
             if(idx < G_PER_TILE){ b_idx[idx] = i; }
         }
-        i += WX*WY;
+        i += WG;
     }
     workgroupBarrier();
     
@@ -320,32 +339,33 @@ fn render_display(
             go = 2. * (fin.rgb - tgt) / f32(dim.x*dim.y);
         }
 
+        // Backward pass over front to back alpha compositing
         var T = 1.;
+        var acc = v3(0.);
+        let C = col.rgb;
         for(var j=0u; j<b_cnt; j++){
             let gi = b_idx[j];
             if(gi >= p.num_gaussians){ continue; }
-            
+
             let g = g_data[gi];
             let c = eval_g(g, uv);
+            let Ti = T;
+            acc += c.rgb * c.a * Ti;
+            let suffix = C - acc;
             var gs = Grads(0.,0.,0.,0.,0.,0.,0.,0.,0.);
 
-            if(valid && c.a > .0001 && T > .001){
-                let gc = go * c.a * T;
-                let ga = dot(go, c.rgb * T);
+            if(valid && c.a > .0001 && Ti > .001){
+                let gc = go * c.a * Ti;
+                let oma = max(1. - c.a, 1e-3);
+                let ga = dot(go, c.rgb * Ti) - dot(go, suffix) / oma;
                 gs = calc_grads(g, uv, v4(gc, ga));
             }
-            T *= (1. - c.a);
+            T = Ti * (1. - c.a);
 
             let base = gi * 9u;
-            reduce_grad(li, base+0u, gs.cx);
-            reduce_grad(li, base+1u, gs.cy);
-            reduce_grad(li, base+2u, gs.sxx);
-            reduce_grad(li, base+3u, gs.sxy);
-            reduce_grad(li, base+4u, gs.syy);
-            reduce_grad(li, base+5u, gs.cr);
-            reduce_grad(li, base+6u, gs.cg);
-            reduce_grad(li, base+7u, gs.cb);
-            reduce_grad(li, base+8u, gs.op);
+            reduce_grad3(li, base, 0u, v3(gs.cx,  gs.cy,  gs.sxx));
+            reduce_grad3(li, base, 3u, v3(gs.sxy, gs.syy, gs.cr));
+            reduce_grad3(li, base, 6u, v3(gs.cg,  gs.cb,  gs.op));
         }
     }
 
@@ -365,7 +385,15 @@ fn update_gaussians(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (i >= p.num_gaussians) { return; }
 
     let b1 = .9; let b2 = .999; let eps = 1e-8;
-    let b1c = .1; let b2c = .001; 
+    let t = f32(p.iteration) + 1.;
+    let b1c = 1. - pow(b1, t);
+    let b2c = 1. - pow(b2, t);
+    let lr_decay = max(.15, 1. / (1. + f32(p.iteration) * .0008));
+    let pos_lr = p.learning_rate * lr_decay;
+    let sig_lr = p.sigma_learning_rate * lr_decay;
+    let col_lr = p.color_learning_rate * lr_decay;
+    let op_lr  = p.opacity_learning_rate * lr_decay;
+
     var g = g_data[i];
 
     let bi = i * 9u; 
@@ -384,53 +412,53 @@ fn update_gaussians(@builtin(global_invocation_id) gid: vec3<u32>) {
     var m=adam_m[bi]; var v=adam_v[bi];
     m = b1*m + (1.-b1)*g_cx; v = b2*v + (1.-b2)*g_cx*g_cx;
     adam_m[bi]=m; adam_v[bi]=v;
-    g.center.x -= p.learning_rate/(sqrt(v/b2c)+eps)*(m/b1c);
+    g.center.x -= pos_lr/(sqrt(v/b2c)+eps)*(m/b1c);
 
     // Center Y
     m=adam_m[bi+1u]; v=adam_v[bi+1u];
     m = b1*m + (1.-b1)*g_cy; v = b2*v + (1.-b2)*g_cy*g_cy;
     adam_m[bi+1u]=m; adam_v[bi+1u]=v;
-    g.center.y -= p.learning_rate/(sqrt(v/b2c)+eps)*(m/b1c);
+    g.center.y -= pos_lr/(sqrt(v/b2c)+eps)*(m/b1c);
 
     // Sigma XX
     m=adam_m[bi+2u]; v=adam_v[bi+2u];
     m = b1*m + (1.-b1)*g_sx; v = b2*v + (1.-b2)*g_sx*g_sx;
     adam_m[bi+2u]=m; adam_v[bi+2u]=v;
-    g.sigma_xx -= p.sigma_learning_rate/(sqrt(v/b2c)+eps)*(m/b1c);
+    g.sigma_xx -= sig_lr/(sqrt(v/b2c)+eps)*(m/b1c);
 
     // Sigma XY (Angle)
     m=adam_m[bi+3u]; v=adam_v[bi+3u];
     m = b1*m + (1.-b1)*g_sa; v = b2*v + (1.-b2)*g_sa*g_sa;
     adam_m[bi+3u]=m; adam_v[bi+3u]=v;
-    g.sigma_xy -= p.learning_rate/(sqrt(v/b2c)+eps)*(m/b1c);
+    g.sigma_xy -= pos_lr/(sqrt(v/b2c)+eps)*(m/b1c);
 
     // Sigma YY
     m=adam_m[bi+4u]; v=adam_v[bi+4u];
     m = b1*m + (1.-b1)*g_sy; v = b2*v + (1.-b2)*g_sy*g_sy;
     adam_m[bi+4u]=m; adam_v[bi+4u]=v;
-    g.sigma_yy -= p.sigma_learning_rate/(sqrt(v/b2c)+eps)*(m/b1c);
+    g.sigma_yy -= sig_lr/(sqrt(v/b2c)+eps)*(m/b1c);
 
     // Colors
     m=adam_m[bi+5u]; v=adam_v[bi+5u]; // R
     m=b1*m+(1.-b1)*g_r; v=b2*v+(1.-b2)*g_r*g_r;
     adam_m[bi+5u]=m; adam_v[bi+5u]=v;
-    g.color.r -= p.color_learning_rate/(sqrt(v/b2c)+eps)*(m/b1c);
+    g.color.r -= col_lr/(sqrt(v/b2c)+eps)*(m/b1c);
 
     m=adam_m[bi+6u]; v=adam_v[bi+6u]; // G
     m=b1*m+(1.-b1)*g_g; v=b2*v+(1.-b2)*g_g*g_g;
     adam_m[bi+6u]=m; adam_v[bi+6u]=v;
-    g.color.g -= p.color_learning_rate/(sqrt(v/b2c)+eps)*(m/b1c);
+    g.color.g -= col_lr/(sqrt(v/b2c)+eps)*(m/b1c);
 
     m=adam_m[bi+7u]; v=adam_v[bi+7u]; // B
     m=b1*m+(1.-b1)*g_b; v=b2*v+(1.-b2)*g_b*g_b;
     adam_m[bi+7u]=m; adam_v[bi+7u]=v;
-    g.color.b -= p.color_learning_rate/(sqrt(v/b2c)+eps)*(m/b1c);
+    g.color.b -= col_lr/(sqrt(v/b2c)+eps)*(m/b1c);
 
     // Opacity
     m=adam_m[bi+8u]; v=adam_v[bi+8u];
     m = b1*m + (1.-b1)*g_op; v = b2*v + (1.-b2)*g_op*g_op;
     adam_m[bi+8u]=m; adam_v[bi+8u]=v;
-    g.opacity -= p.learning_rate/(sqrt(v/b2c)+eps)*(m/b1c);
+    g.opacity -= op_lr/(sqrt(v/b2c)+eps)*(m/b1c);
 
     // Constraints
     g.center = clamp(g.center, v2(0.), v2(1.));
@@ -441,18 +469,18 @@ fn update_gaussians(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Densification (Teleport logic)
     // If invisible or huge lazy blob, kill it and respawn
-    let dead = g.opacity < .005;
-    let lazy = (g.sigma_xx > .1) || (g.sigma_yy > .1);
-    let check = (p.iteration % 20u == 0u) && (p.reset_training == 0u);
+    let dead = g.opacity <= .02;
+    let huge = (g.sigma_xx >= p.max_sigma * .98 || g.sigma_yy >= p.max_sigma * .98) && g.opacity < .1;
+    let check = (p.iteration % 30u == 0u) && (p.reset_training == 0u) && (p.iteration > 60u);
 
-    if ((dead || lazy) && check) {
+    if ((dead || huge) && check) {
         let h = hash4(v4(f32(p.iteration), f32(i), g.center.x, g.center.y));
         g.center = clamp(h.xy, v2(.05), v2(.95));
         g.sigma_xx = p.min_sigma * 1.5;
         g.sigma_yy = p.min_sigma * 1.5;
         g.sigma_xy = (h.z-.5) * 2. * PI;
-        g.opacity = .5;
-        g.color = h.rgb;
+        g.color = textureSampleLevel(t_target, s_target, g.center, 0.).rgb;
+        g.opacity = .15;
         
         // Reset momentum or it flies away
         for(var k=0u; k<9u; k++){

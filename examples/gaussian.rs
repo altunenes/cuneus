@@ -12,11 +12,11 @@ cuneus::uniform_params! {
         reset_training: u32,
         show_target: u32,
         show_error: u32,
-        temperature: f32,
+        opacity_learning_rate: f32,
         error_scale: f32,
         min_sigma: f32,
         max_sigma: f32,
-        position_noise: f32,
+        _reserved1: f32,
         random_seed: u32,
         iteration: u32,
         sigma_learning_rate: f32,
@@ -39,21 +39,20 @@ impl Default for GaussianParams {
             show_target: 0,
             show_error: 0,
 
-
-            temperature: 1.0,
+            opacity_learning_rate: 0.02,
 
             error_scale: 2.0,
 
             min_sigma: 0.001,
 
-            max_sigma: 0.05,
+            max_sigma: 0.15,
 
-            position_noise: 0.5,
+            _reserved1: 0.0,
 
             random_seed: 42,
             iteration: 0,
 
-            sigma_learning_rate: 0.001,
+            sigma_learning_rate: 0.003,
 
             _padding0: 0,
             _padding1: 0,
@@ -75,23 +74,26 @@ impl ShaderManager for GaussianShader {
         // 2. clear_gradients: Clear gradient buffer before each iteration
         // 3. render_display: Render Gaussians + compute gradients via backprop
         // 4. update_gaussians: Adam to update parameters
+        let max_gaussians = 20000u32;
+        let wg_1d = max_gaussians.div_ceil(256); 
+        let wg_clear = (max_gaussians * 9).div_ceil(256);
+
         let passes = vec![
-            PassDescription::new("init_gaussians", &[]),
-            PassDescription::new("clear_gradients", &[]),
+            PassDescription::new("init_gaussians", &[]).with_workgroup_size([wg_1d, 1, 1]),
+            PassDescription::new("clear_gradients", &[]).with_workgroup_size([wg_clear, 1, 1]),
             PassDescription::new("render_display", &[]),
-            PassDescription::new("update_gaussians", &[]),
+            PassDescription::new("update_gaussians", &[]).with_workgroup_size([wg_1d, 1, 1]),
         ];
 
         // Storage buffers for training
         // Each Gaussian: position(2f32) + sigma(3f32) + color(3f32) + opacity(1f32) = 9 f32 (gradient data)
-        // GaussianData struct: 10 f32 (includes padding)
-        let max_gaussians = 20000u32;
-        let gaussian_buffer_size = (max_gaussians * 40) as u64;
+        let gaussian_buffer_size = (max_gaussians * 48) as u64;
         let gradient_buffer_size = (max_gaussians * 36) as u64;
         let adam_buffer_size = (max_gaussians * 36) as u64;
 
         let config = ComputeShaderBuilder::new()
             .with_label("Gaussian Splatting Training")
+            .with_workgroup_size([8, 8, 1])
             .with_multi_pass(&passes)
             .with_channels(1)
             .with_custom_uniforms::<GaussianParams>()
@@ -208,29 +210,13 @@ impl ShaderManager for GaussianShader {
 
                                 changed |= ui
                                     .add(
-                                        egui::Slider::new(&mut params.temperature, 0.1..=5.0)
-                                            .text("temp"),
+                                        egui::Slider::new(&mut params.opacity_learning_rate, 0.001..=0.2)
+                                            .text("opacity LR")
+                                            .logarithmic(true),
                                     )
                                     .changed();
 
                                 ui.separator();
-
-                                ui.horizontal(|ui| {
-                                    changed |= ui
-                                        .add(
-                                            egui::Slider::new(&mut params.random_seed, 1..=10000)
-                                                .text("seed"),
-                                        )
-                                        .changed();
-                                    if ui.button("🎲").on_hover_text("Randomize seed").clicked() {
-                                        params.random_seed = (std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap()
-                                            .as_millis() % 10000) as u32;
-                                        params.reset_training = 1;
-                                        changed = true;
-                                    }
-                                });
 
                                 if ui.button("res training").clicked() {
                                     params.reset_training = 1;
@@ -290,13 +276,6 @@ impl ShaderManager for GaussianShader {
                                             .logarithmic(true),
                                     )
                                     .changed();
-
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.position_noise, 0.0..=1.0)
-                                            .text("Position"),
-                                    )
-                                    .changed();
                             });
 
                         ui.separator();
@@ -334,10 +313,17 @@ impl ShaderManager for GaussianShader {
             self.compute_shader.time_uniform.data.frame = 0;
             self.compute_shader.time_uniform.update(&core.queue);
 
+            // Fresh random layout on every reset
+            params.random_seed = (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0) % 10000) as u32;
+
             params.iteration = 0;
             params.reset_training = 0;
             changed = true;
         }
+        params.min_sigma = params.min_sigma.min(params.max_sigma);
 
         if changed {
             self.current_params = params;
