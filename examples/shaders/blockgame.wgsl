@@ -8,8 +8,22 @@ struct TimeUniform {
 };
 @group(0) @binding(0) var<uniform> u_time: TimeUniform;
 
-// Group 1: Output texture only 
+// Group 1: Output texture + game/audio uniform
 @group(1) @binding(0) var output: texture_storage_2d<rgba16float, write>;
+
+struct GameUniform {
+    camera_height: f32,
+    camera_angle: f32,
+    camera_scale: f32,
+    volume: f32,
+    sample_offset: u32,
+    samples_to_generate: u32,
+    sample_rate: f32,
+    _pad: f32,
+};
+@group(1) @binding(1) var<uniform> u_game: GameUniform;
+
+const TAU: f32 = 6.2831853;
 
 // Group 2: Engine Resources (mouse, fonts, storage)
 struct MouseUniform {
@@ -29,7 +43,10 @@ struct FontUniforms {
 };
 @group(2) @binding(1) var<uniform> font_texture_uniform: FontUniforms;
 @group(2) @binding(2) var t_font_texture_atlas: texture_2d<f32>;
-@group(2) @binding(3) var<storage, read_write> game_data: array<f32>;
+// Group 2 binding 3: real PCM audio sample buffer (interleaved stereo f32).
+@group(2) @binding(3) var<storage, read_write> audio_buffer: array<f32>;
+// Group 3: game state storage (blocks, score, camera-follow, event timestamps).
+@group(3) @binding(0) var<storage, read_write> game_data: array<f32>;
 
 const FONT_SPACING: f32 = 2.0;
 
@@ -322,21 +339,22 @@ fn gct() -> bool { return game_data[O[3]] > .5; } // get click triggered
 fn sct(t: bool) { game_data[O[3]] = select(0., 1., t); } // set click triggered
 fn gcy() -> f32 { return game_data[O[4]]; } // get camera y
 fn scy(y: f32) { game_data[O[4]] = y; } // set camera y
-fn gch() -> f32 { return game_data[O[5]]; } // get camera height
-fn sch(h: f32) { game_data[O[5]] = h; } // set camera height
-fn gca() -> f32 { return game_data[O[6]]; } // get camera angle
-fn sca(a: f32) { game_data[O[6]] = a; } // set camera angle
-fn gcs() -> f32 { return game_data[O[7]]; } // get camera scale
-fn scs(s: f32) { game_data[O[7]] = s; } // set camera scale
+fn gch() -> f32 { return u_game.camera_height; } // camera
+fn sch(h: f32) { game_data[O[5]] = h; }
+fn gca() -> f32 { return u_game.camera_angle; }
+fn sca(a: f32) { game_data[O[6]] = a; }
+fn gcs() -> f32 { return u_game.camera_scale; }
+fn scs(s: f32) { game_data[O[7]] = s; }
+fn atime() -> f32 { return f32(u_game.sample_offset) / u_game.sample_rate; }
 fn gpt() -> f32 { return game_data[O[8]]; } // get perfect time
 fn spt(t: f32) { game_data[O[8]] = t; } // set perfect time
 
 // update camera for tower
-fn updcam() {
+fn updcam(sy: f32) {
     let cb = gcb();
     if (cb > 0u) {
         let th = f32(cb) * .6;
-        let tcy = th * 40.;
+        let tcy = th * 40. * (sy / 800.);
         let ccy = gcy();
         scy(mix(ccy, tcy, .1));
     }
@@ -406,10 +424,13 @@ fn rbl(pp: vec2<f32>, b: Block, ss: vec2<f32>, id: u32) -> vec3<f32> {
         fm = Mat(m.alb + vec3(.3, .2, .1) * pulse, m.r * .5, m.m, m.f + .2); 
     }
     
-    let scale = gcs();
+    let scale = gcs() * ss.y / 800.;
     let cy = gcy();
     let co = vec2(ss.x * .5, ss.y * .7 + cy);
-    
+     let cs = w2i(b.p + vec3(0., b.s.y * .5, 0.)) * scale + co;
+    let rad = (b.s.x + b.s.z + b.s.y + 1.) * scale;
+    if (distance(pp, cs) > rad) { return vec3(0.); }
+
     let hw = b.s.x * .5;
     let hd = b.s.z * .5;
     
@@ -505,11 +526,10 @@ fn init() {
 }
 
 // update game logic
-fn upd() {
+fn upd(sy: f32) {
     let mc = (u_mouse.buttons.x & 1u) != 0u;
     let state = gs();
-    
-    updcam();
+    updcam(sy);
     
     // click detection
     let wc = gct();
@@ -535,8 +555,8 @@ fn upd() {
                 
                 // perfect match check
                 nb.perf = select(0., 1., ox < .05);
-                 // trigger perfect effect
-                if (nb.perf > .5) { spt(u_time.time); }
+                 // trigger perfect effect (visual + audio chime)
+                if (nb.perf > .5) { spt(u_time.time); game_data[10] = atime(); }
                 
                 // adjust pos
                 nb.p.x = select(pb.p.x - (pb.s.x - nb.s.x) * .5, 
@@ -547,8 +567,8 @@ fn upd() {
                 let m = mat(cb);
                 nb.c = m.alb;
                 
-                if (nb.s.x < .5) { ss(2u); } // game over
-                else { sb(cb, nb); scb(cb + 1u); ssc(gsc() + 10u); }
+                if (nb.s.x < .5) { ss(2u); game_data[11] = atime(); } // game over tone
+                else { sb(cb, nb); scb(cb + 1u); ssc(gsc() + 10u); game_data[9] = atime(); game_data[12] = f32(cb); }
             }
         }
         else if (state == 2u) {
@@ -611,6 +631,48 @@ fn txt(pp: vec2<f32>, ss: vec2<f32>) -> vec3<f32> {
     return tc;
 }
 
+fn piano(ta: f32, d: f32, f: f32, decay: f32) -> f32 {
+    let env = (1.0 - exp(-d * 300.0)) * exp(-d * decay);   // quick attack, ringing tail
+    return (sin(ta * TAU * f) + 0.5 * sin(ta * TAU * 2.0 * f) + 0.25 * sin(ta * TAU * 3.0 * f)) * env;
+}
+
+fn game_sound(ta: f32) -> f32 {
+    var s = 0.0;
+    let tp = game_data[9];
+    let dp = ta - tp;
+    if (tp > 0. && dp >= 0. && dp < 0.9) {
+        let k = u32(max(game_data[12], 0.0));
+        var deg = array<f32, 5>(0.0, 2.0, 4.0, 7.0, 9.0);
+        let semis = deg[k % 5u] + 12.0 * f32(min(k / 5u, 4u));
+        let f = 261.63 * pow(2.0, semis / 12.0);
+        s += piano(ta, dp, f, 5.0) * 0.3;
+    }
+
+    // perfect match:
+    let tq = game_data[10];
+    let dq = ta - tq;
+    if (tq > 0. && dq >= 0. && dq < 0.8) {
+        var notes = array<f32, 3>(523.25, 659.25, 783.99);
+        for (var j = 0u; j < 3u; j++) {
+            let nt = dq - f32(j) * 0.06;
+            if (nt >= 0.) { s += piano(ta, nt, notes[j], 6.0) * 0.22; }
+        }
+    }
+
+    // game over
+    let tg = game_data[11];
+    let dg = ta - tg;
+    if (tg > 0. && dg >= 0. && dg < 1.4) {
+        var gn = array<f32, 3>(392.0, 311.13, 261.63);
+        for (var j = 0u; j < 3u; j++) {
+            let nt = dg - f32(j) * 0.16;
+            if (nt >= 0.) { s += piano(ta, nt, gn[j], 3.0) * 0.28; }
+        }
+    }
+
+    return clamp(s, -1.0, 1.0);
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ss = vec2<f32>(textureDimensions(output));
@@ -618,8 +680,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     
     if any(pp >= ss) { return; }
     
-    // single thread updates
-    if (all(gid.xy == vec2(0u))) { init(); upd(); }
+    // single thread updates game state, then synthesizes this frame's PCM chunk
+    if (all(gid.xy == vec2(0u))) {
+        init(); upd(ss.y);
+        let n = u_game.samples_to_generate;
+        for (var i = 0u; i < n; i++) {
+            let ta = f32(u_game.sample_offset + i) / u_game.sample_rate;
+            let v = game_sound(ta) * u_game.volume;
+            audio_buffer[i * 2u] = v;
+            audio_buffer[i * 2u + 1u] = v;
+        }
+    }
     
     // background
     let ny = pp.y / ss.y;
