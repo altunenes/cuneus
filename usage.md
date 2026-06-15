@@ -424,10 +424,8 @@ params.samples_to_generate = needed;
 - `synth.rs` - Interactive keyboard synth with per-sample ADSR, filter, distortion, chorus, reverb
 - `debugscreen.rs` - Simple tone generation using `SynthesisManager` (oscillator-based, not PCM)
 
-**Pro-tip - Generic Storage:** The `.with_audio()` buffer is just a `storage, read_write` array of floats. You don't have to use it for audio! Any shader can use it as generic persistent storage:
+**Pro-tip - Persistent GPU state:** A `storage, read_write` array of floats persists across frames, so you can keep arbitrary GPU-side state in it. Use `.with_storage_buffer(StorageBufferSpec::new("name", bytes))` for a dedicated state buffer (bound in group 3); the `.with_audio()` buffer is the same kind of array and can also be repurposed as scratch storage when you don't need sound.
 
-- `blockgame.rs` - Uses the "audio buffer" to store game state (score, block positions, camera) - no audio at all!
-- The buffer persists across frames, making it stateful GPU applications beyond audio synthesis
 
 ### External Textures
 
