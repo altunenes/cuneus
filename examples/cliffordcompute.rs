@@ -3,25 +3,16 @@ use cuneus::prelude::*;
 
 cuneus::uniform_params! {
     struct CliffordParams {
-    a: f32,
-    b: f32,
-    c: f32,
-    d: f32,
-    motion_speed: f32,
-    rotation_x: f32,
-    rotation_y: f32,
-    click_state: i32,
-    brightness: f32,
-    color1_r: f32,
-    color1_g: f32,
-    color1_b: f32,
-    color2_r: f32,
-    color2_g: f32,
-    color2_b: f32,
-    scale: f32,
-    dof_amount: f32,
-    dof_focal_dist: f32,
-    _pad_m: [f32; 2],
+        a: f32, b: f32, c: f32, d: f32,
+        motion_speed: f32,
+        rotation_x: f32, rotation_y: f32,
+        brightness: f32,
+        scale: f32,
+        dof_amount: f32, dof_focal_dist: f32,
+        dispersion: f32, warp: f32, _pad3: f32,
+        wl_center: f32, wl_spread: f32,
+        symmetry: f32,
+        _pad0: f32, _pad1: f32, _pad2: f32,
     }
 }
 
@@ -41,31 +32,22 @@ impl ShaderManager for CliffordShader {
         let base = RenderKit::new(core);
 
         let initial_params = CliffordParams {
-            a: 1.7,
-            b: 1.7,
-            c: 0.6,
-            d: 1.2,
+            a: -2.0, b: -2.0, c: -1.2, d: 2.0,
             motion_speed: 1.0,
-            rotation_x: 0.0,
-            rotation_y: 0.0,
-            click_state: 0,
-            brightness: 0.00004,
-            color1_r: 0.0,
-            color1_g: 0.7,
-            color1_b: 1.0,
-            color2_r: 1.0,
-            color2_g: 0.3,
-            color2_b: 0.5,
+            rotation_x: 0.0, rotation_y: 0.0,
+            brightness: 2.5,
             scale: 0.6,
-            dof_amount: 1.0,
-            dof_focal_dist: 0.5,
-            _pad_m: [0.0; 2],
+            dof_amount: 0.2, dof_focal_dist: 0.5,
+            dispersion: 0.25, warp: 3.0, _pad3: 0.0,
+            wl_center: 550.0, wl_spread: 300.0,
+            symmetry: 0.15,
+            _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
         };
 
         let mut config = ComputeShader::builder()
             .with_entry_point("Splat")
             .with_custom_uniforms::<CliffordParams>()
-            .with_atomic_buffer(2)
+            .with_atomic_buffer(3)
             .with_workgroup_size([16, 16, 1])
             .with_texture_format(COMPUTE_TEXTURE_FORMAT_RGBA16)
             .with_label("Clifford Attractor Unified")
@@ -90,7 +72,7 @@ impl ShaderManager for CliffordShader {
             core,
             &mut self.base,
             |shader, encoder, core| {
-                shader.dispatch_stage_with_workgroups(encoder, 0, [2048, 1, 1]);
+                shader.dispatch_stage_with_workgroups(encoder, 0, [3072, 1, 1]);
                 shader.dispatch_stage(encoder, core, 1);
             },
         );
@@ -148,113 +130,50 @@ impl ShaderManager for CliffordShader {
                                     )
                                     .changed();
                                 ui.separator();
-                                ui.label("Interesting presets:");
-                                if ui.button("Classic (1.5, 1.5, 1.4, 1.4)").clicked() {
-                                    params.a = 1.5;
-                                    params.b = 1.5;
-                                    params.c = 1.4;
-                                    params.d = 1.4;
-                                    changed = true;
-                                }
-                                if ui.button("Chaotic (1.7, 1.7, 0.6, 1.2)").clicked() {
-                                    params.a = 1.7;
-                                    params.b = 1.7;
-                                    params.c = 0.6;
-                                    params.d = 1.2;
-                                    changed = true;
-                                }
-                                if ui.button("Symmetric (2.0, -2.0, 1.0, 0.5)").clicked() {
-                                    params.a = 2.0;
-                                    params.b = -2.0;
-                                    params.c = 1.0;
-                                    params.d = 0.5;
-                                    changed = true;
-                                }
-                            });
-
-                        egui::CollapsingHeader::new("Visual Settings")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.motion_speed, 0.0..=3.0)
-                                            .text("Animation Speed"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.brightness, 0.00001..=0.0001)
-                                            .logarithmic(true)
-                                            .text("Brightness"),
-                                    )
-                                    .changed();
-                                ui.separator();
-                                ui.label("Camera Controls:");
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.rotation_x, -1.0..=1.0)
-                                            .text("Rotation X"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.rotation_y, -1.0..=1.0)
-                                            .text("Rotation Y"),
-                                    )
-                                    .changed();
-                                ui.separator();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.scale, 0.1..=2.0)
-                                            .text("Attractor Scale"),
-                                    )
-                                    .changed();
-                            });
-
-                        egui::CollapsingHeader::new("Depth of Field")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.dof_amount, 0.0..=3.0)
-                                            .text("DOF Amount"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.dof_focal_dist, 0.0..=1.0)
-                                            .text("Focal Distance"),
-                                    )
-                                    .changed();
-                                params.click_state = 1;
-                            });
-
-                        egui::CollapsingHeader::new("Colors")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label("Color 1:");
-                                    let mut color =
-                                        [params.color1_r, params.color1_g, params.color1_b];
-                                    if ui.color_edit_button_rgb(&mut color).changed() {
-                                        params.color1_r = color[0];
-                                        params.color1_g = color[1];
-                                        params.color1_b = color[2];
+                                ui.label("Presets:");
+                                ui.horizontal_wrapped(|ui| {
+                                    if ui.button("Nebula").clicked() {
+                                        params.a = -2.0; params.b = -2.0; params.c = -1.2; params.d = 2.0;
+                                        changed = true;
+                                    }
+                                    if ui.button("Ribbon").clicked() {
+                                        params.a = 1.6; params.b = -2.3; params.c = 1.2; params.d = -1.7;
+                                        changed = true;
+                                    }
+                                    if ui.button("Shell").clicked() {
+                                        params.a = -1.8; params.b = 1.8; params.c = -1.9; params.d = -0.4;
                                         changed = true;
                                     }
                                 });
+                            });
 
-                                ui.horizontal(|ui| {
-                                    ui.label("Color 2:");
-                                    let mut color =
-                                        [params.color2_r, params.color2_g, params.color2_b];
-                                    if ui.color_edit_button_rgb(&mut color).changed() {
-                                        params.color2_r = color[0];
-                                        params.color2_g = color[1];
-                                        params.color2_b = color[2];
-                                        changed = true;
-                                    }
-                                });
+                        egui::CollapsingHeader::new("Camera & Motion")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                changed |= ui.add(egui::Slider::new(&mut params.rotation_x, -1.0..=1.0).text("Orbit X")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.rotation_y, -1.0..=1.0).text("Orbit Y")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.scale, 0.1..=2.0).text("Scale")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.motion_speed, 0.0..=3.0).text("Animation Speed")).changed();
+                            });
+
+                        egui::CollapsingHeader::new("Spectral Color")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                ui.label("Color comes from a wavelength band, not RGB.");
+                                changed |= ui.add(egui::Slider::new(&mut params.wl_center, 390.0..=700.0).text("Wavelength (nm)")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.wl_spread, 0.0..=320.0).text("Spread")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.symmetry, 0.0..=1.0).text("Spectral Split")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.brightness, 0.1..=6.0).logarithmic(true).text("Brightness")).changed();
+                            });
+
+                        egui::CollapsingHeader::new("Prism Optics")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                changed |= ui.add(egui::Slider::new(&mut params.dispersion, 0.0..=0.5).text("Dispersion")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.warp, 0.0..=10.0).text("Refraction Warp")).changed();
+                                ui.separator();
+                                changed |= ui.add(egui::Slider::new(&mut params.dof_amount, 0.0..=3.0).text("DOF Amount")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.dof_focal_dist, 0.0..=1.0).text("Focal Distance")).changed();
                             });
 
                         ui.separator();
@@ -294,7 +213,7 @@ impl ShaderManager for CliffordShader {
 
         // Stage 0: Generate and splat particles (workgroup size [256, 1, 1])
         self.compute_shader
-            .dispatch_stage_with_workgroups(&mut frame.encoder, 0, [2048, 1, 1]);
+            .dispatch_stage_with_workgroups(&mut frame.encoder, 0, [3072, 1, 1]);
 
         // Stage 1: Render to screen (workgroup size [16, 16, 1])
         self.compute_shader.dispatch_stage(&mut frame.encoder, core, 1);

@@ -8,7 +8,7 @@ A GPU compute engine for creating, tweaking, and shipping WGSL shader programs. 
 ### Current Features
 
 - Hot shader reloading
-- Multi-pass, atomics etc
+- Multi-pass
 - 3DGS Rendering Inference (PLY Import, radix gpu sort)
 - Interactive parameter adjustment, ez media imports through egui
 - Easily use HDR textures, videos/webcam via UI
