@@ -50,7 +50,7 @@ fn dvec(d: u32) -> i2 {
     if (d == 3u) { return i2(-1, 0); }
     return i2(1, 0);
 }
-// open for enemies: empty, no bomb, no live flame (so freed enemies don't walk into a lingering blast)
+// open for enemies: empty, no bomb, no live flame (so freed enemies don't walk into a lingering blast: for balancing)
 fn opn(x: i32, y: i32) -> bool { return gt(x, y) == 0u && bi(x, y) < 0 && !fa(x, y, u_t.time); }
 fn nliv() -> u32 { var c = 0u; for (var e = 0; e < NE; e++) { if (g[EB + e * ES] > 0.5) { c++; } } return c; }
 fn opp(d: u32) -> u32 { if (d == 1u) { return 2u; } if (d == 2u) { return 1u; } if (d == 3u) { return 4u; } return 3u; }
@@ -67,7 +67,7 @@ fn pick(x: i32, y: i32, av: u32, r: f32) -> u32 {
     return fb;
 }
 
-// half chase the player (greedy on the longer axis), half wander; turn at junctions, no backtrack
+// half chase the player (greedy on the longer axis), half wander turn at junctions, no backtrack
 fn estep(e: i32, now: f32) {
     let b = EB + e * ES;
     if (now - g[b + 6] > EDLY) {
@@ -155,7 +155,7 @@ fn newg() {
     }
     for (var i = 0; i < NB; i++) { g[BB + i * 4 + 2] = 0.0; }
 
-    // enemies spread away from the player corner; clear their cell + crate neighbors for room
+    // enemies spread away from the player corner
     var sp = array<i2, 8>(
         i2(GW - 2, GH - 2), i2(GW - 2, 1), i2(1, GH - 2), i2(GW / 2, GH / 2),
         i2(GW - 2, GH / 2), i2(GW / 2, GH - 2), i2(GW / 2, 1), i2(4, GH - 2)
