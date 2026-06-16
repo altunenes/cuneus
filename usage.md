@@ -276,7 +276,7 @@ note that cuneus creates one buffer pair per unique name. Each dispatch flips th
 ### `dispatch()` vs `dispatch_stage()`
 
 - **`dispatch()`** — Runs all passes with correct per-pass ping-pong bind groups. Auto-increments frame counter. Use for **texture-based multipass** (most shaders).
-- **`dispatch_stage(encoder, core, index)`** — Runs one pass using **global** bind groups (no ping-pong awareness). Does not increment frame counter. Use for **storage-buffer multipass** (`fluidsim.rs`) or **path tracing accumulation** (`mandelbulb.rs`).
+- **`dispatch_stage(encoder, core, index)`** — Runs one pass using **global** bind groups (no ping-pong awareness). Does not increment frame counter. Use for **storage-buffer multipass** or **path tracing accumulation** (`mandelbulb.rs`).
 
 **Important:** `dispatch_stage()` cannot select correct ping-pong sides for texture-based multipass. For iterative texture-based solving, use duplicate passes with `dispatch()` instead.
 
@@ -356,7 +356,6 @@ frame.encoder = core.flush_encoder(frame.encoder);
 self.compute_shader.dispatch_stage(&mut frame.encoder, core, NEXT_PASS);
 ```
 
-*See `fluidsim.rs` for a full example with 20+ pressure iterations per frame.*
 
 ## Media & Integration
 
@@ -425,7 +424,6 @@ params.samples_to_generate = needed;
 - `debugscreen.rs` - Simple tone generation using `SynthesisManager` (oscillator-based, not PCM)
 
 **Pro-tip - Persistent GPU state:** A `storage, read_write` array of floats persists across frames, so you can keep arbitrary GPU-side state in it. Use `.with_storage_buffer(StorageBufferSpec::new("name", bytes))` for a dedicated state buffer (bound in group 3); the `.with_audio()` buffer is the same kind of array and can also be repurposed as scratch storage when you don't need sound.
-
 
 ### External Textures
 
