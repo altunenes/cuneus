@@ -67,20 +67,20 @@ impl ShaderManager for SynthManager {
             tempo: 120.0,
             waveform_type: 1,
             octave: 4.0,
-            volume: 0.7,
+            volume: 0.6,
             beat_enabled: 0,
-            reverb_mix: 0.15,
-            delay_time: 0.3,
-            delay_feedback: 0.3,
-            filter_cutoff: 0.9,
-            filter_resonance: 0.1,
+            reverb_mix: 0.22,
+            delay_time: 0.33,
+            delay_feedback: 0.25,
+            filter_cutoff: 0.68,
+            filter_resonance: 0.25,
             distortion_amount: 0.0,
-            chorus_rate: 2.0,
-            chorus_depth: 0.1,
-            attack_time: 0.02,
-            decay_time: 0.15,
-            sustain_level: 0.7,
-            release_time: 0.4,
+            chorus_rate: 1.2,
+            chorus_depth: 0.25,
+            attack_time: 0.01,
+            decay_time: 0.25,
+            sustain_level: 0.6,
+            release_time: 0.5,
             sample_offset: 0,
             samples_to_generate: MAX_SAMPLES_PER_FRAME,
             sample_rate: SAMPLE_RATE,
@@ -89,11 +89,15 @@ impl ShaderManager for SynthManager {
         };
 
         let audio_buffer_size = (MAX_SAMPLES_PER_FRAME * 2) as usize;
+        // lets add a new buffer called dsp. Persistent DSP state: filter integrators + delay/chorus/reverb lines. Must be >= the
+        // shader's layout (~53,918 floats); 65,536 leaves headroom.
+        let dsp_buffer_size = (65536 * std::mem::size_of::<f32>()) as u64;
 
         let config = ComputeShader::builder()
             .with_entry_point("main")
             .with_custom_uniforms::<SynthParams>()
             .with_audio(audio_buffer_size)
+            .with_storage_buffer(StorageBufferSpec::new("dsp", dsp_buffer_size))
             .with_workgroup_size([16, 16, 1])
             .with_texture_format(COMPUTE_TEXTURE_FORMAT_RGBA16)
             .with_label("Synth")
@@ -129,10 +133,11 @@ impl ShaderManager for SynthManager {
     }
 
     fn update(&mut self, core: &Core) {
-        let current_time = self.base.controls.get_time(&self.base.start_time);
+        // lets drive the shader clock from the AUDIO clock
+        let audio_time = self.audio_start.elapsed().as_secs_f32();
         let delta = 1.0 / 60.0;
         self.compute_shader
-            .set_time(current_time, delta, &core.queue);
+            .set_time(audio_time, delta, &core.queue);
 
         if let Some(ref mut stream) = self.pcm_stream {
             stream.set_master_volume(self.current_params.volume as f64);
@@ -187,6 +192,55 @@ impl ShaderManager for SynthManager {
                     .resizable(true)
                     .default_width(280.0)
                     .show(ctx, |ui| {
+                        egui::CollapsingHeader::new("Patches")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    if ui.button("Cathedral").clicked() {
+                                        params.waveform_type = 7;
+                                        params.attack_time = 0.4; params.decay_time = 0.6;
+                                        params.sustain_level = 0.85; params.release_time = 1.8;
+                                        params.filter_cutoff = 0.5; params.filter_resonance = 0.15;
+                                        params.reverb_mix = 0.6; params.delay_feedback = 0.0;
+                                        params.chorus_rate = 0.6; params.chorus_depth = 0.2;
+                                        changed = true;
+                                    }
+                                    if ui.button("Harpsichord").clicked() {
+                                        params.waveform_type = 4;
+                                        params.attack_time = 0.005; params.decay_time = 1.5;
+                                        params.sustain_level = 0.0; params.release_time = 0.3;
+                                        params.filter_cutoff = 0.8; params.filter_resonance = 0.1;
+                                        params.reverb_mix = 0.35; params.delay_feedback = 0.0;
+                                        params.chorus_depth = 0.1; params.octave = 5.0;
+                                        changed = true;
+                                    }
+                                    if ui.button("Choir").clicked() {
+                                        params.waveform_type = 5;
+                                        params.attack_time = 0.5; params.decay_time = 0.5;
+                                        params.sustain_level = 0.8; params.release_time = 1.5;
+                                        params.filter_cutoff = 0.55; params.filter_resonance = 0.1;
+                                        params.reverb_mix = 0.55; params.chorus_rate = 0.8; params.chorus_depth = 0.35;
+                                        changed = true;
+                                    }
+                                    if ui.button("Bells").clicked() {
+                                        params.waveform_type = 6;
+                                        params.attack_time = 0.005; params.decay_time = 0.8;
+                                        params.sustain_level = 0.2; params.release_time = 1.0;
+                                        params.filter_cutoff = 0.85; params.filter_resonance = 0.05;
+                                        params.reverb_mix = 0.5; params.delay_feedback = 0.0;
+                                        changed = true;
+                                    }
+                                    if ui.button("Lead").clicked() {
+                                        params.waveform_type = 1;
+                                        params.attack_time = 0.01; params.decay_time = 0.2;
+                                        params.sustain_level = 0.5; params.release_time = 0.3;
+                                        params.filter_cutoff = 0.65; params.filter_resonance = 0.3;
+                                        params.delay_time = 0.33; params.delay_feedback = 0.35; params.reverb_mix = 0.2;
+                                        changed = true;
+                                    }
+                                });
+                            });
+
                         egui::CollapsingHeader::new("Playback")
                             .default_open(true)
                             .show(ui, |ui| {
@@ -208,9 +262,9 @@ impl ShaderManager for SynthManager {
                                     .add(egui::Slider::new(&mut params.volume, 0.0..=1.0).text("Volume"))
                                     .changed();
 
-                                ui.horizontal(|ui| {
-                                    ui.label("Wave:");
-                                    for (i, name) in ["Sin", "Saw", "Sqr", "Tri", "Nse"].iter().enumerate() {
+                                ui.label("Wave:");
+                                ui.horizontal_wrapped(|ui| {
+                                    for (i, name) in ["Sin", "Saw", "Sqr", "Tri", "Pulse", "Super", "FM", "Organ", "Noise"].iter().enumerate() {
                                         if ui.selectable_label(params.waveform_type == i as u32, *name).clicked() {
                                             params.waveform_type = i as u32;
                                             changed = true;
@@ -310,28 +364,20 @@ impl ShaderManager for SynthManager {
                     if (1..=9).contains(&key_index) {
                         let index = (key_index - 1) as usize;
 
-                        let current_time = self.base.controls.get_time(&self.base.start_time);
+                        let current_time = self.audio_start.elapsed().as_secs_f32();
                         if event.state == winit::event::ElementState::Pressed && !self.keys_held[index] {
                             self.keys_held[index] = true;
-                            let has_previous = self.current_params.key_states[index / 4][index % 4] > 0.0;
-                            let in_release = self.current_params.key_decay[index / 4][index % 4] > 0.0;
-                            if has_previous && in_release {
-                                // Retrigger: just cancel the release, note continues from current level
-                                self.set_key_release_time(index, 0.0);
-                            } else {
-                                // Fresh note
-                                self.set_key_press_time(index, current_time);
-                                self.set_key_release_time(index, 0.0);
-                            }
+                            self.set_key_press_time(index, current_time);
+                            self.set_key_release_time(index, 0.0);
                             self.compute_shader
                                 .set_custom_params(self.current_params, &core.queue);
                         } else if event.state == winit::event::ElementState::Released {
                             self.keys_held[index] = false;
-                            // Store release time — shader ADSR handles the fade
                             self.set_key_release_time(index, current_time);
                             self.compute_shader
                                 .set_custom_params(self.current_params, &core.queue);
                         }
+
                         return true;
                     }
                 }
