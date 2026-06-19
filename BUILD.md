@@ -12,7 +12,7 @@
 
 ```bash
 # Clone and build
-git clone <repo-url>
+git clone https://github.com/altunenes/cuneus
 cd cuneus
 # Run a specific shader
 cargo run --release --example audiovis 

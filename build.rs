@@ -35,9 +35,11 @@ fn main() {
             let lib = format!("{}/lib", gst_base);
             let pkgconfig = format!("{}/lib/pkgconfig", gst_base);
 
-            env::set_var("PKG_CONFIG_PATH", &pkgconfig);
-            env::set_var("GST_PLUGIN_PATH", &lib);
-            env::set_var("DYLD_FALLBACK_LIBRARY_PATH", &lib);
+            unsafe {
+                env::set_var("PKG_CONFIG_PATH", &pkgconfig);
+                env::set_var("GST_PLUGIN_PATH", &lib);
+                env::set_var("DYLD_FALLBACK_LIBRARY_PATH", &lib);
+            }
             println!("cargo:rustc-link-search=framework=/Library/Frameworks");
             println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib);
         }
@@ -52,7 +54,7 @@ fn main() {
             let pkgconfig_dir = lib_dir.join("pkgconfig");
 
             if lib_dir.exists() {
-                env::set_var("PKG_CONFIG_PATH", &pkgconfig_dir);
+                unsafe { env::set_var("PKG_CONFIG_PATH", &pkgconfig_dir); }
                 println!("cargo:rustc-link-search=native={}", lib_dir.display());
             } else {
                 println!(
@@ -73,7 +75,7 @@ fn main() {
                 for p in &common {
                     let path = PathBuf::from(p);
                     if path.exists() {
-                        env::set_var("PKG_CONFIG_PATH", p);
+                        unsafe { env::set_var("PKG_CONFIG_PATH", p); }
                         break;
                     }
                 }
