@@ -2994,9 +2994,9 @@ checksum = "953ec861398dccce10c670dfeaf3ec4911ca479e9c02154b3a215178c5f566f2"
 
 [[package]]
 name = "ply-rs-bw"
-version = "2.0.3"
+version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df4eb835a4a2e81afc05cf7519590ca5839e60d10a5229c7caa8eb517ed42e9b"
+checksum = "9a6c47c293ded3c12941ce14314c60f75d5728b663cf6ddafd7ed621ed77cc96"
 dependencies = [
  "byteorder",
  "indexmap",
