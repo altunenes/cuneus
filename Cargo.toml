@@ -17,7 +17,7 @@ bytemuck = { version = "1.23.2", features = ["derive"] }
 egui-wgpu = "0.34.2"
 egui = "0.34.2"
 egui-winit = "0.34.2"
-image = { version = "0.25.8", features = ["png", "hdr","exr"] }
+image = { version = "0.25.10", features = ["png", "hdr","exr"] }
 env_logger = "0.11.6"
 pollster = "0.4.0"
 rfd = "0.15.1"
