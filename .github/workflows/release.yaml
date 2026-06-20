@@ -221,8 +221,9 @@ jobs:
               "libgsttypefindfunctions.dylib" "libgstvideoconvertscale.dylib" "libgstvideorate.dylib"
               "libgstaudioconvert.dylib" "libgstaudioresample.dylib" "libgstvolume.dylib"
               "libgstosxaudio.dylib" "libgstautodetect.dylib" "libgstaudiotestsrc.dylib"
-              "libgstaudiomixer.dylib" "libgstspectrum.dylib" "libgstsoundtouch.dylib"
-              "libgstaudioparsers.dylib" "libgstlibav.dylib" "libgstisomp4.dylib"
+              "libgstaudiomixer.dylib" "libgstspectrum.dylib" "libgstlevel.dylib" "libgstsoundtouch.dylib"
+              "libgstaudioparsers.dylib" "libgstwavparse.dylib" "libgstid3demux.dylib"
+              "libgstlibav.dylib" "libgstisomp4.dylib"
               "libgstapplemedia.dylib" "libgstvideoparsersbad.dylib"
             )
             
@@ -279,12 +280,13 @@ jobs:
               "gstautodetect.dll" "gstaudiotestsrc.dll"
 
               # Audio processing
-              "gstaudiomixer.dll" "gstspectrum.dll" "gstsoundtouch.dll"
+              "gstaudiomixer.dll" "gstspectrum.dll" "gstlevel.dll" "gstsoundtouch.dll"
               "gstaudioparsers.dll"
 
               # Container formats
               "gstisomp4.dll" "gstvideoparsersbad.dll" "gstmatroska.dll"
               "gstavi.dll" "gstflv.dll" "gstmpegtsdemux.dll" "gstasf.dll"
+              "gstwavparse.dll" "gstid3demux.dll"
 
               # Codec plugins
               "gstvpx.dll" "gsttheora.dll" "gstmpg123.dll" "gstlame.dll"
@@ -319,8 +321,9 @@ jobs:
               "libgsttypefindfunctions.so" "libgstvideoconvert.so" "libgstvideorate.so"
               "libgstaudioconvert.so" "libgstaudioresample.so" "libgstvolume.so"
               "libgstpulseaudio.so" "libgstautodetect.so" "libgstaudiotestsrc.so"
-              "libgstaudiomixer.so" "libgstspectrum.so" "libgstsoundtouch.so"
-              "libgstaudioparsers.so" "libgstlibav.so" "libgstisomp4.so"
+              "libgstaudiomixer.so" "libgstspectrum.so" "libgstlevel.so" "libgstsoundtouch.so"
+              "libgstaudioparsers.so" "libgstwavparse.so" "libgstid3demux.so"
+              "libgstlibav.so" "libgstisomp4.so"
               "libgstvideoparsersbad.so" "libgstv4l2.so"
             )
           fi
@@ -687,25 +690,31 @@ jobs:
               echo " GStreamer embedded and paths fixed"
             fi
             
-            # Create appropriate README based on shader group
-            echo "$shader Shader" > "release/$shader/README.txt"
-            echo "Requirements:" >> "release/$shader/README.txt"
-            
-            if [[ "${{ matrix.shader_config.gstreamer_required }}" == "true" ]]; then
-              echo "1. GStreamer is bundled!" >> "release/$shader/README.txt"
-              echo "2. The 'shaders' directory must remain in the same folder as the executable." >> "release/$shader/README.txt"
-              echo "3. Self-contained build with embedded media support (~80-100MB)." >> "release/$shader/README.txt"
-              if [[ "${{ runner.os }}" == "Windows" ]]; then
-                echo "" >> "release/$shader/README.txt"
-                echo "Windows Notes:" >> "release/$shader/README.txt"
-                echo "- If you see errors about missing DLLs, install Visual C++ Redistributable:" >> "release/$shader/README.txt"
-                echo "  https://aka.ms/vs/17/release/vc_redist.x64.exe" >> "release/$shader/README.txt"
-                echo "- Use the .bat launcher for best compatibility" >> "release/$shader/README.txt"
-              fi
+            # Create a README
+            REPO="https://github.com/altunenes/cuneus"
+            R="release/$shader/README.txt"
+            echo "$shader — a cuneus shader" > "$R"
+            echo "$REPO" >> "$R"
+            echo "" >> "$R"
+            echo "How to run:" >> "$R"
+            if [[ "${{ runner.os }}" == "Windows" ]]; then
+              echo "  Double-click run_$shader.bat  (or run it from a terminal)." >> "$R"
             else
-              echo "1. just run the executable!" >> "release/$shader/README.txt"
-              echo "2. The 'shaders' directory must remain in the same folder as the executable." >> "release/$shader/README.txt"
+              echo "  In a terminal, from this folder:  ./run_$shader.sh" >> "$R"
             fi
+            echo "" >> "$R"
+            echo "Notes:" >> "$R"
+            echo "- Keep the \"shaders\" folder next to the executable." >> "$R"
+            if [[ "${{ matrix.shader_config.gstreamer_required }}" == "true" ]]; then
+              echo "- GStreamer is bundled — no separate install needed. Please use the" >> "$R"
+              echo "  launcher above so the bundled media plugins are found." >> "$R"
+              if [[ "${{ runner.os }}" == "Windows" ]]; then
+                echo "- If you see missing-DLL errors, install the Visual C++ Redistributable:" >> "$R"
+                echo "    https://aka.ms/vs/17/release/vc_redist.x64.exe" >> "$R"
+              fi
+            fi
+            echo "" >> "$R"
+            echo "Questions or bugs? Open an issue at $REPO/issues" >> "$R"
             
             # Windows-specific: create .bat launcher
             if [[ "${{ runner.os }}" == "Windows" ]]; then
