@@ -61,9 +61,7 @@ impl ShaderHotReload {
         for path in &normalized_paths {
             if let Some(parent) = path.parent() {
                 if !parent.exists() {
-                    fs::create_dir_all(parent).unwrap_or_else(|e| {
-                        warn!("Failed to create shader directory: {e}");
-                    });
+                    continue;
                 }
 
                 if let Err(e) = watcher.watch(parent, RecursiveMode::Recursive) {
@@ -126,21 +124,18 @@ impl ShaderHotReload {
         let shader_paths = vec![normalized_path.clone()];
 
         if let Some(parent) = normalized_path.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).unwrap_or_else(|e| {
-                    warn!("Failed to create shader directory: {e}");
-                });
-            }
 
-            if let Err(e) = watcher.watch(parent, RecursiveMode::Recursive) {
-                warn!(
-                    "Could not watch shader directory {}: {}",
-                    parent.display(),
-                    e
-                );
-                if cfg!(windows) {
-                    if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
-                        warn!("Fallback watch failed: {e}");
+            if parent.exists() {
+                if let Err(e) = watcher.watch(parent, RecursiveMode::Recursive) {
+                    warn!(
+                        "Could not watch shader directory {}: {}",
+                        parent.display(),
+                        e
+                    );
+                    if cfg!(windows) {
+                        if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
+                            warn!("Fallback watch failed: {e}");
+                        }
                     }
                 }
             }
