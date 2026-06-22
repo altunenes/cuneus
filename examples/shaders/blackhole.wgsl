@@ -34,7 +34,7 @@ struct BlackHoleParams {
     cam_yaw: f32, cam_roll: f32, fov: f32, taa_weight: f32,
     exposure: f32, bloom: f32, star_density: f32, gamma: f32,
     spectral_shift: f32, saturation: f32, reddening: f32, sharpen: f32,
-    vividness: f32, opacity: f32, highlight: f32, _pad_c: f32,
+    vividness: f32, opacity: f32, highlight: f32, spectral: f32,
 }
 @group(1) @binding(0) var out: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(1) var<uniform> p: BlackHoleParams;
@@ -221,15 +221,23 @@ fn starfield(dir: v3) -> v3 {
 fn galaxy(dir: v3) -> v3 {
     let d = normalize(dir);
     let bn = normalize(v3(0.62, 0.70, 0.36));
-    let h = dot(d, bn);
-    let band = exp(-h * h * 22.0);
-    if (band < 0.003) { return v3(0.0); }
-    let neb = fbm(d * 3.5 + 21.0);
-    let fine = fbm(d * 11.0 + 7.0);
-    let dust = smoothstep(0.45, 0.78, fbm(d * 6.0 + 40.0));
-    var col = mix(v3(0.012, 0.025, 0.07), v3(0.05, 0.10, 0.22), neb);
-    col += v3(0.05, 0.08, 0.17) * pow(fine, 3.0);
-    col *= band * (0.3 + 0.9 * neb) * (1.0 - 0.7 * dust);
+    let warp = fbm(d * 1.3 + 4.0) - 0.5;
+    let h = dot(d, bn) + 0.25 * warp;
+    let band = exp(-h * h * 9.0);
+    if (band < 0.002) { return v3(0.0); }
+
+    let neb = fbm(d * 2.5 + 21.0);
+    let wisp = fbm(d * 6.0 + warp * 2.0 + 7.0);
+    let fine = fbm(d * 13.0 + 40.0);
+    let dust = smoothstep(0.4, 0.85, fbm(d * 4.0 + 50.0));
+
+    let hue = fbm(d * 1.8 + 60.0);
+    var col = mix(v3(0.010, 0.022, 0.065), v3(0.03, 0.09, 0.14), neb);
+    col = mix(col, v3(0.10, 0.06, 0.09), smoothstep(0.55, 0.95, hue) * 0.5);
+    col += v3(0.06, 0.09, 0.18) * pow(wisp, 3.0);
+    col += v3(0.10, 0.12, 0.16) * pow(fine, 5.0);
+
+    col *= band * (0.25 + 0.9 * neb) * (1.0 - 0.6 * dust);
     return col * p.star_density * 0.5;
 }
 
@@ -274,10 +282,14 @@ fn disk_sample(pos: v3, photon_dir: v3) -> v4 {
     let vfall = exp(-yr * yr * 2.4);
     if (vfall < 0.01) { return v4(0.0); }
 
+    let radial = pow(clamp(p.disk_inner / max(rho, 1e-3), 0.0, 1.0), 1.6);
+    if (radial * vfall * 1.4 < 0.004) { return v4(0.0); }
+
     // log spiral coords
     let ang = atan2(pos.z, pos.x);
     let spiral = ang + p.swirl_speed * u_t.time - log(max(rho, 1e-3)) * 2.4;
-    var q = v3(rho * 0.55, spiral * 0.65, pos.y * 0.9) * p.noise_scale;
+    // anisotropic
+    var q = v3(rho * 0.9, spiral * 0.22, pos.y * 1.1) * p.noise_scale;
 
     let eddy = curl2(q * 2.2 + 9.0) * 0.3;
     q += v3(eddy.x, eddy.y, 0.0);
@@ -290,7 +302,6 @@ fn disk_sample(pos: v3, photon_dir: v3) -> v4 {
     dens *= mix(0.2, 1.4, smoothstep(0.15, 1.0, macro_n));
     let dust = smoothstep(0.35, 0.92, cloud_noise(q * 0.45 + 30.0, 3, 22.0));
     dens *= (1.0 - 0.72 * dust);
-    let radial = pow(clamp(p.disk_inner / max(rho, 1e-3), 0.0, 1.0), 1.6);
     dens *= radial * vfall;
     if (dens < 0.004) { return v4(0.0); }
 
@@ -307,6 +318,16 @@ fn disk_sample(pos: v3, photon_dir: v3) -> v4 {
     let g = 1.0 + (g_raw - 1.0) * p.doppler;        // doppler/redshift
     let T_obs = clamp(T_local * pow(max(g, 1e-3), p.redshift), 1200.0, 26000.0);
     var emis = blackbody_lut(T_obs);
+    if (p.spectral > 0.001) {
+        let wl_base = mix(660.0, 430.0, smoothstep(2000.0, 13000.0, T_local));
+        let wl_obs = clamp(wl_base / max(g, 0.2), 400.0, 690.0);
+        var spec = max(v3(0.0), xyz_to_rgb * wl_to_xyz(wl_obs));
+        let sl = dot(spec, v3(0.2126, 0.7152, 0.0722));
+        spec = spec / max(sl, 1e-4); 
+        let sl2 = dot(spec, v3(0.2126, 0.7152, 0.0722));
+        spec = max(v3(0.0), v3(sl2) + (spec - v3(sl2)) * (1.0 + p.vividness * 3.0));
+        emis = mix(emis, spec, p.spectral);
+    }
 
     let lum = dot(emis, v3(0.2126, 0.7152, 0.0722));
     emis = max(v3(0.0), mix(v3(lum), emis, p.saturation));
@@ -314,12 +335,15 @@ fn disk_sample(pos: v3, photon_dir: v3) -> v4 {
     let core_d = (rho - p.disk_inner) / max(1e-3, p.disk_inner * 0.5);
     emis += v3(1.0, 0.34, 0.10) * exp(-core_d * core_d) * 1.5;
 
-    let lit_d = (rho - p.disk_inner) / max(1e-3, p.disk_inner * 0.9);
+    let lit_d = (rho - p.disk_inner) / max(1e-3, p.disk_inner * 0.01);
     emis += v3(1.0, 0.74, 0.48) * exp(-lit_d * lit_d) * p.ring_glow * 0.7;
+
+    let face = abs(photon_dir.y);
+    let view = mix(0.4, 1.15, smoothstep(0.0, 0.6, face));
 
     let beam_raw = pow(max(g, 1e-3), p.beaming);
     let beam = beam_raw / (1.0 + 0.12 * max(0.0, beam_raw - 1.0));
-    emis *= p.disk_brightness * (0.18 + 4.0 * radial) * beam * shade;
+    emis *= p.disk_brightness * (0.18 + 4.0 * radial) * beam * shade * view;
 
     //dir light
     let light_dir = normalize(-pos + v3(1e-4, 1e-4, 1e-4));
@@ -424,11 +448,12 @@ fn scene(@builtin(global_invocation_id) id: vec3<u32>) {
         let crossing = (ray.pos.y * next.pos.y < 0.0);
         let near_plane = abs(ray.pos.y) < p.disk_thickness * 2.0 + seglen;
         if (in_annulus && (crossing || near_plane)) {
-            let subs = clamp(i32(seglen / 0.10) + 1, 1, 14);
+            let dither = hash13(v3(f32(id.x), f32(id.y), f32(u_t.frame)));
+            let subs = clamp(i32(seglen / 0.06) + 1, 1, 24);
             let inv = 1.0 / f32(subs);
             for (var s = 0; s < subs; s++) {
                 if (col.a > 0.99) { break; }
-                let t = (f32(s) + 0.5) * inv;
+                let t = (f32(s) + dither) * inv;
                 let sp = mix(ray.pos, next.pos, t);
                 let smp = disk_sample(sp, photon_dir);
                 if (smp.a > 0.0) {
@@ -448,9 +473,13 @@ fn scene(@builtin(global_invocation_id) id: vec3<u32>) {
 
     // photon ring glow
     if (!captured) {
-        let glow = smoothstep(1.0, 6.0, turn) * p.ring_glow;
-        let glow_col = mix(v3(1.0, 0.38, 0.16), v3(1.0, 0.85, 0.6), smoothstep(5.0, 9.0, turn)); // ember -> hot edge
-        col = v4(col.rgb + glow * glow_col * (1.0 - col.a) * 1.7, col.a);
+        let glow = smoothstep(1.6, 7.0, turn) * p.ring_glow;
+        if (glow > 0.001) {
+            let glow_col = mix(v3(1.0, 0.32, 0.12), v3(1.0, 0.62, 0.38), smoothstep(5.0, 9.0, turn));
+            let ang = atan2(photon_dir.z, photon_dir.x);
+            let tex = 0.55 + 0.55 * cloud_noise(v3(ang * 2.4 + p.swirl_speed * u_t.time, turn * 0.5, 5.0), 3, 18.0);
+            col = v4(col.rgb + glow * glow_col * tex * (1.0 - col.a) * 0.9, col.a);
+        }
     }
     if (!captured && col.a < 0.99) {
         let bg = starfield(photon_dir) + galaxy(photon_dir);

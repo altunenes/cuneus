@@ -14,7 +14,7 @@ cuneus::uniform_params! {
         cam_yaw: f32, cam_roll: f32, fov: f32, taa_weight: f32,
         exposure: f32, bloom: f32, star_density: f32, gamma: f32,
         spectral_shift: f32, saturation: f32, reddening: f32, sharpen: f32,
-        vividness: f32, opacity: f32, highlight: f32, _pad_c: f32,
+        vividness: f32, opacity: f32, highlight: f32, spectral: f32,
     }
 }
 
@@ -34,7 +34,7 @@ impl ShaderManager for BlackHoleShader {
             cam_yaw: 0.0, cam_roll: 0.0, fov: 80.0, taa_weight: 0.8,
             exposure: 1.0, bloom: 0.07, star_density: 1.0, gamma: 1.2,
             spectral_shift: -95.0, saturation: 3.0, reddening: 0.57, sharpen: 0.7,
-            vividness: 1.0, opacity: 0.0, highlight: 0.08, _pad_c: 0.0,
+            vividness: 1.0, opacity: 0.0, highlight: 0.08, spectral: 0.0,
         };
 
         let base = RenderKit::new(core);
@@ -131,6 +131,7 @@ impl ShaderManager for BlackHoleShader {
 
                         egui::CollapsingHeader::new("Optics").default_open(false).show(ui, |ui| {
                                 changed |= ui.add(egui::Slider::new(&mut params.temperature, 0.3..=2.5).text("Temp")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.spectral, 0.0..=1.0).text("Spectral")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.vividness, 0.0..=1.0).text("Vividness")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.spectral_shift, -120.0..=120.0).text("Shift")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.saturation, 0.0..=3.0).text("Saturation")).changed();
