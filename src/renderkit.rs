@@ -304,13 +304,20 @@ impl RenderKit {
     where
         F: FnMut(&egui::Context),
     {
-        // Auto-scale egui proportionally to window size
-        let scale_factor = core.window().scale_factor() as f32;
-        let logical_height = core.size.height as f32 / scale_factor;
-        let zoom = (logical_height / self.initial_logical_height).clamp(0.5, 3.0);
+        // Auto-scale egui proportionally to window size.
+        let native_ppp = core.window().scale_factor() as f32;
+        let logical_height = core.size.height as f32 / native_ppp;
+        let zoom = (logical_height / self.initial_logical_height.max(1.0)).clamp(0.5, 3.0);
         self.context.set_zoom_factor(zoom);
 
-        let raw_input = self.egui_state.take_egui_input(core.window());
+        let mut raw_input = self.egui_state.take_egui_input(core.window());
+        if core.size.width > 0 && core.size.height > 0 {
+            let ppp = (native_ppp * zoom).max(0.1);
+            let size_pts =
+                egui::vec2(core.size.width as f32, core.size.height as f32) / ppp;
+            raw_input.screen_rect =
+                Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size_pts));
+        }
         self.context.run_ui(raw_input, |ctx| ui_builder(ctx))
     }
 
