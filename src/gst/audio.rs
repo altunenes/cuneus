@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
-use gst::glib::ControlFlow;
 use gst::prelude::*;
+use gst::BusSyncReply;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
 use log::{debug, info, warn};
@@ -286,7 +286,7 @@ impl AudioSynthManager {
         }
 
         let bus = pipeline.bus().expect("Pipeline has no bus");
-        let _ = bus.add_watch(move |_, message| {
+        bus.set_sync_handler(|_, message| {
             match message.view() {
                 gst::MessageView::Error(err) => {
                     warn!(
@@ -303,7 +303,7 @@ impl AudioSynthManager {
                 }
                 _ => (),
             }
-            ControlFlow::Continue
+            BusSyncReply::Pass
         });
 
         Ok(Self {
@@ -1197,6 +1197,7 @@ pub struct PcmStreamManager {
     samples_written: u64,
     is_playing: bool,
     master_volume: f64,
+    wall_start: Option<Instant>,
 }
 
 impl PcmStreamManager {
@@ -1225,9 +1226,7 @@ impl PcmStreamManager {
             .build();
         appsrc.set_caps(Some(&caps));
         appsrc.set_format(gst::Format::Time);
-        appsrc.set_is_live(true);
         appsrc.set_stream_type(gst_app::AppStreamType::Stream);
-        // ~100ms of buffer — low latency for interactive use
         appsrc.set_max_bytes(sample_rate as u64 * channels as u64 * 4 / 10);
 
         let audioconvert = gst::ElementFactory::make("audioconvert")
@@ -1250,6 +1249,31 @@ impl PcmStreamManager {
             .name("pcm_sink")
             .build()
             .map_err(|_| anyhow!("Failed to create autoaudiosink"))?;
+        if let Some(bin) = audiosink.dynamic_cast_ref::<gst::Bin>() {
+            bin.connect_deep_element_added(|_, _, element| {
+                let name = element
+                    .factory()
+                    .map(|f| f.name().to_string())
+                    .unwrap_or_else(|| element.name().to_string());
+                info!("autoaudiosink child added: {name}");
+
+                if element.find_property("sync").is_some() {
+                    element.set_property("sync", false);
+                }
+               if element.find_property("low-latency").is_some() {
+                    element.set_property("low-latency", true);
+                }
+               if element.find_property("max-lateness").is_some() {
+                    element.set_property("max-lateness", -1i64);
+                }
+                if element.find_property("buffer-time").is_some() {
+                    element.set_property("buffer-time", 20_000i64);
+                }
+                if element.find_property("latency-time").is_some() {
+                    element.set_property("latency-time", 5_000i64);
+                }
+            });
+        }
 
         pipeline
             .add_many([
@@ -1271,7 +1295,7 @@ impl PcmStreamManager {
         .map_err(|_| anyhow!("Failed to link PCM pipeline elements"))?;
 
         let bus = pipeline.bus().expect("Pipeline has no bus");
-        let _ = bus.add_watch(move |_, message| {
+        bus.set_sync_handler(|_, message| {
             match message.view() {
                 gst::MessageView::Error(err) => {
                     warn!(
@@ -1285,7 +1309,7 @@ impl PcmStreamManager {
                 }
                 _ => (),
             }
-            ControlFlow::Continue
+            BusSyncReply::Pass
         });
 
         Ok(Self {
@@ -1297,6 +1321,7 @@ impl PcmStreamManager {
             samples_written: 0,
             is_playing: false,
             master_volume: 0.5,
+            wall_start: None,
         })
     }
 
@@ -1305,8 +1330,17 @@ impl PcmStreamManager {
         self.pipeline
             .set_state(gst::State::Playing)
             .map_err(|e| anyhow!("Failed to start PCM stream: {:?}", e))?;
+        let timeout = gst::ClockTime::from_seconds(2);
+        let (result, current, _pending) = self.pipeline.state(timeout);
+        match result {
+            Ok(_) => info!("PCM pipeline reached PLAYING (current={current:?})"),
+            Err(e) => warn!(
+                "PCM pipeline did not reach PLAYING within 2 s (state={current:?}, err={e:?})"
+            ),
+        }
+
         self.is_playing = true;
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        self.wall_start = Some(Instant::now());
         Ok(())
     }
 
@@ -1318,6 +1352,7 @@ impl PcmStreamManager {
             .map_err(|e| anyhow!("Failed to stop PCM stream: {:?}", e))?;
         self.is_playing = false;
         self.samples_written = 0;
+        self.wall_start = None;
         Ok(())
     }
 
@@ -1329,6 +1364,18 @@ impl PcmStreamManager {
         }
 
         let num_frames = samples.len() as u64 / self.channels as u64;
+        if let Some(start) = self.wall_start {
+            let elapsed_samples =
+                (start.elapsed().as_secs_f64() * self.sample_rate as f64) as u64;
+            let lag_threshold = self.sample_rate as u64 / 100;
+            let ahead_threshold = self.sample_rate as u64 / 50;
+            if self.samples_written + lag_threshold < elapsed_samples {
+                self.samples_written = elapsed_samples;
+            } else if self.samples_written > elapsed_samples + ahead_threshold {
+                return Ok(());
+            }
+        }
+
         let byte_data: &[u8] = bytemuck::cast_slice(samples);
 
         let mut buffer = gst::Buffer::with_size(byte_data.len())
