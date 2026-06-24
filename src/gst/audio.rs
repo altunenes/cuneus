@@ -1257,20 +1257,23 @@ impl PcmStreamManager {
                     .unwrap_or_else(|| element.name().to_string());
                 info!("autoaudiosink child added: {name}");
 
-                if element.find_property("sync").is_some() {
-                    element.set_property("sync", false);
-                }
-               if element.find_property("low-latency").is_some() {
-                    element.set_property("low-latency", true);
-                }
-               if element.find_property("max-lateness").is_some() {
-                    element.set_property("max-lateness", -1i64);
-                }
-                if element.find_property("buffer-time").is_some() {
-                    element.set_property("buffer-time", 20_000i64);
-                }
-                if element.find_property("latency-time").is_some() {
-                    element.set_property("latency-time", 5_000i64);
+                #[cfg(target_os = "windows")]
+                {
+                    if element.find_property("sync").is_some() {
+                        element.set_property("sync", false);
+                    }
+                    if element.find_property("low-latency").is_some() {
+                        element.set_property("low-latency", true);
+                    }
+                    if element.find_property("max-lateness").is_some() {
+                        element.set_property("max-lateness", -1i64);
+                    }
+                    if element.find_property("buffer-time").is_some() {
+                        element.set_property("buffer-time", 20_000i64);
+                    }
+                    if element.find_property("latency-time").is_some() {
+                        element.set_property("latency-time", 5_000i64);
+                    }
                 }
             });
         }
@@ -1340,7 +1343,11 @@ impl PcmStreamManager {
         }
 
         self.is_playing = true;
-        self.wall_start = Some(Instant::now());
+        self.wall_start = if cfg!(target_os = "windows") {
+            Some(Instant::now())
+        } else {
+            None
+        };
         Ok(())
     }
 
