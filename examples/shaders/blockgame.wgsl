@@ -568,7 +568,7 @@ fn upd(sy: f32) {
                 nb.c = m.alb;
                 
                 if (nb.s.x < .5) { ss(2u); game_data[11] = atime(); } // game over tone
-                else { sb(cb, nb); scb(cb + 1u); ssc(gsc() + 10u); game_data[9] = atime(); game_data[12] = f32(cb); }
+                else { sb(cb, nb); scb(cb + 1u); ssc(gsc() + select(10u, 20u, nb.perf > .5)); game_data[9] = atime(); game_data[12] = f32(cb); }
             }
         }
         else if (state == 2u) {
@@ -674,14 +674,9 @@ fn game_sound(ta: f32) -> f32 {
 }
 
 @compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let ss = vec2<f32>(textureDimensions(output));
-    let pp = vec2<f32>(gid.xy);
-    
-    if any(pp >= ss) { return; }
-    
-    // single thread updates game state, then synthesizes this frame's PCM chunk
+fn sim(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (all(gid.xy == vec2(0u))) {
+        let ss = vec2<f32>(textureDimensions(output));
         init(); upd(ss.y);
         let n = u_game.samples_to_generate;
         for (var i = 0u; i < n; i++) {
@@ -691,6 +686,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             audio_buffer[i * 2u + 1u] = v;
         }
     }
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn main_image(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let ss = vec2<f32>(textureDimensions(output));
+    let pp = vec2<f32>(gid.xy);
+    
+    if any(pp >= ss) { return; }
     
     // background
     let ny = pp.y / ss.y;

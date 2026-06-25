@@ -57,9 +57,14 @@ impl ShaderManager for BlockTowerGame {
         let state_buffer_size = (1024 * std::mem::size_of::<f32>()) as u64;
         // Audio sample buffer: interleaved stereo f32 -> 2x samples.
         let audio_buffer_size = (MAX_SAMPLES_PER_FRAME * 2) as usize;
+        let passes = vec![
+            PassDescription::new("sim", &[]),
+            PassDescription::new("main_image", &[]),
+        ];
 
         let config = ComputeShader::builder()
-            .with_entry_point("main")
+            .with_entry_point("sim")
+            .with_multi_pass(&passes)
             .with_custom_uniforms::<GameUniform>()
             .with_mouse()
             .with_fonts()
@@ -164,7 +169,7 @@ impl ShaderManager for BlockTowerGame {
                         egui::CollapsingHeader::new("Camera")
                             .default_open(true)
                             .show(ui, |ui| {
-                                ui.add(egui::Slider::new(&mut self.game.camera_height, 0.0..=20.0).text("Height"));
+                                ui.add(egui::Slider::new(&mut self.game.camera_height, -20.0..=20.0).text("Height"));
                                 ui.add(egui::Slider::new(&mut self.game.camera_angle, -3.14159..=3.14159).text("Angle"));
                                 ui.add(egui::Slider::new(&mut self.game.camera_scale, 20.0..=200.0).text("Scale"));
 
@@ -196,7 +201,9 @@ impl ShaderManager for BlockTowerGame {
             self.base.render_ui(core, |_ctx| {})
         };
 
-        self.compute_shader.dispatch(&mut frame.encoder, core);
+        self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, 0, [1, 1, 1]);
+        self.compute_shader.dispatch_stage(&mut frame.encoder, core, 1);
+        self.compute_shader.current_frame += 1;
 
         self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
 
@@ -206,6 +213,17 @@ impl ShaderManager for BlockTowerGame {
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
         let ui_handled = self.base.forward_to_egui(core, event);
+
+        if let WindowEvent::MouseWheel { delta, .. } = event {
+            if !ui_handled {
+                let dy = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => *y,
+                    winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
+                };
+                self.game.camera_scale = (self.game.camera_scale + dy * 5.0).clamp(20.0, 200.0);
+            }
+            return true;
+        }
 
         if self.base.handle_mouse_input(core, event, ui_handled) {
             return true;

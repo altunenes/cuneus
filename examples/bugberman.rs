@@ -67,9 +67,14 @@ impl ShaderManager for Bugberman {
         // Game state: header + 13x11 grid (tiles + flames) + bomb list. 2048 floats is plenty...
         let state_buffer_size = (2048 * std::mem::size_of::<f32>()) as u64;
         let audio_buffer_size = (MAX_SAMPLES_PER_FRAME * 2) as usize;
+        let passes = vec![
+            PassDescription::new("sim", &[]),
+            PassDescription::new("main_image", &[]),
+        ];
 
         let config = ComputeShader::builder()
-            .with_entry_point("main")
+            .with_entry_point("sim")
+            .with_multi_pass(&passes)
             .with_custom_uniforms::<GameUniform>()
             .with_fonts()
             .with_audio(audio_buffer_size)
@@ -169,7 +174,9 @@ impl ShaderManager for Bugberman {
             self.base.render_ui(core, |_ctx| {})
         };
 
-        self.compute_shader.dispatch(&mut frame.encoder, core);
+        self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, 0, [1, 1, 1]);
+        self.compute_shader.dispatch_stage(&mut frame.encoder, core, 1);
+        self.compute_shader.current_frame += 1;
 
         self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
 
