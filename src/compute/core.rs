@@ -1307,9 +1307,11 @@ impl ComputeShader {
             if let Some(ref group2) = self.group2_bind_group {
                 compute_pass.set_bind_group(2, group2, &[]);
             } else if let Some(empty_group2) = self.empty_bind_groups.get(&2) {
-                log::warn!(
-                    "Using empty Group 2 bind group for pass {entry_point} - channels won't work!"
-                );
+                if self.num_channels > 0 {
+                    log::warn!(
+                        "Using empty Group 2 bind group for pass {entry_point} - channels won't work!"
+                    );
+                }
                 compute_pass.set_bind_group(2, empty_group2, &[]);
             } else {
                 log::error!("No Group 2 bind group available - this shouldn't happen with contiguous layout");
