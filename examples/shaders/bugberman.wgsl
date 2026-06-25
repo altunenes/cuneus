@@ -409,12 +409,7 @@ fn hud(pp: v2, ss: v2) -> v3 {
 }
 
 @compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: u3) {
-    let ss = v2(textureDimensions(out));
-    let pp = v2(gid.xy);
-    if (any(pp >= ss)) { return; }
-
-    // thread 0: logic + this frame's pcm
+fn sim(@builtin(global_invocation_id) gid: u3) {
     if (all(gid.xy == vec2(0u))) {
         init(); upd();
         for (var i = 0u; i < gm.sn; i++) {
@@ -422,6 +417,13 @@ fn main(@builtin(global_invocation_id) gid: u3) {
             au[i * 2u] = v; au[i * 2u + 1u] = v;
         }
     }
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn main_image(@builtin(global_invocation_id) gid: u3) {
+    let ss = v2(textureDimensions(out));
+    let pp = v2(gid.xy);
+    if (any(pp >= ss)) { return; }
 
     let now = u_t.time;
     let s = u32(g[0]);
