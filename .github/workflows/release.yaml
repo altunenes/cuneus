@@ -90,7 +90,7 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Starting GStreamer installation process..."
-          $gstVer = "1.28.3"
+          $gstVer = "1.28.4"
           $tempDir = "C:\gst-temp"
           $installDir = "C:\gstreamer"
 
