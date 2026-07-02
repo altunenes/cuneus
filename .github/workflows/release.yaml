@@ -16,7 +16,7 @@ jobs:
         shader_config:
           # Shaders that REQUIRE GStreamer (media features)
           - group: "media"
-            features: ""
+            features: "--features media"
             gstreamer_required: true
             shaders: "bugberman,audiovis,computecolors,fft,pathtracing,voronoi,fluid,cnn,synth,blockgame,kuwahara,lego,gaussian,tameimp,"
           

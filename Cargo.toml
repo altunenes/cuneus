@@ -31,7 +31,7 @@ log = "0.4.25"
 ply-rs-bw = "4.0"
 
 [features]
-default = ["media"]
+default = []
 media = ["gstreamer", "gstreamer-video", "gstreamer-app", "gstreamer-pbutils"]
 
 [[example]]
