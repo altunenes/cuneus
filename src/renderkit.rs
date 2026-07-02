@@ -1115,13 +1115,13 @@ impl RenderKit {
     }
 
     /// Update current active texture and return whether an external texture update is needed
-    pub fn update_current_texture(&mut self, core: &Core, queue: &wgpu::Queue) -> bool {
+    pub fn update_current_texture(&mut self, _core: &Core, _queue: &wgpu::Queue) -> bool {
         #[cfg(feature = "media")]
         {
             if self.using_video_texture {
-                return self.update_video_texture(core, queue);
+                return self.update_video_texture(_core, _queue);
             } else if self.using_webcam_texture {
-                return self.update_webcam_texture(core, queue);
+                return self.update_webcam_texture(_core, _queue);
             }
         }
         // Static textures don't need updates

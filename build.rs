@@ -1,4 +1,4 @@
-// Purpose: This build script configures the build environment for GStreamer integration.
+// Purpose: This build script configures the build environment for optional GStreamer integration.
 //
 // What this does:
 // - Sets up necessary paths, environment variables and linker flags for GStreamer
@@ -27,6 +27,12 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_MEDIA");
+
+    if env::var_os("CARGO_FEATURE_MEDIA").is_none() {
+        return;
+    }
+
     let target = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
     match target.as_str() {
