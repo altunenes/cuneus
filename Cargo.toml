@@ -34,4 +34,64 @@ ply-rs-bw = "4.0"
 default = ["media"]
 media = ["gstreamer", "gstreamer-video", "gstreamer-app", "gstreamer-pbutils"]
 
+[[example]]
+name = "audiovis"
+required-features = ["media"]
+
+[[example]]
+name = "blockgame"
+required-features = ["media"]
+
+[[example]]
+name = "bugberman"
+required-features = ["media"]
+
+[[example]]
+name = "computecolors"
+required-features = ["media"]
+
+[[example]]
+name = "debugscreen"
+required-features = ["media"]
+
+[[example]]
+name = "fft"
+required-features = ["media"]
+
+[[example]]
+name = "fluid"
+required-features = ["media"]
+
+[[example]]
+name = "gaussian"
+required-features = ["media"]
+
+[[example]]
+name = "kuwahara"
+required-features = ["media"]
+
+[[example]]
+name = "lego"
+required-features = ["media"]
+
+[[example]]
+name = "pathtracing"
+required-features = ["media"]
+
+[[example]]
+name = "synth"
+required-features = ["media"]
+
+[[example]]
+name = "tameimp"
+required-features = ["media"]
+
+[[example]]
+name = "veridisquo"
+required-features = ["media"]
+
+[[example]]
+name = "voronoi"
+required-features = ["media"]
+
 [dev-dependencies]
