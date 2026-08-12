@@ -220,7 +220,8 @@ impl ShaderManager for Gaussian3DShader {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false});
 
-        let sorter = GaussianSorter::new_16bit(&core.device);
+        let params = GaussianParams::default();
+        let sorter = GaussianSorter::for_depth_shift(&core.device, params.depth_shift);
         let mut renderer = GaussianRenderer::new(
             &core.device,
             core.config.format,
@@ -241,7 +242,7 @@ impl ShaderManager for Gaussian3DShader {
             render_bind_group: None,
             camera_buffer,
             params_buffer,
-            params: GaussianParams::default(),
+            params,
             camera: CameraState::new(),
             surface_format: core.config.format}
     }
@@ -289,6 +290,7 @@ impl ShaderManager for Gaussian3DShader {
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut params = self.params;
+        let previous_depth_shift = params.depth_shift;
         let mut changed = false;
         let mut load_ply_path: Option<std::path::PathBuf> = None;
         let mut should_start_export = false;
@@ -379,6 +381,19 @@ impl ShaderManager for Gaussian3DShader {
             self.load_ply(core, &path);
         }
         if changed {
+            if (GaussianSorter::required_key_bits(previous_depth_shift) <= 16)
+                != (GaussianSorter::required_key_bits(params.depth_shift) <= 16)
+            {
+                self.sorter = GaussianSorter::for_depth_shift(&core.device, params.depth_shift);
+                if params.num_gaussians > 0 {
+                    self.sorter.prepare_with_buffers(
+                        &core.device,
+                        &self.preprocess.storage_buffers[2],
+                        &self.preprocess.storage_buffers[3],
+                        params.num_gaussians,
+                    );
+                }
+            }
             self.params = params;
             self.sync_params(core);
         }
