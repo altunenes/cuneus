@@ -46,6 +46,21 @@ impl GaussianSorter {
         }
     }
 
+    /// Create the narrowest sorter that can order keys produced by
+    /// `(u32::MAX - depth_bits) >> depth_shift` without truncation.
+    pub fn for_depth_shift(device: &wgpu::Device, depth_shift: u32) -> Self {
+        if Self::required_key_bits(depth_shift) <= 16 {
+            Self::new_16bit(device)
+        } else {
+            Self::new(device)
+        }
+    }
+
+    /// Maximum key width produced by the Gaussian depth transform.
+    pub const fn required_key_bits(depth_shift: u32) -> u32 {
+        32_u32.saturating_sub(depth_shift)
+    }
+
     /// Prepare sorter for specific buffers
     /// This binds directly to the depth_keys and sorted_indices buffers
     pub fn prepare_with_buffers(
@@ -106,7 +121,6 @@ impl GaussianSorter {
         self.current_count
     }
 }
-
 
 pub struct GaussianRenderer {
     pipeline: wgpu::RenderPipeline,
