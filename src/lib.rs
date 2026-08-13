@@ -88,7 +88,7 @@ pub mod prelude {
         compute::ComputeShader, compute::ComputeShaderBuilder, compute::MultiPassManager,
         compute::PassDescription, compute::StorageBufferSpec,
         compute::COMPUTE_TEXTURE_FORMAT_RGBA16, compute::COMPUTE_TEXTURE_FORMAT_RGBA8,
-        save_frame, CharInfo, ControlsRequest, Core, ExportManager, FontSystem,
+        save_frame, CharInfo, ControlsRequest, Core, DeviceLimits, ExportManager, FontSystem,
         FontUniforms, KeyInputHandler, RenderKit, Renderer, ShaderApp, ShaderControls,
         FrameContext, ShaderHotReload, ShaderManager, TextureManager, UniformBinding,
         UniformProvider,
@@ -218,6 +218,20 @@ macro_rules! compute_shader {
     }};
 }
 
+/// Which device limits to request at creation.
+///
+/// Defaults to [`DeviceLimits::Default`] wgpu's portable limits
+/// Opt into [`DeviceLimits::Adapter`] for large buffers and
+/// grids on capable hw.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DeviceLimits {
+    /// wgpu's portable defaults.
+    #[default]
+    Default,
+    /// Everything the adapter reports
+    Adapter,
+}
+
 pub struct Core {
     pub surface: wgpu::Surface<'static>,
     pub device: Arc<wgpu::Device>,
@@ -228,6 +242,10 @@ pub struct Core {
 }
 impl Core {
     pub async fn new(window: Window) -> Self {
+        Self::new_with_limits(window, DeviceLimits::Default).await
+    }
+
+    pub async fn new_with_limits(window: Window, limits: DeviceLimits) -> Self {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let window_box = Box::new(window);
@@ -249,11 +267,15 @@ impl Core {
             })
             .await
             .unwrap();
+        let required_limits = match limits {
+            DeviceLimits::Default => wgpu::Limits::default(),
+            DeviceLimits::Adapter => adapter.limits(),
+        };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
+                required_limits,
                 memory_hints: Default::default(),
                 experimental_features: Default::default(),
                 trace: wgpu::Trace::default(),
