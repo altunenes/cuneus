@@ -140,6 +140,7 @@ pub struct ComputeConfiguration {
     pub has_audio: bool,
     pub has_atomic_buffer: bool,
     pub atomic_buffer_channels: u32,
+    pub atomic_buffer_bytes: Option<u64>,
     pub audio_buffer_size: usize,
     pub has_audio_spectrum: bool,
     pub audio_spectrum_size: usize,
@@ -198,6 +199,7 @@ impl ComputeShaderBuilder {
                 has_audio: false,
                 has_atomic_buffer: false,
                 atomic_buffer_channels: 3,
+                atomic_buffer_bytes: None,
                 audio_buffer_size: 1024,
                 has_audio_spectrum: false,
                 audio_spectrum_size: 128,
@@ -313,6 +315,16 @@ impl ComputeShaderBuilder {
     pub fn with_atomic_buffer(mut self, channels: u32) -> Self {
         self.config.has_atomic_buffer = true;
         self.config.atomic_buffer_channels = channels;
+        self
+    }
+
+    /// Enable an atomic `u32` buffer of exactly `bytes` bytes (Group 2).
+    ///
+    /// The size is fixed for the pipeline's lifetime. ([`with_atomic_buffer`] sizes the
+    /// buffer per pixel, `width * height * channels`.)
+    pub fn with_atomic_buffer_bytes(mut self, bytes: u64) -> Self {
+        self.config.has_atomic_buffer = true;
+        self.config.atomic_buffer_bytes = Some(bytes);
         self
     }
 
