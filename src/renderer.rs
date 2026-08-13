@@ -78,7 +78,7 @@ impl Renderer {
             vertex: wgpu::VertexState {
                 module: vs_module,
                 entry_point: Some("vs_main"),
-                buffers: &[Vertex::desc()],
+                buffers: &[Some(Vertex::desc())],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
