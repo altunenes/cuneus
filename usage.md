@@ -1,6 +1,6 @@
 # Cuneus Usage Guide
 
-Cuneus is a GPU compute shader engine with a unified backend for single-pass, multi-pass, and atomic compute shaders. It features built-in UI controls, hot-reloading, media integration, and GPU-driven audio synthesis.
+Cuneus is a GPU compute shader engine with a unified backend for single/multi pass, and atomic compute shaders. It features built in UI controls, hot-reloading, media integration, and GPU driven audio synthesis.
 
 **Key Philosophy:** Declare what you need in the builder → get predictable bindings in WGSL. No manual binding management, no boilerplate. Add `.with_mouse()` in Rust, access `@group(2) mouse` in your shader. The **4-Group Binding Convention** guarantees where every resource lives: Group 0 (time), Group 1 (output/params), Group 2 (engine resources), Group 3 (user data/multi-pass). Everything flows from the builder.
 
@@ -40,15 +40,15 @@ Cuneus enforces a standard bind group layout to create a stable and predictable 
 ### 4. Execution Models (Dispatching)
 
 - **Automatic (`.dispatch()`):** This is the recommended method. It executes the entire pipeline you defined in the builder (including all multi-pass stages) and automatically increments the frame counter.
-- **Manual (`.dispatch_stage()`):** This gives you fine-grained control to run specific compute kernels from your WGSL file. It is essential for advanced patterns like path tracing accumulation or conditional updates. **You must manually increment `compute_shader.current_frame` when using this method.**
+- **Manual (`.dispatch_stage()`):** Runs one pass at a time for fine grained control storage buffer multi pass (FFT, CNN), staged atomic pipelines, and iterative accumulation where you advance the frame counter yourself. **You must manually increment `compute_shader.current_frame` when using this method.**
 
 ### 5. Multi-Pass Models
 
 The framework elegantly handles two types of multi-pass computation:
 
 1. **Texture-Based (Ping-Pong):** Ideal for image processing and feedback effects. Intermediate results are stored in textures. Each buffer independently tracks its write state, so any pass can read from any previous pass's output — and cross-frame feedback (self-referencing passes) works automatically.
-   - *Examples with cross-frame feedback: `lich.rs`, `currents.rs`, `rorschach.rs`, `jfa.rs`*
-   - *Examples with within-frame only: `kuwahara.rs`, `fluid.rs`, `2dneuron.rs`*
+   - *Examples with cross-frame feedback: `lich.rs`, `rorschach.rs`, `jfa.rs`*
+   - *Examples with within-frame only: `kuwahara.rs`, `fluid.rs`*
 
 2. **Storage-Buffer-Based (Shared Memory):** Ideal for GPU algorithms like FFT or simulations like CNNs. All passes read from and write to the same large, user-defined storage buffers. This is enabled by using `.with_multi_pass()` *and* `.with_storage_buffer()`.
    - *Examples: `fft.rs`, `cnn.rs`*
@@ -159,7 +159,7 @@ impl ShaderManager for MyShader {
         self.compute_shader.dispatch(&mut frame.encoder, core);
 
         // Blit the compute shader's output texture to the screen
-        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader);
+        self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
 
         // end_frame() handles UI overlay + submit + present in one call
         self.base.end_frame(core, frame, full_output);
@@ -217,6 +217,9 @@ struct TimeUniform { time: f32, delta: f32, frame: u32, _padding: u32 };
 // Audio spectrum (if .with_audio_spectrum() is used) - takes 1 binding
 @group(2) @binding(N) var<storage, read> audio_spectrum: array<f32>;
 // Atomic buffer (if .with_atomic_buffer() is used) - takes 1 binding
+// `.with_atomic_buffer(channels)` sizes it width*height*channels — per-pixel, scales with
+// the window. Use `.with_atomic_buffer_bytes(n)` when the data isn't per-pixel: the buffer
+// stays a fixed size regardless of window size.
 @group(2) @binding(N) var<storage, read_write> atomic_buffer: array<atomic<u32>>;
 // Media channels (if .with_channels(2) is used) - takes 2 bindings per channel
 @group(2) @binding(N) var channel0: texture_2d<f32>;
@@ -276,7 +279,7 @@ note that cuneus creates one buffer pair per unique name. Each dispatch flips th
 ### `dispatch()` vs `dispatch_stage()`
 
 - **`dispatch()`** — Runs all passes with correct per-pass ping-pong bind groups. Auto-increments frame counter. Use for **texture-based multipass** (most shaders).
-- **`dispatch_stage(encoder, core, index)`** — Runs one pass using **global** bind groups (no ping-pong awareness). Does not increment frame counter. Use for **storage-buffer multipass** or **path tracing accumulation** (`mandelbulb.rs`).
+- **`dispatch_stage(encoder, core, index)`** — Runs one pass using **global** bind groups (no ping-pong awareness). Does not increment the frame counter. Use for **storage-buffer multipass** (`fft.rs`, `cnn.rs`) and **manually-staged / accumulating pipelines** (`buddhabrot.rs`).
 
 **Important:** `dispatch_stage()` cannot select correct ping-pong sides for texture-based multipass. For iterative texture-based solving, use duplicate passes with `dispatch()` instead.
 
@@ -319,25 +322,20 @@ let passes = vec![
 ];
 ```
 
-### Manual Dispatching
+### Manual Stage Dispatch
 
-For effects like path tracing that require conditional accumulation, use `dispatch_stage()`. This prevents the frame counter from advancing automatically, allowing you to build up an image over multiple real frames that all correspond to a single logical `time_data.frame`.
+`dispatch_stage()` runs one pass at a time, so you decide what runs each frame and advance the frame counter yourself. This suits iterative accumulation (run the heavy pass only until it converges, keep compositing every frame) and any pipeline needing conditional or per-stage control. `dispatch_stage()` does not auto-increment — bump `current_frame` yourself.
 
 ```rust
-// See mandelbulb.rs for a practical example
+// See buddhabrot.rs
 fn render(&mut self, core: &Core) -> Result<(), wgpu::SurfaceError> {
     // ...
-    // Set frame uniform manually for accumulation
-    self.compute_shader.time_uniform.data.frame = self.frame_count;
-    self.compute_shader.time_uniform.update(&core.queue);
-    
-    // Dispatch the single stage of the path tracer
-    self.compute_shader.dispatch_stage(&mut encoder, core, 0);
+    // Run each pass explicitly, by index, in order
+    self.compute_shader.dispatch_stage(&mut frame.encoder, core, 0); // compute / accumulate
+    self.compute_shader.dispatch_stage(&mut frame.encoder, core, 1); // composite / main_image
 
-    // Only increment the logical frame count when accumulation is active
-    if self.current_params.accumulate > 0 {
-        self.frame_count += 1;
-    }
+    // dispatch_stage does not auto increment advance the frame counter yourself
+    self.compute_shader.current_frame += 1;
     // ...
 }
 ```
@@ -355,7 +353,6 @@ frame.encoder = core.flush_encoder(frame.encoder);
 // Now the next dispatch sees the updated ping value
 self.compute_shader.dispatch_stage(&mut frame.encoder, core, NEXT_PASS);
 ```
-
 
 ## Media & Integration
 
@@ -440,7 +437,7 @@ Two methods for external texture input:
 compute_shader.update_input_texture(&tm.view, &tm.sampler, &core.device);
 ```
 
-**Important for multi-pass:** When using `.dispatch()`, `input_texture` is only available in `main_image` pass. Intermediate passes do not receive it. To access `input_texture` from all passes, use `dispatch_stage()` instead. See `fft.rs` and `computecolors.rs` for this pattern.
+**Multi-pass note:** `.with_input_texture()` fits single-pass shaders and storage-buffer multi-pass (`fft.rs`, `computecolors.rs`, run via `dispatch_stage()`). Don't use it with ping-pong (texture) multi-pass — it panics at startup with a Group 1 bind-group mismatch. For an HDRI/environment map, or any texture you sample from an intermediate pass, use `.with_channels()` instead.
 
 **`.with_channels(N)`** - N texture/sampler pairs in **Group 2**. Accessible from **all passes** with both `.dispatch()` and `dispatch_stage()`.
 
@@ -462,8 +459,10 @@ compute_shader.update_channel_texture(1, &tm2.view, &tm2.sampler, &core.device, 
 
 | Method                  | Single-pass | Multi-pass `.dispatch()` | Multi-pass `dispatch_stage()` |
 |-------------------------|-------------|--------------------------|-------------------------------|
-| `.with_input_texture()` | All passes  | `main_image` only        | All stages                    |
+| `.with_input_texture()` | All passes  | `main_image` only †      | All stages                    |
 | `.with_channels()`      | All passes  | All passes               | All stages                    |
+
+† Storage-buffer multi-pass only. Ping-pong multi-pass panics at startup — use `.with_channels()` (and for HDRIs, always).
 
 ### Loading Textures From Code
 
