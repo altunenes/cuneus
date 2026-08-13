@@ -1724,7 +1724,7 @@ impl ComputeShader {
             }
 
             let samples = {
-                let data = buffer_slice.get_mapped_range();
+                let data = buffer_slice.get_mapped_range().unwrap();
                 let samples: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
                 samples
             };
@@ -1947,7 +1947,7 @@ impl ComputeShader {
             .unwrap();
         rx.recv().unwrap().unwrap();
 
-        let padded_data = buffer_slice.get_mapped_range().to_vec();
+        let padded_data = buffer_slice.get_mapped_range().unwrap().to_vec();
         let mut unpadded_data = Vec::with_capacity((settings.width * settings.height * 4) as usize);
         for chunk in padded_data.chunks(padded_bytes_per_row as usize) {
             unpadded_data.extend_from_slice(&chunk[..unpadded_bytes_per_row as usize]);

@@ -446,7 +446,7 @@ impl ShaderManager for Gaussian3DShader {
 
         self.base.handle_render_output(core, &view, full_output, &mut encoder);
         core.queue.submit(Some(encoder.finish()));
-        output.present();
+        core.queue.present(output);
         self.base.fps_tracker.update();
         Ok(())
     }

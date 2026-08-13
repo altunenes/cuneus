@@ -336,10 +336,12 @@ impl RenderKit {
         let clipped_primitives = self
             .context
             .tessellate(full_output.shapes, screen_descriptor.pixels_per_point);
-        // Update egui textures
-        for (id, image_delta) in &full_output.textures_delta.set {
-            self.egui_renderer
-                .update_texture(&core.device, &core.queue, *id, image_delta);
+        // Update egui textures (egui 0.36 batches multiple deltas per texture).
+        for (id, image_deltas) in &full_output.textures_delta.set {
+            for image_delta in image_deltas {
+                self.egui_renderer
+                    .update_texture(&core.device, &core.queue, *id, image_delta);
+            }
         }
 
         self.egui_renderer.update_buffers(
@@ -408,7 +410,7 @@ impl RenderKit {
         let mut encoder = frame.encoder;
         self.handle_render_output(core, &frame.view, full_output, &mut encoder);
         core.queue.submit(std::iter::once(encoder.finish()));
-        frame.output.present();
+        core.queue.present(frame.output);
         self.fps_tracker.update();
     }
 
