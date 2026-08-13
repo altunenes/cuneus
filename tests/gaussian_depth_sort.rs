@@ -100,9 +100,10 @@ fn depth_shift_uses_enough_radix_bits_and_sorts_wide_keys() {
             .recv()
             .expect("payload map callback")
             .expect("payload map");
-        let sorted_keys: Vec<u32> = bytemuck::cast_slice(&key_slice.get_mapped_range()).to_vec();
+        let sorted_keys: Vec<u32> =
+            bytemuck::cast_slice(&key_slice.get_mapped_range().unwrap()).to_vec();
         let sorted_payloads: Vec<u32> =
-            bytemuck::cast_slice(&payload_slice.get_mapped_range()).to_vec();
+            bytemuck::cast_slice(&payload_slice.get_mapped_range().unwrap()).to_vec();
         let actual: Vec<_> = sorted_keys
             .into_iter()
             .zip(sorted_payloads)

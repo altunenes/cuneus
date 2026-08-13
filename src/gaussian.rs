@@ -513,7 +513,7 @@ impl GaussianExporter {
         let _ = core.device.poll(wgpu::PollType::wait_indefinitely());
         rx.recv().unwrap().unwrap();
 
-        let padded_data = buffer_slice.get_mapped_range().to_vec();
+        let padded_data = buffer_slice.get_mapped_range().unwrap().to_vec();
         let mut data = Vec::with_capacity((settings.width * settings.height * 4) as usize);
         for chunk in padded_data.chunks(padded_bytes_per_row as usize) {
             data.extend_from_slice(&chunk[..unpadded_bytes_per_row as usize]);
