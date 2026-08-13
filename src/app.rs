@@ -1,4 +1,4 @@
-use crate::{Core, ShaderManager};
+use crate::{Core, DeviceLimits, ShaderManager};
 use log::error;
 use winit::{
     application::ApplicationHandler,
@@ -11,6 +11,7 @@ use winit::{
 pub struct ShaderApp {
     window_title: String,
     window_size: (u32, u32),
+    device_limits: DeviceLimits,
     core: Option<Core>,
 }
 
@@ -24,10 +25,19 @@ impl ShaderApp {
         let app = Self {
             window_title: String::from(window_title),
             window_size: (width, height),
+            device_limits: DeviceLimits::default(),
             core: None,
         };
 
         (app, event_loop)
+    }
+
+    /// Request the adapter's full limits instead of wgpu's default.
+    ///
+    /// Opt in for large buffers and grids on capable GPUs. See [`DeviceLimits`].
+    pub fn with_adapter_limits(mut self) -> Self {
+        self.device_limits = DeviceLimits::Adapter;
+        self
     }
 
     pub fn run<S: ShaderManager + 'static>(
@@ -71,7 +81,7 @@ impl<S: ShaderManager> ApplicationHandler for ShaderAppHandler<S> {
             .create_window(window_attributes)
             .expect("Failed to create window");
         window.set_window_level(winit::window::WindowLevel::AlwaysOnTop);
-        let core = pollster::block_on(Core::new(window));
+        let core = pollster::block_on(Core::new_with_limits(window, self.app.device_limits));
         // Initialize the shader with the core if it hasn't been initialized yet
         if let Some(shader_creator) = self.shader_creator.take() {
             let shader = shader_creator(&core);
