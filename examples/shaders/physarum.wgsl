@@ -24,30 +24,51 @@ alias v2 = vec2<f32>; alias v3 = vec3<f32>; alias v4 = vec4<f32>; alias u3 = vec
 const pi: f32 = 3.14159265; const tau: f32 = 6.28318530;
 const asc: f32 = 256.; const aiv: f32 = 1./256.;
 
-// hash
 fn pcg(s:u32)->u32{var st=s*747796405u+2891336453u;var w=((st>>((st>>28u)+4u))^st)*277803737u;return (w>>22u)^w;}
 fn h1(s:u32)->f32{return f32(pcg(s))/4294967295.;}
 
-// chebyshev behavior map (Continuous Non-Linear stuff)
-fn cheby(i:v4,bs:u32,ms:u32,ma:f32)->v4{
-    var r=v4(0.);let ip=i*.4;
-    for(var j=0u;j<5u;j++){
-        let b=bs+j*24u;let m=ms+j*12u;
-        var w1=v4(h1(b)*2.-1.,h1(b+1u)*2.-1.,h1(b+2u)*2.-1.,h1(b+3u)*2.-1.);
-        var w2=v4(h1(b+4u)*2.-1.,h1(b+5u)*2.-1.,h1(b+6u)*2.-1.,h1(b+7u)*2.-1.);
-        w1+=ma*v4(h1(m)*2.-1.,h1(m+1u)*2.-1.,h1(m+2u)*2.-1.,h1(m+3u)*2.-1.);
-        w2+=ma*v4(h1(m+4u)*2.-1.,h1(m+5u)*2.-1.,h1(m+6u)*2.-1.,h1(m+7u)*2.-1.);
-        let s=tanh(dot(ip,w1));let t=tanh(dot(ip,w2));
-        let s1=s;let s2=2.*s*s-1.;let s3=s*(4.*s*s-3.);
-        let t1=t;let t2=2.*t*t-1.;let t3=t*(4.*t*t-3.);
-        let mc=1.+ma*(h1(m+8u)-.5);
-        let v=((h1(b+8u)*2.-1.)*s1*t1+(h1(b+9u)*2.-1.)*s1+(h1(b+10u)*2.-1.)*t1+(h1(b+11u)*2.-1.)*s2*.5+(h1(b+12u)*2.-1.)*t2*.5+(h1(b+13u)*2.-1.)*s1*t2*.35+(h1(b+14u)*2.-1.)*s2*t1*.35+(h1(b+15u)*2.-1.)*s2*t2*.15+(h1(b+16u)*2.-1.)*s3*t1*.08+(h1(b+17u)*2.-1.)*s1*t3*.08)*mc;
-        r+=v4(h1(b+19u)*2.-1.,h1(b+20u)*2.-1.,h1(b+21u)*2.-1.,h1(b+22u)*2.-1.)*v;
+// Bivariate Tensor Product Chebyshev behavior map 
+fn cheby(inp_raw: v4, base_seed: u32, mut_seed: u32, mut_amt: f32) -> v4 {
+    var result = v4(0.0);
+    let inp = inp_raw * 0.4;
+
+    for (var i = 0u; i < 5u; i++) {
+        let b = base_seed + i * 24u;
+        let m = mut_seed + i * 12u;
+
+        var w1 = v4(h1(b)*2.-1., h1(b+1u)*2.-1., h1(b+2u)*2.-1., h1(b+3u)*2.-1.);
+        var w2 = v4(h1(b+4u)*2.-1., h1(b+5u)*2.-1., h1(b+6u)*2.-1., h1(b+7u)*2.-1.);
+
+        w1 += mut_amt * v4(h1(m)*2.-1., h1(m+1u)*2.-1., h1(m+2u)*2.-1., h1(m+3u)*2.-1.);
+        w2 += mut_amt * v4(h1(m+4u)*2.-1., h1(m+5u)*2.-1., h1(m+6u)*2.-1., h1(m+7u)*2.-1.);
+
+        let s = tanh(dot(inp, w1));
+        let t = tanh(dot(inp, w2));
+
+        let S1 = s; let S2 = 2.0 * s * s - 1.0; let S3 = s * (4.0 * s * s - 3.0);
+        let T1 = t; let T2 = 2.0 * t * t - 1.0; let T3 = t * (4.0 * t * t - 3.0);
+
+        let mc = 1.0 + mut_amt * (h1(m + 8u) - 0.5);
+        let val = (
+            (h1(b +  8u) * 2.0 - 1.0) * S1 * T1
+          + (h1(b +  9u) * 2.0 - 1.0) * S1
+          + (h1(b + 10u) * 2.0 - 1.0) * T1
+          + (h1(b + 11u) * 2.0 - 1.0) * S2 * 0.5
+          + (h1(b + 12u) * 2.0 - 1.0) * T2 * 0.5
+          + (h1(b + 13u) * 2.0 - 1.0) * S1 * T2 * 0.35
+          + (h1(b + 14u) * 2.0 - 1.0) * S2 * T1 * 0.35
+          + (h1(b + 15u) * 2.0 - 1.0) * S2 * T2 * 0.15
+          + (h1(b + 16u) * 2.0 - 1.0) * S3 * T1 * 0.08
+          + (h1(b + 17u) * 2.0 - 1.0) * S1 * T3 * 0.08
+        ) * mc;
+
+        let out_w = v4(h1(b + 19u) * 2.0 - 1.0, h1(b + 20u) * 2.0 - 1.0, h1(b + 21u) * 2.0 - 1.0, h1(b + 22u) * 2.0 - 1.0);
+        result += out_w * val;
     }
-    return tanh(r*.15)*.4;
+    return tanh(result * 0.15) * 0.4;
 }
 
-// sensor read
+// Sensor Read
 fn sns(pt:v2,sp:u32,tx:texture_2d<f32>,sm:sampler)->v2{
     let cv=v2(textureDimensions(tx));let tp=clamp(pt,v2(0.),cv-v2(1.));
     let s=textureSampleLevel(tx,sm,tp/cv,0.);
@@ -60,7 +81,7 @@ fn sns(pt:v2,sp:u32,tx:texture_2d<f32>,sm:sampler)->v2{
     return v2(o,t*p.sAt-t*p.sRp);
 }
 
-// attractors
+// Attractors
 fn att(pos:v2,t:f32,cv:v2)->v2{
     var f=v2(0.);let c=u32(p.aCt);let cx=cv*.5;let m=min(cv.x,cv.y);
     for(var i=0u;i<c;i++){
@@ -81,45 +102,56 @@ fn agent_update(@builtin(global_invocation_id) id:u3){
     var pos:v2;var vel:v2;
 
     if(u_t.frame<2u){
-        // Spawn randomly
-        pos=v2(h1(sd)*cv.x,h1(sd+1u)*cv.y);let a=h1(sd+2u)*tau;
-        // Random Velocity Direction
-        vel=v2(cos(a),sin(a))*p.spd*.5;
+        // Edge Spawn Logic
+        let h_1 = h1(sd); let h_2 = h1(sd + 1u);
+        let cx = cv * 0.5; let min_dim = min(cv.x, cv.y);
+        let dist_from_center = min_dim * 0.38;
+        var offset: v2;
+        switch sp {
+            case 0u: { offset = v2(-dist_from_center, 0.0); }
+            case 1u: { offset = v2(dist_from_center, -dist_from_center * 0.6); }
+            default: { offset = v2(dist_from_center, dist_from_center * 0.6); }
+        }
+        let r = sqrt(h_1) * (min_dim * 0.15);
+        let theta = h_2 * tau;
+        pos = cx + offset + v2(r * cos(theta), r * sin(theta));
+        let inward_dir = normalize(-offset);
+        let spray_angle = atan2(inward_dir.y, inward_dir.x) + (h_2 - 0.5) * 0.5;
+        vel = v2(cos(spray_angle), sin(spray_angle)) * p.spd * 0.5;
     }else{
         let dt=textureLoad(t0,vec2<i32>(id.xy),0);pos=dt.xy*cv;vel=dt.zw*cv;
         var hd=select(h1(sd+10u)*tau,atan2(vel.y,vel.x),length(vel)>.01);
 
         let sa=p.sa;let sdt=p.sd;
-        let F=sns(pos+v2(cos(hd),sin(hd))*sdt,sp,t1,s1);
+        let F =sns(pos+v2(cos(hd),sin(hd))*sdt,sp,t1,s1);
         let FL=sns(pos+v2(cos(hd+sa*.5),sin(hd+sa*.5))*sdt,sp,t1,s1);
         let FR=sns(pos+v2(cos(hd-sa*.5),sin(hd-sa*.5))*sdt,sp,t1,s1);
-        let L=sns(pos+v2(cos(hd+sa),sin(hd+sa))*sdt,sp,t1,s1);
-        let R=sns(pos+v2(cos(hd-sa),sin(hd-sa))*sdt,sp,t1,s1);
+        let L =sns(pos+v2(cos(hd+sa),sin(hd+sa))*sdt,sp,t1,s1);
+        let R =sns(pos+v2(cos(hd-sa),sin(hd-sa))*sdt,sp,t1,s1);
 
-        // Instantly repels agents from stagnant
-        let c=1.5;let pn=3.;
-        let Ftx=F.x-max(0.,F.x-c)*pn;let FLtx=FL.x-max(0.,FL.x-c)*pn;let FRtx=FR.x-max(0.,FR.x-c)*pn;
-        let Ltx=L.x-max(0.,L.x-c)*pn;let Rtx=R.x-max(0.,R.x-c)*pn;
-
-        // Feed the tricked sensors into the brain
-        let iv=v4(Ftx,(Ltx-Rtx)+(FLtx-FRtx)*.5,F.y,(L.y-R.y)+(FL.y-FR.y)*.5)*p.sGn;
-        let bs=u32(p.rSd*10000.);let ms=bs+50000u+sp*7919u;
+        let own_lr = (L.x - R.x) + (FL.x - FR.x) * 0.5;
+        let cross_lr = (L.y - R.y) + (FL.y - FR.y) * 0.5;
+        let iv = v4(F.x, own_lr, F.y, cross_lr) * p.sGn;
         
-        let bO=cheby(iv,bs,ms,p.mSc);let mO=cheby(v4(iv.x,-iv.y,iv.z,-iv.w),bs,ms,p.mSc);
+        let bs = u32(p.rSd * 10000.0); let ms = bs + 50000u + sp * 7919u;
+        
+        let bO = cheby(iv, bs, ms, p.mSc);
+        let mO = cheby(v4(iv.x, -iv.y, iv.z, -iv.w), bs, ms, p.mSc);
+
         let fw=v2(cos(hd),sin(hd));let lf=v2(-sin(hd),cos(hd));
 
         let wF=fw*(bO.x+mO.x)*p.fSc+lf*(bO.y-mO.y)*p.fSc;
         let wS=fw*(bO.z+mO.z)*p.str+lf*(bO.w-mO.w)*p.str;
+        let cross_steer = fw * F.y + lf * cross_lr;
         let jit=(h1(sd+6u)*2.-1.)*p.jit;
         
-        // FLUID FORCES (The Bubble Makers)
+        // FLUID FORCES
         let P=pos/cv;let px=1./cv;
         let cN=textureSampleLevel(t1,s1,fract(P+v2(0.,px.y*2.)),0.).xyz;
         let cS=textureSampleLevel(t1,s1,fract(P-v2(0.,px.y*2.)),0.).xyz;
         let cE=textureSampleLevel(t1,s1,fract(P+v2(px.x*2.,0.)),0.).xyz;
         let cW=textureSampleLevel(t1,s1,fract(P-v2(px.x*2.,0.)),0.).xyz;
         
-        // Pseudo-wind pressure based on local gradients
         let wnd=v2(-(dot(cN,v3(1.))-dot(cS,v3(1.))),dot(cE,v3(1.))-dot(cW,v3(1.)))*p.wnd*p.spd;
         var aN=0.;var aS=0.;var aE=0.;var aW=0.;
         if(sp==0u){aN=cN.y+cN.z;aS=cS.y+cS.z;aE=cE.y+cE.z;aW=cW.y+cW.z;}
@@ -127,11 +159,9 @@ fn agent_update(@builtin(global_invocation_id) id:u3){
         else{aN=cN.x+cN.y;aS=cS.x+cS.y;aE=cE.x+cE.y;aW=cW.x+cW.y;}
         let pb=v2(-(aE-aW),-(aN-aS))*p.sRp*p.spd*6.;
 
-        // BASE MOVEMENT (The Vein Makers)
-        vel=vel*p.drg+wF*p.spd+(fw*F.y+lf*iv.w)*p.spd*.5+v2(cos(hd+jit),sin(hd+jit))*p.jit*.5;
-        
-        // HYBRID COEXISTENCE BLEND
-        vel+=(wnd+pb)*max(smoothstep(.01,1.,aN+aS+aE+aW),h1(aid*113u)*.5)*p.flu;
+        // BLEND BEHAVIORS
+        vel = vel * p.drg + wF * p.spd + cross_steer * p.spd * 0.5 + v2(cos(hd+jit),sin(hd+jit))*p.jit*.5;
+        vel += (wnd+pb)*max(smoothstep(.01,1.,aN+aS+aE+aW),h1(aid*113u)*.5)*p.flu;
 
         let mxS=p.spd*4.;let cS_=length(vel);
         if(cS_>mxS){vel*=mxS/cS_;}
@@ -230,7 +260,7 @@ fn turing_resolve(@builtin(global_invocation_id) id:u3){
     textureStore(out,id.xy,v4(fS,1.));
 }
 
-fn dT(x:f32)->f32{return tanh(log(1.+max(0.,x))*.8);}
+fn dT(x:f32)->f32{return tanh(log(1.+max(0.,x))*.1);}
 fn hRot(c:v3,a:f32)->v3{let k=v3(.57735);let ca=cos(a);let sa=sin(a);return c*ca+cross(k,c)*sa+k*dot(k,c)*(1.-ca);}
 fn aces(x:v3)->v3{return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),v3(0.),v3(1.));}
 
@@ -247,10 +277,22 @@ fn main_image(@builtin(global_invocation_id) id:u3){
     let hl=textureSampleLevel(t1,s1,fract(uv-v2(px.x,0.)),0.);
     let hu=textureSampleLevel(t1,s1,fract(uv+v2(0.,px.y)),0.);
     let hd=textureSampleLevel(t1,s1,fract(uv-v2(0.,px.y)),0.);
-    
-    let dx=(hr.x+hr.y+hr.z)-(hl.x+hl.y+hl.z);
-    let dy=(hu.x+hu.y+hu.z)-(hd.x+hd.y+hd.z);
-    let nS=smoothstep(0.,.3,sqrt(dx*dx+dy*dy))*8.;
+
+    var dx=(hr.x+hr.y+hr.z)-(hl.x+hl.y+hl.z);
+    var dy=(hu.x+hu.y+hu.z)-(hd.x+hd.y+hd.z);
+    let relief = clamp(p.p1, 0., 3.);
+    if (relief > 0.001) {
+        let wr=textureSampleLevel(t1,s1,fract(uv+v2(px.x*3.,0.)),0.);
+        let wl=textureSampleLevel(t1,s1,fract(uv-v2(px.x*3.,0.)),0.);
+        let wu=textureSampleLevel(t1,s1,fract(uv+v2(0.,px.y*3.)),0.);
+        let wv=textureSampleLevel(t1,s1,fract(uv-v2(0.,px.y*3.)),0.);
+        let hx=dx-((wr.x+wr.y+wr.z)-(wl.x+wl.y+wl.z))/3.;
+        let hy=dy-((wu.x+wu.y+wu.z)-(wv.x+wv.y+wv.z))/3.;
+        let gate=smoothstep(0.05,0.5,tt);
+        dx += hx*relief*3.*gate;
+        dy += hy*relief*3.*gate;
+    }
+    let nS=smoothstep(0.,.2,sqrt(dx*dx+dy*dy))*8.;
     let nor=normalize(v3(-dx*nS,-dy*nS,1.));
 
     // 2. TRI-TONE DENSITY COLORS (Edges -> Cores -> Nuclei)
@@ -282,7 +324,7 @@ fn main_image(@builtin(global_invocation_id) id:u3){
     var col=bs*pow(smoothstep(0.,1.,tt),1.8);
     let ao=clamp(.1+.9*(tt/(bt+.01)),0.,1.);
 
-    let l1=normalize(v3(.6,.5,1.));let l2=normalize(v3(-.7,-.4,.8));let l3=normalize(v3(0.,.8,.2));
+    let l1=normalize(v3(.1,.3,1.));let l2=normalize(v3(-.7,-.4,.8));let l3=normalize(v3(0.,.8,.2));
     let vd=normalize(v3(.5-uv.x,.5-uv.y,1.));
     
     let df=max(0.,dot(nor,l1)) + max(0.,dot(nor,l2))*.5 + max(0.,dot(nor,l3))*.3;
@@ -295,7 +337,10 @@ fn main_image(@builtin(global_invocation_id) id:u3){
 
     if(bt>.001){
         let br=bl/(bt+.0001);
-        col+=hRot(c0*br.x+c1*br.y+c2*br.z,.15+smoothstep(.1,.9,(br.x*br.y+br.y*br.z+br.z*br.x)*4.)*2.5)*dT(bt)*p.glw*.4;
+        
+         let glow_color = hRot(c0*br.x + c1*br.y + c2*br.z, .15 + smoothstep(.1, .9, (br.x*br.y + br.y*br.z + br.z*br.x) * 4.) * 2.5);
+        
+        col += glow_color * bt * p.glw * 1.5;
     }
 
     col=aces(col);

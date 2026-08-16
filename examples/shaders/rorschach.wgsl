@@ -37,6 +37,8 @@ struct RorschachParams {
 @group(3) @binding(1) var sam0: sampler;
 @group(3) @binding(2) var tex1: texture_2d<f32>;
 @group(3) @binding(3) var sam1: sampler;
+@group(3) @binding(4) var tex2: texture_2d<f32>;
+@group(3) @binding(5) var sam2: sampler;
 
 alias v2 = vec2<f32>;
 alias v3 = vec3<f32>;
@@ -61,6 +63,9 @@ fn fbm(u:v2)->f32{
     for(var i=0;i<oct;i++){v+=a*nz(s);s*=2.;a*=.5;}
     return v;
 }
+
+fn flsmp(tex:texture_2d<f32>,sm:sampler,uv:v2)->v4{return textureSampleLevel(tex,sm,clamp(uv,v2(0.),v2(1.)),0.);}
+fn cnz(uv:v2)->v2{let e=.01;let dx=nz(uv+v2(e,0.))-nz(uv-v2(e,0.));let dy=nz(uv+v2(0.,e))-nz(uv-v2(0.,e));return v2(dy,-dx)/(2.*e);}
 
 fn wrp(uv:v2,sd:f32)->f32{
     let q=v2(fbm(uv+v2(0.)+sd),fbm(uv+v2(5.2,1.3)+sd));
@@ -100,6 +105,46 @@ fn flow_field(@builtin(global_invocation_id) id:vec3<u32>){
     let t=textureLoad(tex0,c+iv2(0,-1),0).x;let b=textureLoad(tex0,c+iv2(0,1),0).x;
     let l=textureLoad(tex0,c+iv2(-1,0),0).x;let r=textureLoad(tex0,c+iv2(1,0),0).x;
     textureStore(out,id.xy,v4((r-l)*.5,(b-t)*.5,0.,1.));
+}
+
+
+@compute @workgroup_size(16,16,1)
+fn fluid_advect(@builtin(global_invocation_id) id:vec3<u32>){
+    let dim=textureDimensions(out);if(id.x>=dim.x||id.y>=dim.y){return;}
+    let R=v2(f32(dim.x),f32(dim.y));let px=1./R;let uv=(v2(id.xy)+.5)/R;
+    let v0=flsmp(tex0,sam0,uv).xy;
+    var vel=flsmp(tex0,sam0,uv-v0).xy;
+    vel+=cnz(uv*5.+u_t.time*.2)*p.turbulence*.0006;
+    let sN=flsmp(tex1,sam1,uv+v2(0.,px.y)).x;let sS=flsmp(tex1,sam1,uv-v2(0.,px.y)).x;
+    let sE=flsmp(tex1,sam1,uv+v2(px.x,0.)).x;let sW=flsmp(tex1,sam1,uv-v2(px.x,0.)).x;
+    let gs=v2(sE-sW,sN-sS)*.5;
+    vel+=v2(-gs.y,gs.x)*.004;
+    vel*=.99;
+    let sp=length(vel);if(sp>.02){vel*=.02/sp;}
+    if(u_t.frame<2u){vel=v2(0.);}
+    textureStore(out,id.xy,v4(vel,0.,0.));
+}
+
+@compute @workgroup_size(16,16,1)
+fn pressure(@builtin(global_invocation_id) id:vec3<u32>){
+    let dim=textureDimensions(out);if(id.x>=dim.x||id.y>=dim.y){return;}
+    let R=v2(f32(dim.x),f32(dim.y));let px=1./R;let uv=(v2(id.xy)+.5)/R;
+    let vN=flsmp(tex0,sam0,uv+v2(0.,px.y)).xy;let vS=flsmp(tex0,sam0,uv-v2(0.,px.y)).xy;
+    let vE=flsmp(tex0,sam0,uv+v2(px.x,0.)).xy;let vW=flsmp(tex0,sam0,uv-v2(px.x,0.)).xy;
+    let div=.5*((vE.x-vW.x)+(vN.y-vS.y));
+    let pN=flsmp(tex1,sam1,uv+v2(0.,px.y)).x;let pS=flsmp(tex1,sam1,uv-v2(0.,px.y)).x;
+    let pE=flsmp(tex1,sam1,uv+v2(px.x,0.)).x;let pW=flsmp(tex1,sam1,uv-v2(px.x,0.)).x;
+    textureStore(out,id.xy,v4((pN+pS+pE+pW-div)*.25,0.,0.,0.));
+}
+
+@compute @workgroup_size(16,16,1)
+fn fluid_project(@builtin(global_invocation_id) id:vec3<u32>){
+    let dim=textureDimensions(out);if(id.x>=dim.x||id.y>=dim.y){return;}
+    let R=v2(f32(dim.x),f32(dim.y));let px=1./R;let uv=(v2(id.xy)+.5)/R;
+    let raw=flsmp(tex0,sam0,uv).xy;
+    let pN=flsmp(tex1,sam1,uv+v2(0.,px.y)).x;let pS=flsmp(tex1,sam1,uv-v2(0.,px.y)).x;
+    let pE=flsmp(tex1,sam1,uv+v2(px.x,0.)).x;let pW=flsmp(tex1,sam1,uv-v2(px.x,0.)).x;
+    textureStore(out,id.xy,v4(raw-.5*v2(pE-pW,pN-pS),0.,0.));
 }
 
 // C: Painterly Simulation, important and tricky part...
@@ -142,7 +187,12 @@ fn ink_trace(@builtin(global_invocation_id) id:vec3<u32>){
         let dy=nz(ps+e.yx)-nz(ps-e.yx);
         let trb=v2(-dy,dx)*p.turbulence*p.animate;
         
-        let dir=normalize(base_dir+trb);
+        let cx=.5*f32(dim.x);let mir=pos.x>cx;
+        let fp=select(pos,v2(2.*cx-pos.x,pos.y),mir);
+        let fv0=textureLoad(tex2,clamp(iv2(fp),iv2(0),iv2(dim)-1),0).xy;
+        let fv=v2(fv0.x*select(1.,-1.,mir),fv0.y)*p.distortion*60.;
+
+        let dir=normalize(base_dir+trb+fv);
         pos+=dir*spd;
         
         let prg=f32(i)/f32(stp);

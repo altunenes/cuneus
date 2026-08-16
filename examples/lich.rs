@@ -16,7 +16,11 @@ cuneus::uniform_params! {
         color_shift: f32,
         spectrum_mix: f32,
         light_intensity: f32,
-        _pad: f32
+        morph: f32,
+        breathe: f32,
+        dynamic: f32,
+        _pad3: f32,
+        _pad4: f32
     }
 }
 
@@ -38,14 +42,17 @@ impl ShaderManager for LichShader {
         let base = RenderKit::new(core);
 
         let passes = vec![
-            PassDescription::new("lightning", &[]),
-            PassDescription::new("feedback", &["lightning", "feedback"]),
-            PassDescription::new("main_image", &["feedback"]),
+            PassDescription::new("splat", &[]),
+            PassDescription::new("resolve", &["resolve"]),
+            PassDescription::new("taa", &["resolve", "taa"]),
+            PassDescription::new("main_image", &["taa"]),
         ];
 
         let config = ComputeShader::builder()
+            .with_entry_point("splat")
             .with_multi_pass(&passes)
             .with_custom_uniforms::<LichParams>()
+            .with_atomic_buffer(4)
             .with_workgroup_size([16, 16, 1])
             .with_texture_format(cuneus::compute::COMPUTE_TEXTURE_FORMAT_RGBA16)
             .with_label("Lich Lightning")
@@ -55,19 +62,23 @@ impl ShaderManager for LichShader {
 
         let initial_params = LichParams {
             cloud_density: 3.0,
-            lightning_intensity: 1.2,
+            lightning_intensity: 0.3,
             branch_count: 1.0,
-            feedback_decay: 0.94,
+            feedback_decay: 0.5,
             base_color: [0.25, 0.55, 1.0],
-            glow_intensity: 1.5,
+            glow_intensity: 1.0,
             specular_strength: 1.2,
-            contrast: 1.8,
-            gamma: 1.0,
-            saturation: 1.4,
-            color_shift: 12.0,
-            spectrum_mix: 0.4,
+            contrast: 1.5,
+            gamma: 0.10,
+            saturation: 1.3,
+            color_shift: 20.0,
+            spectrum_mix: 0.02,
             light_intensity: 1.6,
-            _pad: 0.0,
+            morph: 3.14,
+            breathe: 1.5,
+            dynamic: 0.0,
+            _pad3: 0.0,
+            _pad4: 0.0,
         };
 
         // Initialize custom uniform with initial parameters
@@ -81,14 +92,10 @@ impl ShaderManager for LichShader {
     }
 
     fn update(&mut self, core: &Core) {
-        // Handle export
-        self.compute_shader.handle_export(core, &mut self.base);
-
-        // Update time
         let current_time = self.base.controls.get_time(&self.base.start_time);
         let delta = 1.0 / 60.0;
-        self.compute_shader
-            .set_time(current_time, delta, &core.queue);
+        self.compute_shader.set_time(current_time, delta, &core.queue);
+        self.compute_shader.handle_export(core, &mut self.base);
     }
 
     fn resize(&mut self, core: &Core) {
@@ -120,18 +127,16 @@ impl ShaderManager for LichShader {
                         egui::CollapsingHeader::new("Parameters")
                             .default_open(true)
                             .show(ui, |ui| {
+                                let mut is_dyn = params.dynamic > 0.5;
+                                if ui.checkbox(&mut is_dyn, "animate").changed() {
+                                    params.dynamic = if is_dyn { 1.0 } else { 0.0 };
+                                    changed = true;
+                                }
                                 changed |= ui.add(egui::Slider::new(&mut params.cloud_density, 0.0..=24.0).text("Seed")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.lightning_intensity, 0.1..=6.0).text("Intensity")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.branch_count, 0.0..=2.0).text("Branching")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.feedback_decay, 0.1..=1.0).text("Decay Rate")).changed();
-                            });
-
-                        egui::CollapsingHeader::new("Impasto")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                changed |= ui.add(egui::Slider::new(&mut params.glow_intensity, 0.0..=5.0).text("Plasma Glow")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.specular_strength, 0.0..=4.0).text("Specular Shimmer")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.light_intensity, 0.1..=4.0).text("Light Intensity")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.lightning_intensity, 0.1..=6.0).text("Density")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.branch_count, 0.2..=2.0).text("Branching")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.feedback_decay, 0.3..=0.99).text("Persistence")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.morph, 2.0..=6.283).text("Strike Speed")).changed();
                             });
 
                         egui::CollapsingHeader::new("Color Gradients & Post Filters")
@@ -148,7 +153,7 @@ impl ShaderManager for LichShader {
                                 ui.separator();
                                 changed |= ui.add(egui::Slider::new(&mut params.contrast, 0.0..=5.0).text("Contrast Line")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.saturation, 0.0..=3.0).text("Saturation")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.gamma, 0.1..=3.0).text("Gamma Correction")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.gamma, 0.1..=1.0).text("Gamma Correction")).changed();
                             });
 
                         ui.separator();
@@ -165,7 +170,9 @@ impl ShaderManager for LichShader {
             self.base.render_ui(core, |_ctx| {})
         };
 
-        self.compute_shader.dispatch(&mut frame.encoder, core);
+        if !self.base.export_manager.is_exporting() {
+            self.compute_shader.dispatch(&mut frame.encoder, core);
+        }
 
         self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
 

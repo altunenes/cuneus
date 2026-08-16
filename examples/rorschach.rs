@@ -43,7 +43,7 @@ impl ShaderManager for RorschachShader {
             seed: 87.0,
             zoom: 5.2,
             threshold: 0.383,
-            distortion: 2.63,
+            distortion: 1.5,
             particle_speed: 0.45,
             particle_life: 0.99,
             trace_steps: 22.0,
@@ -72,7 +72,23 @@ impl ShaderManager for RorschachShader {
         let passes = vec![
             PassDescription::new("shape", &[]),
             PassDescription::new("flow_field", &["shape"]),
-            PassDescription::new("ink_trace", &["ink_trace", "flow_field"]),
+            PassDescription::new("fluid_advect", &["fluid_project", "shape"]),
+            PassDescription::new("pressure", &["fluid_advect", "pressure"]),
+            PassDescription::new("pressure", &["fluid_advect", "pressure"]),
+            PassDescription::new("pressure", &["fluid_advect", "pressure"]),
+            PassDescription::new("pressure", &["fluid_advect", "pressure"]),
+            PassDescription::new("pressure", &["fluid_advect", "pressure"]),
+            PassDescription::new("pressure", &["fluid_advect", "pressure"]),
+            PassDescription::new("pressure", &["fluid_advect", "pressure"]),
+            PassDescription::new("pressure", &["fluid_advect", "pressure"]),
+            PassDescription::new("pressure", &["fluid_advect", "pressure"]),
+            PassDescription::new("pressure", &["fluid_advect", "pressure"]),
+            PassDescription::new("pressure", &["fluid_advect", "pressure"]),
+            PassDescription::new("pressure", &["fluid_advect", "pressure"]),
+            PassDescription::new("pressure", &["fluid_advect", "pressure"]),
+            PassDescription::new("pressure", &["fluid_advect", "pressure"]),
+            PassDescription::new("fluid_project", &["fluid_advect", "pressure"]),
+            PassDescription::new("ink_trace", &["ink_trace", "flow_field", "fluid_project"]),
             PassDescription::new("main_image", &["ink_trace"]),
         ];
 
@@ -147,8 +163,7 @@ impl ShaderManager for RorschachShader {
                                 if ui.add(egui::Slider::new(&mut params.seed, 0.0..=100.0).text("Seed")).changed() { changed = true; should_reset = true; }
                                 if ui.add(egui::Slider::new(&mut params.zoom, 1.0..=10.0).text("Zoom")).changed() { changed = true; should_reset = true; }
                                 if ui.add(egui::Slider::new(&mut params.threshold, 0.3..=0.6).text("Ink Amount")).changed() { changed = true; should_reset = true; }
-                                if ui.add(egui::Slider::new(&mut params.distortion, 0.0..=3.0).text("Warping")).changed() { changed = true; should_reset = true; }
-                                if ui.add(egui::Slider::new(&mut params.fbm_octaves, 1.0..=25.0).text("Detail Octaves")).changed() { 
+                                if ui.add(egui::Slider::new(&mut params.fbm_octaves, 1.0..=25.0).text("Detail Octaves")).changed() {
                                     params.fbm_octaves = params.fbm_octaves.round();
                                     changed = true; 
                                     should_reset = true; 
@@ -161,11 +176,16 @@ impl ShaderManager for RorschachShader {
                                 changed |= ui.add(egui::Slider::new(&mut params.particle_speed, 0.0..=5.0).text("Brush Speed")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.trace_steps, 1.0..=100.0).text("Density/Steps")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.particle_life, 0.8..=0.999).text("Trail Life")).changed();
-                                
                                 if params.animate > 0.5 {
                                     changed |= ui.add(egui::Slider::new(&mut params.evaporation, 0.9..=1.0).text("Evaporation")).changed();
-                                    changed |= ui.add(egui::Slider::new(&mut params.turbulence, 0.0..=3.0).text("Turbulence")).changed();
                                 }
+                            });
+
+                        egui::CollapsingHeader::new("Fluid")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                changed |= ui.add(egui::Slider::new(&mut params.distortion, 0.0..=4.0).text("Fluid Flow")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.turbulence, 0.0..=3.0).text("Turbulence")).changed();
                             });
 
                         egui::CollapsingHeader::new("Visual Settings")
