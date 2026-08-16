@@ -53,7 +53,7 @@ Dependencies are packed sequentially — `&["render", "feedback"]` becomes `inpu
 #### Usage
 
 - If you want to try your own shaders, check out the [usage.md](usage.md) and see [BUILD.md](BUILD.md).
-- **Optional Media Support**: GStreamer dependencies are optional - use `--no-default-features` for lightweight builds with pure GPU compute shaders.
+- **Optional Media Support**: GStreamer dependencies are optional - use `--no-default-features` for lightweight builds
 - **When using cuneus as a dependency** (via `cargo add`):
   - Copy [build.rs](build.rs) to your project root to configure `GStreamer` paths (only needed for media features)
   - then simply use `use cuneus::prelude::*;`

@@ -2,19 +2,14 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 
 cuneus::uniform_params! {
+    #[allow(non_snake_case)]
     struct PhysarumParams {
-        sensor_angle: f32, sensor_dist: f32, drag: f32, move_speed: f32,
-        decay_rate: f32, diffuse_rate: f32, deposit_amt: f32, random_jitter: f32,
-        rule_seed: f32, mutation_scale: f32, force_scale: f32, sensor_gain: f32,
-        species_attract: f32, species_repel: f32, strafe_power: f32, agent_count_scale: f32,
-        glow_intensity: f32, color_shift: f32, specular_strength: f32, gamma: f32,
-        attractor_count: f32, attractor_speed: f32, attractor_radius: f32, attractor_strength: f32,
-        color_spread: f32, saturation: f32, palette_mix: f32, blur_samples: f32,
-        color0_r: f32, color0_g: f32, color0_b: f32,
-        color1_r: f32, color1_g: f32, color1_b: f32,
-        color2_r: f32, color2_g: f32, color2_b: f32,
-        substep: f32, total_samples: f32, wind_strength: f32, turing_scale: f32,
-        _pad1: f32, fluid_blend: f32, _pad3: f32,
+        sa: f32, sd: f32, drg: f32, spd: f32, dec: f32, dif: f32, dep: f32, jit: f32,
+        rSd: f32, mSc: f32, fSc: f32, sGn: f32, sAt: f32, sRp: f32, str: f32, aSc: f32,
+        glw: f32, cSh: f32, spc: f32, gam: f32, aCt: f32, aSp: f32, aRd: f32, aSt: f32,
+        cSp: f32, sat: f32, pMx: f32, blr: f32,
+        c0r: f32, c0g: f32, c0b: f32, c1r: f32, c1g: f32, c1b: f32, c2r: f32, c2g: f32, c2b: f32,
+        sub: f32, tSm: f32, wnd: f32, tur: f32, p1: f32, flu: f32, p3: f32,
     }
 }
 
@@ -27,18 +22,12 @@ struct PhysarumShader {
 impl ShaderManager for PhysarumShader {
     fn init(core: &Core) -> Self {
         let initial_params = PhysarumParams {
-            sensor_angle: 1.50, sensor_dist: 40.0, drag: 0.20, move_speed: 4.95,
-            decay_rate: 0.999, diffuse_rate: 0.10, deposit_amt: 30.0, random_jitter: 0.500,
-            rule_seed: 1.0, mutation_scale: 0.30, force_scale: 0.80, sensor_gain: 5.0,
-            species_attract: 1.00, species_repel: 0.92, strafe_power: 0.15, agent_count_scale: 1.00,
-            glow_intensity: 0.00, color_shift: -0.02, specular_strength: 0.25, gamma: 0.50,
-            attractor_count: 3.0, attractor_speed: 0.30, attractor_radius: 250.0, attractor_strength: 0.15,
-            color_spread: 0.30, saturation: 1.58, palette_mix: 0.57, blur_samples: 0.99,
-            color0_r: 1.0, color0_g: 0.2, color0_b: 0.2,
-            color1_r: 0.2, color1_g: 0.8, color1_b: 0.3,
-            color2_r: 0.2, color2_g: 0.4, color2_b: 1.0,
-            substep: 1.0, total_samples: 1.0, wind_strength: 0.8, turing_scale: 0.0,
-            _pad1: 0.0, fluid_blend: 0.0, _pad3: 0.0,
+            sa: 1.50, sd: 40.0, drg: 0.20, spd: 4.95, dec: 0.999, dif: 0.10, dep: 30.0, jit: 0.500,
+            rSd: 1.0, mSc: 0.30, fSc: 0.80, sGn: 5.0, sAt: 1.00, sRp: 0.92, str: 0.15, aSc: 1.00,
+            glw: 0.00, cSh: -0.02, spc: 0.25, gam: 0.50, aCt: 3.0, aSp: 0.30, aRd: 250.0, aSt: 0.15,
+            cSp: 0.30, sat: 1.58, pMx: 0.57, blr: 0.99,
+            c0r: 1.0, c0g: 0.2, c0b: 0.2, c1r: 0.2, c1g: 0.8, c1b: 0.3, c2r: 0.2, c2g: 0.4, c2b: 1.0,
+            sub: 1.0, tSm: 1.0, wnd: 0.8, tur: 0.0, p1: 0.6, flu: 0.0, p3: 0.0,
         };
 
         let base = RenderKit::new(core);
@@ -93,54 +82,55 @@ impl ShaderManager for PhysarumShader {
                     .collapsible(true).resizable(true).default_width(320.0)
                     .show(ctx, |ui| {
                         egui::CollapsingHeader::new("Behavior Rule").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.rule_seed, 0.0..=100.0).text("Rule Seed")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.mutation_scale, 0.0..=1.0).text("Species Diversity")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.force_scale, 0.0..=3.0).text("Force Scale")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.sensor_gain, 0.5..=30.0).text("Sensor Gain")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.strafe_power, 0.0..=2.0).text("Strafe Power")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.rSd, 0.0..=100.0).text("Rule Seed")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.mSc, 0.0..=1.0).text("Species Diversity")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.fSc, 0.0..=3.0).text("Force Scale")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.sGn, 0.5..=30.0).text("Sensor Gain")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.str, 0.0..=2.0).text("Strafe Power")).changed();
                         });
 
                         egui::CollapsingHeader::new("Agent Physics").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.move_speed, 0.1..=5.0).text("Speed")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.drag, 0.0..=0.99).text("Momentum")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.wind_strength, 0.0..=3.0).text("Slipstream Wind")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.fluid_blend, 0.0..=2.0).text("Bubble vs Vein Bias")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.sensor_dist, 1.0..=40.0).text("Sensor Distance")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.sensor_angle, 0.05..=1.5).text("Sensor Angle")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.random_jitter, 0.0..=0.5).text("Random Jitter")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.agent_count_scale, 0.05..=1.0).text("Agent Density")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.spd, 0.1..=5.0).text("Speed")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.drg, 0.0..=0.99).text("Momentum")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.wnd, 0.0..=3.0).text("Slipstream Wind")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.flu, 0.0..=2.0).text("Bubble vs Vein Bias")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.sd, 1.0..=40.0).text("Sensor Distance")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.sa, 0.05..=1.5).text("Sensor Angle")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.jit, 0.0..=0.5).text("Random Jitter")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.aSc, 0.05..=1.0).text("Agent Density")).changed();
                         });
 
                         egui::CollapsingHeader::new("Trail Environment").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.deposit_amt, 1.0..=30.0).text("Deposit Amount")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.decay_rate, 0.9..=0.999).text("Decay Rate")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.diffuse_rate, 0.0..=1.0).text("Diffusion Rate")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.dep, 1.0..=30.0).text("Deposit Amount")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.dec, 0.9..=0.999).text("Decay Rate")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.dif, 0.0..=1.0).text("Diffusion Rate")).changed();
                         });
 
                         egui::CollapsingHeader::new("Species Interaction").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.species_attract, 0.0..=1.0).text("Cross-Attraction")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.species_repel, 0.0..=1.0).text("Cross-Repulsion")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.sAt, 0.0..=1.0).text("Cross-Attraction")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.sRp, 0.0..=1.0).text("Cross-Repulsion")).changed();
                         });
 
                         egui::CollapsingHeader::new("Attractors").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.attractor_count, 0.0..=8.0).step_by(1.0).text("Count")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.attractor_speed, 0.0..=2.0).text("Orbit Speed")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.attractor_radius, 50.0..=500.0).text("Radius")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.attractor_strength, 0.0..=1.0).text("Strength")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.aCt, 0.0..=8.0).step_by(1.0).text("Count")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.aSp, 0.0..=2.0).text("Orbit Speed")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.aRd, 50.0..=500.0).text("Radius")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.aSt, 0.0..=1.0).text("Strength")).changed();
                         });
 
                         egui::CollapsingHeader::new("Rendering").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.blur_samples, 0.0..=1.0).text("Feedback Fade")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.glow_intensity, 0.0..=2.0).text("Glow")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.specular_strength, 0.0..=1.5).text("Specular")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.gamma, 0.1..=2.2).text("Gamma")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.blr, 0.0..=1.0).text("Feedback Fade")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.p1, 0.0..=3.0).text("Vein Relief")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.glw, 0.0..=2.0).text("Glow")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.spc, 0.0..=1.5).text("Specular")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.gam, 0.1..=2.2).text("Gamma")).changed();
                         });
 
                         egui::CollapsingHeader::new("Colors").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.palette_mix, 0.0..=1.0).text("Palette Mix")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.color_shift, -0.5..=0.5).text("Color Shift")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.color_spread, 0.0..=1.0).text("Species Hue Spread")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.saturation, 0.0..=2.5).text("Saturation")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.pMx, 0.0..=1.0).text("Palette Mix")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.cSh, -0.5..=0.5).text("Color Shift")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.cSp, 0.0..=1.0).text("Species Hue Spread")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.sat, 0.0..=2.5).text("Saturation")).changed();
                         });
 
                         ui.separator();
