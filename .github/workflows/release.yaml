@@ -24,7 +24,7 @@ jobs:
           - group: "no-media" 
             features: "--no-default-features"
             gstreamer_required: false
-            shaders: "blackhole,buddhabrot,lich,mandelbulb,sinh,orbits,nebula,rorschach,cliffordcompute,volumepassage,jfa,gaussian3d,physarum,galaxy"
+            shaders: "blackhole,buddhabrot,lich,mandelbulb,sinh,orbits,nebula,rorschach,volumepassage,jfa,gaussian3d,physarum,galaxy"
         
         include:
           - os: ubuntu-latest
