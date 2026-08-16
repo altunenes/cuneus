@@ -20,11 +20,11 @@ jobs:
             gstreamer_required: true
             shaders: "bugberman,audiovis,computecolors,fft,pathtracing,voronoi,fluid,cnn,synth,blockgame,kuwahara,lego,gaussian,tameimp,"
           
-          # Shaders that DON'T need GStreamer (pure GPU compute)
+          # Shaders that DON'T need GStreamer
           - group: "no-media" 
             features: "--no-default-features"
             gstreamer_required: false
-            shaders: "blackhole,buddhabrot,lich,mandelbulb,sinh,orbits,nebula,rorschach,cliffordcompute,volumepassage,jfa,gaussian3d,physarum"
+            shaders: "blackhole,buddhabrot,lich,mandelbulb,sinh,orbits,nebula,rorschach,cliffordcompute,volumepassage,jfa,gaussian3d,physarum,galaxy"
         
         include:
           - os: ubuntu-latest
@@ -53,7 +53,7 @@ jobs:
         if: runner.os == 'macOS' && matrix.shader_config.gstreamer_required
         run: |
           # Download and install official GStreamer packages
-          GSTREAMER_VERSION="1.28.4"
+          GSTREAMER_VERSION="1.28.6"
           curl -L "https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION/gstreamer-1.0-$GSTREAMER_VERSION-universal.pkg" -o gstreamer.pkg
           curl -L "https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION/gstreamer-1.0-devel-$GSTREAMER_VERSION-universal.pkg" -o gstreamer-devel.pkg
           
@@ -90,7 +90,7 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Starting GStreamer installation process..."
-          $gstVer = "1.28.4"
+          $gstVer = "1.28.6"
           $tempDir = "C:\gst-temp"
           $installDir = "C:\gstreamer"
 
