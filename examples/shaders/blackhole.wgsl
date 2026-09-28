@@ -35,6 +35,7 @@ struct BlackHoleParams {
     exposure: f32, bloom: f32, star_density: f32, gamma: f32,
     spectral_shift: f32, saturation: f32, reddening: f32, sharpen: f32,
     vividness: f32, opacity: f32, highlight: f32, spectral: f32,
+    relief: f32, layering: f32, flare: f32, irradiation: f32,
 }
 @group(1) @binding(0) var out: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(1) var<uniform> p: BlackHoleParams;
@@ -160,32 +161,75 @@ fn planck(wl: f32, T: f32) -> f32 {
     return 1.0 / (l * l * l * l * l * (exp(x) - 1.0));
 }
 
-// blackbody hue at T, normalized to unit luminance
+const LUMA = v3(0.2126, 0.7152, 0.0722);
+
+fn chroma_scale(c: v3, s: f32) -> v3 {
+    let l = max(dot(c, LUMA), 0.0);
+    let d = c - v3(l);
+    let mn = min(d.r, min(d.g, d.b));
+    let edge = select(1e4, l / max(-mn, 1e-6), mn < -1e-6);
+    var k = s;
+    if (s > 1.0) {
+        let head = max(edge - 1.0, 0.0);
+        k = 1.0 + head * (1.0 - exp(-(s - 1.0) / max(head, 1e-4)));
+    }
+    return max(v3(l) + d * min(k, edge), v3(0.0));
+}
+fn unit_bright(c: v3) -> v3 {
+    let m = max(c.r, max(c.g, c.b));
+    return c / max(max(dot(c, LUMA), 0.35 * m), 1e-5);
+}
+
+
 fn blackbody_rgb(T: f32, wl_shift: f32) -> v3 {
     var xyz = v3(0.0);
-    for (var i = 0; i < 16; i++) {
-        let idx = i * 2;
-        let wl = 390.0 + f32(idx) * 10.0;
+    for (var i = 0; i < 31; i++) {
+        let wl = 390.0 + f32(i) * 10.0;
         // wl_shift slides the hue
         xyz += wl_to_xyz(wl + wl_shift) * planck(wl, T);
     }
-    var rgb = max(xyz_to_rgb * xyz, v3(0.0));
-    let Y = dot(rgb, v3(0.2126, 0.7152, 0.0722));
-    let bb = rgb / max(Y, 1e-4);
+    let rgb = max(xyz_to_rgb * xyz, v3(0.0));
+    let Y = dot(rgb, LUMA);
+    let fade = clamp(Y / 1e-4, 0.0, 1.0);
+    return unit_bright(chroma_scale(rgb / max(Y, 1e-12), 1.0 + p.vividness * 3.0)) * fade;
+}
 
-    // vividness deepens its own chroma
-    let bb_lum = dot(bb, v3(0.2126, 0.7152, 0.0722));
-    return max(v3(0.0), v3(bb_lum) + (bb - v3(bb_lum)) * (1.0 + p.vividness * 3.0));
+
+fn spectral_rgb(wl: f32) -> v3 {
+    var rgb = xyz_to_rgb * wl_to_xyz(wl);
+    rgb -= v3(min(0.0, min(rgb.r, min(rgb.g, rgb.b))));
+    return unit_bright(rgb / max(dot(rgb, LUMA), 1e-8));
 }
 
 // read the blackbody colour straight from the LUT (tex0 row 0)
 const BB_T_MIN: f32 = 1000.0;
 const BB_T_MAX: f32 = 30000.0;
-fn blackbody_lut(T: f32) -> v3 {
+const SPEC_WL_MIN: f32 = 400.0;
+const SPEC_WL_MAX: f32 = 700.0;
+fn lut_row(row: u32, t01: f32) -> v3 {
     let w = textureDimensions(tex0).x;
-    let t01 = clamp((T - BB_T_MIN) / (BB_T_MAX - BB_T_MIN), 0.0, 1.0);
-    let x = u32(t01 * f32(w - 1u));
-    return textureLoad(tex0, vec2<u32>(x, 0u), 0).rgb;
+    let x = clamp(t01, 0.0, 1.0) * f32(w - 1u);
+    let i = u32(x); let j = min(i + 1u, w - 1u);
+    return mix(textureLoad(tex0, vec2<u32>(i, row), 0).rgb, textureLoad(tex0, vec2<u32>(j, row), 0).rgb, fract(x));
+}
+fn blackbody_lut(T: f32) -> v3 { return lut_row(0u, (T - BB_T_MIN) / (BB_T_MAX - BB_T_MIN)); }
+fn spectral_lut(wl: f32) -> v3 { return lut_row(1u, (wl - SPEC_WL_MIN) / (SPEC_WL_MAX - SPEC_WL_MIN)); }
+
+fn t_inner() -> f32 { return 2200.0 + 4200.0 * p.temperature; }
+
+fn gas_hue(T_local: f32, g: f32) -> v3 {
+    let T_obs = clamp(T_local * pow(max(g, 1e-3), p.redshift), 1200.0, 26000.0);
+    var c = blackbody_lut(T_obs);
+    if (p.spectral > 0.001) {
+        let t_in = t_inner();
+        let t_out = t_in * pow(p.disk_inner / max(p.disk_outer, p.disk_inner + 1e-3), 0.85);
+        let u = clamp(log(t_in / max(T_local, 1.0)) / max(log(t_in / t_out), 1e-3), 0.0, 1.0);
+        let wl = mix(445.0, 650.0, u) + p.spectral_shift * 0.4;
+        let spec = chroma_scale(spectral_lut(clamp(wl / max(g, 0.2), SPEC_WL_MIN, SPEC_WL_MAX)), 0.35 + 0.65 * p.vividness);
+        let b = max(dot(c, LUMA), 0.35 * max(c.r, max(c.g, c.b)));
+        c = mix(c, spec * b, p.spectral);
+    }
+    return chroma_scale(c, p.saturation);
 }
 
 // YCoCg: inspiration: (gelami/mrange)
@@ -245,7 +289,7 @@ fn galaxy(dir: v3) -> v3 {
 fn disk_gfactor(pos: v3, photon_dir: v3) -> f32 {
     let rho = max(length(pos.xz), HORIZON + 1e-3);
      // orbital speedy
-    let beta = clamp(sqrt(0.5 / rho), 0.0, 0.95);
+    let beta = clamp(sqrt(0.5 / max(rho - RS, 1e-3)), 0.0, 0.95);
     let gamma = inverseSqrt(max(1e-4, 1.0 - beta * beta));
     let tangent = normalize(v3(-pos.z, 0.0, pos.x)); // prograde
     let cos_a = dot(tangent, -photon_dir);
@@ -270,6 +314,22 @@ fn disk_density_cheap(pos: v3) -> f32 {
     return smoothstep(0.33, 1.05, cloud_noise(q, 4, 46.0)) * radial * vfall;
 }
 
+fn shape_env(x: f32, a: f32, b: f32) -> f32 {
+    let k = pow(a + b, a + b) / max(pow(a, a) * pow(b, b), 1e-6);
+    return k * pow(clamp(x, 0.0, 1.0), a) * pow(clamp(1.0 - x, 0.0, 1.0), b);
+}
+
+fn disk_base_h(edge: f32) -> f32 {
+    return p.disk_thickness * (0.35 + 1.25 * (1.0 - edge)) * (1.0 + p.flare * 2.0 * edge);
+}
+
+fn relief_at(rho: f32, spiral: f32) -> f32 {
+    let c = v2(cos(spiral), sin(spiral)) * rho * 0.45 * p.noise_scale;
+    let rn = vnoise(v3(c, 3.1)) * 0.57 + vnoise(v3(c * 2.03, 8.7)) * 0.29 + vnoise(v3(c * 4.1, 1.9)) * 0.14;
+    return max(1.0 + p.relief * (rn - 0.5) * 2.0, 0.15);
+}
+fn spiral_phase(ang: f32, rho: f32) -> f32 { return ang + p.swirl_speed * u_t.time - log(max(rho, 1e-3)) * 2.4; }
+
 // disk gas
 fn disk_sample(pos: v3, photon_dir: v3) -> v4 {
     let rho = length(pos.xz);
@@ -277,32 +337,36 @@ fn disk_sample(pos: v3, photon_dir: v3) -> v4 {
 
     // v falloff
     let edge = (rho - p.disk_inner) / max(1e-3, p.disk_outer - p.disk_inner);
-    let half_h = p.disk_thickness * (0.35 + 1.25 * (1.0 - edge));
+    let base_h = disk_base_h(edge);
+    if (abs(pos.y) > base_h * (1.0 + p.relief) * 1.385) { return v4(0.0); }
+    let ang = atan2(pos.z, pos.x);
+    let spiral = spiral_phase(ang, rho);
+    let half_h = base_h * relief_at(rho, spiral);
     let yr = pos.y / max(1e-3, half_h);
     let vfall = exp(-yr * yr * 2.4);
     if (vfall < 0.01) { return v4(0.0); }
 
     let radial = pow(clamp(p.disk_inner / max(rho, 1e-3), 0.0, 1.0), 1.6);
-    if (radial * vfall * 1.4 < 0.004) { return v4(0.0); }
+    let body = radial * vfall * mix(0.5, 1.6, shape_env(edge, 0.9, 1.5));
+    if (body * 1.4 < 0.004) { return v4(0.0); }
 
     // log spiral coords
-    let ang = atan2(pos.z, pos.x);
-    let spiral = ang + p.swirl_speed * u_t.time - log(max(rho, 1e-3)) * 2.4;
-    // anisotropic
-    var q = v3(rho * 0.9, spiral * 0.22, pos.y * 1.1) * p.noise_scale;
+    var q = v3(rho * 0.9, spiral * 0.32, pos.y * 1.1) * p.noise_scale;
 
     let eddy = curl2(q * 2.2 + 9.0) * 0.3;
     q += v3(eddy.x, eddy.y, 0.0);
 
     let cloud = cloud_noise(q, 6, 46.0);
-    let fine = cloud_noise(q * 2.6 + 21.0, 4, 30.0);
-    let n = cloud * (0.5 + 0.85 * fine);
-    var dens = smoothstep(0.33, 1.05, n);
+    let fine = cloud_noise(q * 2.8 + 21.0, 5, 30.0);
+    let fil = cloud_noise(q * v3(1.5, 4.0, 1.5) + 40.0, 4, 26.0);
+    let n = cloud * (0.5 + 0.85 * fine) * mix(0.82, 1.18, fil);
+    let sn = smoothstep(0.33, 1.05, n);
+    if (sn * body * 1.4 < 0.004) { return v4(0.0); }      // skips macro + dust octaves
     let macro_n = cloud_noise(q * 0.22 + 50.0, 3, 16.0);
-    dens *= mix(0.2, 1.4, smoothstep(0.15, 1.0, macro_n));
-    let dust = smoothstep(0.35, 0.92, cloud_noise(q * 0.45 + 30.0, 3, 22.0));
-    dens *= (1.0 - 0.72 * dust);
-    dens *= radial * vfall;
+    var dens = sn * mix(0.2, 1.4, smoothstep(0.15, 1.0, macro_n)) * body;
+    if (dens < 0.004) { return v4(0.0); }
+    let dust = smoothstep(0.36, 0.92, cloud_noise(q * v3(0.5, 1.15, 0.5) + 30.0, 3, 22.0));
+    dens *= (1.0 - 0.74 * dust);
     if (dens < 0.004) { return v4(0.0); }
 
     // selfshadow
@@ -311,32 +375,21 @@ fn disk_sample(pos: v3, photon_dir: v3) -> v4 {
     let shade = 1.0 - 0.45 * occ;
 
     // temperature falls with radius, rises in dense filaments...
-    let T_radial = (2200.0 + 4200.0 * p.temperature)
-                 * pow(clamp(p.disk_inner / max(rho, 1e-3), 0.0, 1.0), 0.85);
+    let T_radial = t_inner() * pow(clamp(p.disk_inner / max(rho, 1e-3), 0.0, 1.0), 0.85);
     let T_local = T_radial * mix(0.78, 1.3, smoothstep(0.3, 1.2, cloud));
     let g_raw = disk_gfactor(pos, photon_dir);
-    let g = 1.0 + (g_raw - 1.0) * p.doppler;        // doppler/redshift
-    let T_obs = clamp(T_local * pow(max(g, 1e-3), p.redshift), 1200.0, 26000.0);
-    var emis = blackbody_lut(T_obs);
-    if (p.spectral > 0.001) {
-        let wl_base = mix(660.0, 430.0, smoothstep(2000.0, 13000.0, T_local));
-        let wl_obs = clamp(wl_base / max(g, 0.2), 400.0, 690.0);
-        var spec = max(v3(0.0), xyz_to_rgb * wl_to_xyz(wl_obs));
-        let sl = dot(spec, v3(0.2126, 0.7152, 0.0722));
-        spec = spec / max(sl, 1e-4); 
-        let sl2 = dot(spec, v3(0.2126, 0.7152, 0.0722));
-        spec = max(v3(0.0), v3(sl2) + (spec - v3(sl2)) * (1.0 + p.vividness * 3.0));
-        emis = mix(emis, spec, p.spectral);
-    }
+    let g = pow(max(g_raw, 1e-3), p.doppler);
+    var emis = gas_hue(T_local, g);
 
-    let lum = dot(emis, v3(0.2126, 0.7152, 0.0722));
-    emis = max(v3(0.0), mix(v3(lum), emis, p.saturation));
+    let t_edge = t_inner() * 1.25;
 
     let core_d = (rho - p.disk_inner) / max(1e-3, p.disk_inner * 0.5);
-    emis += v3(1.0, 0.34, 0.10) * exp(-core_d * core_d) * 1.5;
+    let core_w = exp(-core_d * core_d);
+    if (core_w > 1e-4) { emis += gas_hue(t_edge, g) * core_w * 0.7; }
 
-    let lit_d = (rho - p.disk_inner) / max(1e-3, p.disk_inner * 0.01);
-    emis += v3(1.0, 0.74, 0.48) * exp(-lit_d * lit_d) * p.ring_glow * 0.7;
+    let lit_d = (rho - p.disk_inner) / max(1e-3, p.disk_inner * 0.28);
+    let ring_p = exp(-lit_d * lit_d);
+    if (ring_p > 1e-4) { emis += mix(gas_hue(t_edge * 1.3, g), v3(1.0), ring_p * 0.55) * ring_p * p.ring_glow * 1.3; }
 
     let face = abs(photon_dir.y);
     let view = mix(0.4, 1.15, smoothstep(0.0, 0.6, face));
@@ -347,17 +400,30 @@ fn disk_sample(pos: v3, photon_dir: v3) -> v4 {
 
     //dir light
     let light_dir = normalize(-pos + v3(1e-4, 1e-4, 1e-4));
-    let grad = disk_density_cheap(pos + light_dir * 0.5) - dens;
+    let grad = disk_density_cheap(pos + light_dir * 0.5) - disk_density_cheap(pos);
     let lvl = max(emis.r, max(emis.g, emis.b));
-    emis += v3(1.0, 0.45, 0.16) * max(0.0, grad) * lvl * 1.3;
-    emis += v3(0.22, 0.5, 1.0) * max(0.0, -grad) * lvl * 3.6;
+    if (grad > 0.0) { emis += gas_hue(T_local * 0.8, g) * grad * lvl * 0.7; }
+    else if (grad < 0.0) { emis += gas_hue(T_local * 1.8, g) * (-grad) * lvl * 1.7; }
 
     let el = max(emis.r, max(emis.g, max(emis.b, 1e-4)));
     let comp = el * (1.0 + el * 0.012) / (1.0 + el * max(0.005, p.highlight));
     emis *= comp / el;
 
-    let alpha = mix(clamp(dens * p.disk_density, 0.0, 1.0), 1.0, p.opacity);
-    return v4(emis * dens, alpha);
+   let sd = smoothstep(0.0, 1.2, abs(yr));
+    var irr = 1.0;
+    if (p.irradiation > 0.001) {
+        let rho_in = max(rho - 0.35, 1e-3);
+        let edge_in = (rho_in - p.disk_inner) / max(1e-3, p.disk_outer - p.disk_inner);
+        let h_in = disk_base_h(edge_in) * relief_at(rho_in, spiral_phase(ang, rho_in));
+        let lit = clamp((half_h - h_in) / 0.35 * 1.5, -1.0, 1.0);
+        irr = max(1.0 + p.irradiation * lit * smoothstep(0.2, 1.2, abs(yr)), 0.0);
+    }
+
+    let sigma = dens * p.disk_density * mix(1.0, 12.0, p.opacity) * mix(1.0, mix(1.8, 0.5, sd), p.layering);
+    let dn = smoothstep(0.02, 0.9, dens);
+    let S = emis * (1.3 / 1.6) / max(p.disk_density, 1e-3) * mix(1.0, 0.3 + 1.4 * dn, p.opacity)
+          * mix(1.0, 0.3 + 1.7 * sd, p.layering) * irr;
+    return v4(S, sigma);
 }
 
 struct Ray { pos: v3, vel: v3 }
@@ -390,10 +456,12 @@ fn rk4(rin: Ray, h2: f32, dt: f32) -> Ray {
 @compute @workgroup_size(16, 16, 1)
 fn bb_lut(@builtin(global_invocation_id) id: vec3<u32>) {
     let dim = textureDimensions(out);
-    if (id.x >= dim.x || id.y != 0u) { return; }
+    if (id.x >= dim.x || id.y > 1u) { return; }
     let t01 = f32(id.x) / f32(dim.x - 1u);
-    let T = mix(BB_T_MIN, BB_T_MAX, t01);
-    textureStore(out, vec2<u32>(id.x, 0u), v4(blackbody_rgb(T, p.spectral_shift), 1.0));
+    var c: v3;
+    if (id.y == 0u) { c = blackbody_rgb(mix(BB_T_MIN, BB_T_MAX, t01), p.spectral_shift); }
+    else { c = spectral_rgb(mix(SPEC_WL_MIN, SPEC_WL_MAX, t01)); }
+    textureStore(out, id.xy, v4(c, 1.0));
 }
 
 // geodesic raytrace (raw frame; TAA happens in resolve)
@@ -418,10 +486,10 @@ fn scene(@builtin(global_invocation_id) id: vec3<u32>) {
 
     var ray = Ray(ro, rd);
     var col = v4(0.0);
-    var last = ro;
     var photon_dir = rd;
-    var turn = 0.0;
     var captured = false;
+    var wind = 0.0;
+    let dither = hash13(v3(f32(id.x), f32(id.y), f32(u_t.frame)));   // per pixel/frame, same every step
 
     for (var i = 0; i < MAX_STEPS; i++) {
         if (col.a > 0.99) { break; }
@@ -434,11 +502,10 @@ fn scene(@builtin(global_invocation_id) id: vec3<u32>) {
 
         let seg = next.pos - ray.pos;
         let seglen = length(seg);
-        if (seglen > 1e-6) {
-            let nd = seg / seglen;
-            turn += acos(clamp(dot(photon_dir, nd), -1.0, 1.0));
-            photon_dir = nd;
-        }
+        if (seglen > 1e-6) { photon_dir = seg / seglen; }
+        // angle swept around the hole inside the photon shell; loops = the lensed ring images
+        if (r < 3.0) { wind += acos(clamp(dot(ray.pos, next.pos) / max(r * length(next.pos), 1e-6), -1.0, 1.0)); }
+        let boost = 1.0 + p.ring_glow * 3.0 * smoothstep(0.8, 3.0, wind);
 
         // march the disk slab; skip rays nowhere near it
         let rho_a = length(ray.pos.xz);
@@ -446,10 +513,10 @@ fn scene(@builtin(global_invocation_id) id: vec3<u32>) {
         let in_annulus = max(rho_a, rho_b) > p.disk_inner - 1.0
                       && min(rho_a, rho_b) < p.disk_outer + 1.0;
         let crossing = (ray.pos.y * next.pos.y < 0.0);
-        let near_plane = abs(ray.pos.y) < p.disk_thickness * 2.0 + seglen;
+        let hmax = p.disk_thickness * (1.6 + 0.8 * p.flare) * (1.0 + p.relief) * 1.385;
+        let near_plane = abs(ray.pos.y) < hmax + seglen;
         if (in_annulus && (crossing || near_plane)) {
-            let dither = hash13(v3(f32(id.x), f32(id.y), f32(u_t.frame)));
-            let subs = clamp(i32(seglen / 0.06) + 1, 1, 24);
+            let subs = clamp(i32(seglen / 0.045) + 1, 1, 36);
             let inv = 1.0 / f32(subs);
             for (var s = 0; s < subs; s++) {
                 if (col.a > 0.99) { break; }
@@ -457,30 +524,19 @@ fn scene(@builtin(global_invocation_id) id: vec3<u32>) {
                 let sp = mix(ray.pos, next.pos, t);
                 let smp = disk_sample(sp, photon_dir);
                 if (smp.a > 0.0) {
-                    let a = clamp(smp.a * seglen * inv * 1.6, 0.0, 1.0);
+                    let a = 1.0 - exp(-smp.a * seglen * inv * 1.6);
                     // wavelength extinction: blue dies faster through gas -> deep gas reddens
                     let t = clamp(1.0 - col.a, 0.001, 1.0);
                     let trans = v3(t, pow(t, 1.4 + p.reddening * 1.6), pow(t, 1.8 + p.reddening * 4.0));
-                    col = v4(col.rgb + smp.rgb * seglen * inv * 1.3 * trans,
-                             col.a + (1.0 - col.a) * a);
+                    // ring boost: the extra light gets neutral extinction so it isn't amplified into red bands
+                    col = v4(col.rgb + smp.rgb * a * (trans + (boost - 1.0) * dot(trans, LUMA)), col.a + (1.0 - col.a) * a);
                 }
             }
         }
 
         ray = next;
-        last = ray.pos;
     }
 
-    // photon ring glow
-    if (!captured) {
-        let glow = smoothstep(1.6, 7.0, turn) * p.ring_glow;
-        if (glow > 0.001) {
-            let glow_col = mix(v3(1.0, 0.32, 0.12), v3(1.0, 0.62, 0.38), smoothstep(5.0, 9.0, turn));
-            let ang = atan2(photon_dir.z, photon_dir.x);
-            let tex = 0.55 + 0.55 * cloud_noise(v3(ang * 2.4 + p.swirl_speed * u_t.time, turn * 0.5, 5.0), 3, 18.0);
-            col = v4(col.rgb + glow * glow_col * tex * (1.0 - col.a) * 0.9, col.a);
-        }
-    }
     if (!captured && col.a < 0.99) {
         let bg = starfield(photon_dir) + galaxy(photon_dir);
         col = v4(col.rgb + bg * (1.0 - col.a), col.a);
@@ -518,66 +574,94 @@ fn resolve(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(out, id.xy, v4(max(v3(0.0), YCoCgToRGB(outc)), 1.0));
 }
 
-@compute @workgroup_size(16, 16, 1)
-fn bright(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dim = textureDimensions(out);
-    if (id.x >= dim.x || id.y >= dim.y) { return; }
-    let uv = (v2(id.xy) + 0.5) / v2(f32(dim.x), f32(dim.y));
-    let c = textureSampleLevel(tex0, sam0, uv, 0.0).rgb;
-    let l = dot(c, v3(0.2126, 0.7152, 0.0722));
-    let k = smoothstep(0.8, 2.2, l); // so only bright gas blooms.
-    textureStore(out, id.xy, v4(c * k, 1.0));
+fn ts0() -> v2 { return 1.0 / vec2<f32>(textureDimensions(tex0)); }
+fn bfetch(uv: v2) -> v3 { let h = 0.5 * ts0(); return textureSampleLevel(tex0, sam0, clamp(uv, h, 1.0 - h), 0.0).rgb; }
+fn bfetch1(uv: v2) -> v3 { let h = 0.5 / vec2<f32>(textureDimensions(tex1)); return textureSampleLevel(tex1, sam1, clamp(uv, h, 1.0 - h), 0.0).rgb; }
+
+fn prefilter(c: v3) -> v3 {
+    let l = max(c.r, max(c.g, c.b));
+    let th = 0.6; let knee = 0.6;
+    let soft = clamp(l - th + knee, 0.0, 2.0 * knee);
+    let w = max(soft * soft / (4.0 * knee + 1e-4), max(l - th, 0.0)) / max(l, 1e-4);
+    return c * w;
+}
+fn tap(uv: v2, t: v2, o: v2, pre: bool) -> v3 { let c = bfetch(uv + o * t); return select(c, prefilter(c), pre); }
+fn kw(c: v3) -> f32 { return 1.0 / (1.0 + dot(c, LUMA)); }
+fn down13(uv: v2, pre: bool) -> v3 {
+    let t = ts0();
+    let a = tap(uv, t, v2(-2.0, -2.0), pre); let b = tap(uv, t, v2(0.0, -2.0), pre); let c = tap(uv, t, v2(2.0, -2.0), pre);
+    let d = tap(uv, t, v2(-2.0, 0.0), pre);  let e = tap(uv, t, v2(0.0, 0.0), pre);  let f = tap(uv, t, v2(2.0, 0.0), pre);
+    let g = tap(uv, t, v2(-2.0, 2.0), pre);  let h = tap(uv, t, v2(0.0, 2.0), pre);  let i = tap(uv, t, v2(2.0, 2.0), pre);
+    let j = tap(uv, t, v2(-1.0, -1.0), pre); let k = tap(uv, t, v2(1.0, -1.0), pre);
+    let l = tap(uv, t, v2(-1.0, 1.0), pre);  let m = tap(uv, t, v2(1.0, 1.0), pre);
+    let g0 = (j + k + l + m) * 0.25;
+    let g1 = (a + b + d + e) * 0.25; let g2 = (b + c + e + f) * 0.25;
+    let g3 = (d + e + g + h) * 0.25; let g4 = (e + f + h + i) * 0.25;
+    if (!pre) { return g0 * 0.5 + (g1 + g2 + g3 + g4) * 0.125; }
+    let w0 = kw(g0) * 0.5; let w1 = kw(g1) * 0.125; let w2 = kw(g2) * 0.125; let w3 = kw(g3) * 0.125; let w4 = kw(g4) * 0.125;
+    return (g0 * w0 + g1 * w1 + g2 * w2 + g3 * w3 + g4 * w4) / (w0 + w1 + w2 + w3 + w4);
+}
+fn up_tent(uv: v2) -> v3 {
+    let o = ts0();
+    var s = bfetch(uv) * 4.0;
+    s += (bfetch(uv + v2(o.x, 0.)) + bfetch(uv - v2(o.x, 0.)) + bfetch(uv + v2(0., o.y)) + bfetch(uv - v2(0., o.y))) * 2.0;
+    s += bfetch(uv + v2(o.x, o.y)) + bfetch(uv + v2(-o.x, o.y)) + bfetch(uv + v2(o.x, -o.y)) + bfetch(uv + v2(-o.x, -o.y));
+    return s / 16.0;
 }
 
-// separable gaussian blur (dir = axis * spacing)
-fn blur5(uv: v2, dir: v2, R: v2) -> v3 {
-    let o = dir / R;
-    var s = textureSampleLevel(tex0, sam0, uv, 0.0).rgb * 0.382928;
-    s += textureSampleLevel(tex0, sam0, uv + o, 0.0).rgb * 0.241732;
-    s += textureSampleLevel(tex0, sam0, uv - o, 0.0).rgb * 0.241732;
-    s += textureSampleLevel(tex0, sam0, uv + 2.0 * o, 0.0).rgb * 0.060598;
-    s += textureSampleLevel(tex0, sam0, uv - 2.0 * o, 0.0).rgb * 0.060598;
-    return s;
-}
-
-// bloom pyramid: 3 gaussian levels, each accumulating the previous -> big soft halo
 @compute @workgroup_size(16, 16, 1)
-fn blur1_h(@builtin(global_invocation_id) id: vec3<u32>) {
+fn bloom_pre(@builtin(global_invocation_id) id: vec3<u32>) {
     let dim = textureDimensions(out); if (id.x >= dim.x || id.y >= dim.y) { return; }
-    let R = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / R;
-    textureStore(out, id.xy, v4(blur5(uv, v2(2.0, 0.0), R), 1.0));
+    let RR = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / RR;
+    textureStore(out, id.xy, v4(down13(uv, true), 1.0));
 }
 @compute @workgroup_size(16, 16, 1)
-fn blur1_v(@builtin(global_invocation_id) id: vec3<u32>) {
+fn bd2(@builtin(global_invocation_id) id: vec3<u32>) {
     let dim = textureDimensions(out); if (id.x >= dim.x || id.y >= dim.y) { return; }
-    let R = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / R;
-    textureStore(out, id.xy, v4(blur5(uv, v2(0.0, 2.0), R), 1.0));
+    let RR = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / RR;
+    textureStore(out, id.xy, v4(down13(uv, false), 1.0));
 }
 @compute @workgroup_size(16, 16, 1)
-fn blur2_h(@builtin(global_invocation_id) id: vec3<u32>) {
+fn bd3(@builtin(global_invocation_id) id: vec3<u32>) {
     let dim = textureDimensions(out); if (id.x >= dim.x || id.y >= dim.y) { return; }
-    let R = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / R;
-    textureStore(out, id.xy, v4(blur5(uv, v2(5.0, 0.0), R), 1.0));
+    let RR = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / RR;
+    textureStore(out, id.xy, v4(down13(uv, false), 1.0));
 }
 @compute @workgroup_size(16, 16, 1)
-fn blur2_v(@builtin(global_invocation_id) id: vec3<u32>) {
+fn bd4(@builtin(global_invocation_id) id: vec3<u32>) {
     let dim = textureDimensions(out); if (id.x >= dim.x || id.y >= dim.y) { return; }
-    let R = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / R;
-    let prev = textureSampleLevel(tex1, sam1, uv, 0.0).rgb; // + level 1
-    textureStore(out, id.xy, v4(blur5(uv, v2(0.0, 5.0), R) + 0.75 * prev, 1.0));
+    let RR = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / RR;
+    textureStore(out, id.xy, v4(down13(uv, false), 1.0));
 }
 @compute @workgroup_size(16, 16, 1)
-fn blur3_h(@builtin(global_invocation_id) id: vec3<u32>) {
+fn bd5(@builtin(global_invocation_id) id: vec3<u32>) {
     let dim = textureDimensions(out); if (id.x >= dim.x || id.y >= dim.y) { return; }
-    let R = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / R;
-    textureStore(out, id.xy, v4(blur5(uv, v2(11.0, 0.0), R), 1.0));
+    let RR = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / RR;
+    textureStore(out, id.xy, v4(down13(uv, false), 1.0));
 }
 @compute @workgroup_size(16, 16, 1)
-fn blur3_v(@builtin(global_invocation_id) id: vec3<u32>) {
+fn bu4(@builtin(global_invocation_id) id: vec3<u32>) {
     let dim = textureDimensions(out); if (id.x >= dim.x || id.y >= dim.y) { return; }
-    let R = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / R;
-    let prev = textureSampleLevel(tex1, sam1, uv, 0.0).rgb;
-    textureStore(out, id.xy, v4(blur5(uv, v2(0.0, 11.0), R) + 0.75 * prev, 1.0));
+    let RR = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / RR;
+    textureStore(out, id.xy, v4(up_tent(uv) + bfetch1(uv), 1.0));
+}
+@compute @workgroup_size(16, 16, 1)
+fn bu3(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dim = textureDimensions(out); if (id.x >= dim.x || id.y >= dim.y) { return; }
+    let RR = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / RR;
+    textureStore(out, id.xy, v4(up_tent(uv) + bfetch1(uv), 1.0));
+}
+@compute @workgroup_size(16, 16, 1)
+fn bu2(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dim = textureDimensions(out); if (id.x >= dim.x || id.y >= dim.y) { return; }
+    let RR = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / RR;
+    textureStore(out, id.xy, v4(up_tent(uv) + bfetch1(uv), 1.0));
+}
+@compute @workgroup_size(16, 16, 1)
+fn bu1(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dim = textureDimensions(out); if (id.x >= dim.x || id.y >= dim.y) { return; }
+    let RR = v2(f32(dim.x), f32(dim.y)); let uv = (v2(id.xy) + 0.5) / RR;
+    textureStore(out, id.xy, v4((up_tent(uv) + bfetch1(uv)) * 0.2, 1.0));
 }
 
 
@@ -605,22 +689,23 @@ fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
 
     // unsharp sharpen
     let e = 1.4 / R;
-    let lo = (textureSampleLevel(tex0, sam0, uv + v2(e.x, 0.0), 0.0).rgb
-            + textureSampleLevel(tex0, sam0, uv - v2(e.x, 0.0), 0.0).rgb
-            + textureSampleLevel(tex0, sam0, uv + v2(0.0, e.y), 0.0).rgb
-            + textureSampleLevel(tex0, sam0, uv - v2(0.0, e.y), 0.0).rgb) * 0.25;
+    let lo = (bfetch(uv + v2(e.x, 0.0)) + bfetch(uv - v2(e.x, 0.0)) + bfetch(uv + v2(0.0, e.y)) + bfetch(uv - v2(0.0, e.y))) * 0.25;
     let sharp = max(v3(0.0), scene + (scene - lo) * p.sharpen);
 
-    let bloom = textureSampleLevel(tex1, sam1, uv, 0.0).rgb;
+    let bloom = bfetch1(uv);
 
-    var color = (sharp + bloom * p.bloom) * p.exposure;
-    color = pow(color, v3(p.gamma));
+    let hdr = (sharp + bloom * p.bloom) * p.exposure;
+    var color = tonemap(hdr);
 
+    color = mix(color, color * color * (3.0 - 2.0 * color), 0.35);
     let luma = dot(color, v3(0.2126, 0.7152, 0.0722));
+    color *= mix(v3(0.96, 0.98, 1.05), v3(1.06, 1.0, 0.95), smoothstep(0.2, 0.8, luma));
+
     color = mix(v3(luma), color, 1.08);
+    color = pow(max(color, v3(0.0)), v3(p.gamma));
 
     let q = uv - 0.5;
     color *= 1.0 - dot(q, q) * 0.55;
 
-    textureStore(out, id.xy, v4(color, 1.0));
+    textureStore(out, id.xy, v4(clamp(color, v3(0.0), v3(1.0)), 1.0));
 }
