@@ -360,43 +360,40 @@ impl GaussianCamera {
     ) -> Self {
         let (sy, cy) = (yaw.sin(), yaw.cos());
         let (sp, cp) = (pitch.sin(), pitch.cos());
-
         let pos = [
             target[0] + distance * cp * sy,
             target[1] + distance * sp,
             target[2] + distance * cp * cy,
         ];
 
-        let f = [target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]];
-        let fl = (f[0]*f[0] + f[1]*f[1] + f[2]*f[2]).sqrt();
-        let f = [f[0]/fl, f[1]/fl, f[2]/fl];
+        let nrm = |v: [f32; 3]| {
+            let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
+            [v[0] / l, v[1] / l, v[2] / l]
+        };
+        let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
-        let up = [0.0, 1.0, 0.0];
-        let r = [f[1]*up[2] - f[2]*up[1], f[2]*up[0] - f[0]*up[2], f[0]*up[1] - f[1]*up[0]];
-        let rl = (r[0]*r[0] + r[1]*r[1] + r[2]*r[2]).sqrt().max(0.0001);
-        let r = [r[0]/rl, r[1]/rl, r[2]/rl];
+        let f = nrm([target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]]);
+        let r = nrm(cross(f, [0.0, 1.0, 0.0]));
+        let d = cross(f, r);
 
-        let u = [r[1]*f[2] - r[2]*f[1], r[2]*f[0] - r[0]*f[2], r[0]*f[1] - r[1]*f[0]];
-
-        let tx = -(r[0]*pos[0] + r[1]*pos[1] + r[2]*pos[2]);
-        let ty = -(u[0]*pos[0] + u[1]*pos[1] + u[2]*pos[2]);
-        let tz = f[0]*pos[0] + f[1]*pos[1] + f[2]*pos[2];
-
+        // column-major: rows are right, down, forward
         let view = [
-            [r[0], u[0], -f[0], 0.0],
-            [r[1], u[1], -f[1], 0.0],
-            [r[2], u[2], -f[2], 0.0],
-            [tx, ty, tz, 1.0],
+            [r[0], d[0], f[0], 0.0],
+            [r[1], d[1], f[1], 0.0],
+            [r[2], d[2], f[2], 0.0],
+            [-dot(r, pos), -dot(d, pos), -dot(f, pos), 1.0],
         ];
 
         let aspect = viewport[0] / viewport[1];
         let focal_len = 1.0 / (fov / 2.0).tan();
-        let (near, far) = (0.01, 1000.0); 
+        let (near, far) = (0.01, 1000.0);
+        // w = z; y negated so screen y grows downward like view y
         let proj = [
             [focal_len / aspect, 0.0, 0.0, 0.0],
-            [0.0, focal_len, 0.0, 0.0],
-            [0.0, 0.0, (far + near) / (near - far), -1.0],
-            [0.0, 0.0, (2.0 * far * near) / (near - far), 0.0],
+            [0.0, -focal_len, 0.0, 0.0],
+            [0.0, 0.0, far / (far - near), 1.0],
+            [0.0, 0.0, -far * near / (far - near), 0.0],
         ];
 
         let focal = [
@@ -423,6 +420,7 @@ impl GaussianExporter {
         count: u32,
         settings: &ExportSettings,
         texture_format: wgpu::TextureFormat,
+        clear: wgpu::Color,
     ) -> Result<Vec<u8>, crate::SurfaceError> {
         let capture_texture = core.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Gaussian Export Capture"),
@@ -470,7 +468,7 @@ impl GaussianExporter {
                         view: &capture_view,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            load: wgpu::LoadOp::Clear(clear),
                             store: wgpu::StoreOp::Store,
                         },
                         depth_slice: None,
@@ -536,10 +534,11 @@ impl GaussianExporter {
         frame: u32,
         settings: &ExportSettings,
         texture_format: wgpu::TextureFormat,
+        clear: wgpu::Color,
     ) {
         match Self::capture_frame(
             core, preprocess, sorter, renderer,
-            render_bind_group, count, settings, texture_format,
+            render_bind_group, count, settings, texture_format, clear,
         ) {
             Ok(data) => {
                 if let Err(e) = crate::save_frame(data, frame, settings) {

@@ -2,39 +2,57 @@ use cuneus::compute::*;
 use cuneus::prelude::*;
 cuneus::uniform_params! {
     struct FluidParams {
-    viscosity: f32,
-    gravity: f32,
-    pressure_scale: f32,
-    vortex_strength: f32,
-    turbulence: f32,
-    flow_speed: f32,
-    pos_diffusion: f32,
-    texture_influence: f32,
-    light_intensity: f32,
-    spec_power: f32,
-    spec_intensity: f32,
-    color_vibrancy: f32,
-    vortex_radius: f32,
-    gamma: f32,
-    feedback: f32,
-    vortex_speed: f32,
-    force_mode: f32,
-    force_harmony: f32,
-    force_count: f32,
-    contrast: f32,
-    warp_amount: f32,
-    flow_intensity: f32,
-    color_advect: f32,
-    drift_decay: f32,
-    dye_intensity: f32,
-    dye_radius: f32,
-    bg_boil: f32,
-    normal_amp: f32,
-    rim_strength: f32,
-    _padding: f32,
-    _padding2: f32,
-    _padding3: f32
+        viscosity: f32,
+        gravity: f32,
+        pressure_scale: f32,
+        vortex_strength: f32,
+        turbulence: f32,
+        flow_speed: f32,
+        pos_diffusion: f32,
+        texture_influence: f32,
+        light_intensity: f32,
+        spec_power: f32,
+        spec_intensity: f32,
+        color_vibrancy: f32,
+        vortex_radius: f32,
+        gamma: f32,
+        feedback: f32,
+        vortex_speed: f32,
+        force_mode: f32,
+        force_harmony: f32,
+        force_count: f32,
+        rolloff: f32,
+        warp_amount: f32,
+        _unused1: f32,
+        _unused2: f32,
+        drift_decay: f32,
+        dye_intensity: f32,
+        dye_radius: f32,
+        bg_boil: f32,
+        normal_amp: f32,
+        rim_strength: f32,
+        ink: f32,
+        dye_diffusion: f32,
+        stir: f32
+    }
 }
+fn build_shader(core: &Core) -> ComputeShader {
+    let mut passes = vec![PassDescription::new("advect_forces", &["project", "color_map"])];
+    for _ in 0..24 { passes.push(PassDescription::new("pressure", &["advect_forces", "pressure"])); }
+    passes.push(PassDescription::new("project", &["advect_forces", "pressure"]));
+    passes.push(PassDescription::new("position_field", &["project", "position_field", "color_map"]));
+    passes.push(PassDescription::new("color_map", &["position_field", "color_map"]));
+    passes.push(PassDescription::new("main_image", &["color_map", "project"]));
+    let config = ComputeShader::builder()
+        .with_entry_point("advect_forces")
+        .with_multi_pass(&passes)
+        .with_channels(1)
+        .with_custom_uniforms::<FluidParams>()
+        .with_workgroup_size([16, 16, 1])
+        .with_texture_format(COMPUTE_TEXTURE_FORMAT_RGBA16)
+        .with_label("Fluid LB")
+        .build();
+    cuneus::compute_shader!(core, "shaders/fluid.wgsl", config)
 }
 struct FluidShader {
     base: RenderKit,
@@ -44,9 +62,9 @@ struct FluidShader {
 impl ShaderManager for FluidShader {
     fn init(core: &Core) -> Self {
         let initial_params = FluidParams {
-            viscosity: 0.03,
+            viscosity: 0.001,
             gravity: 0.002,
-            pressure_scale: 0.1,
+            pressure_scale: 1.0,
             vortex_strength: 0.18,
             turbulence: 0.0005,
             flow_speed: 2.0,
@@ -57,62 +75,35 @@ impl ShaderManager for FluidShader {
             spec_intensity: 2.0,
             color_vibrancy: 1.3,
             vortex_radius: 0.001,
-            gamma: 1.1,
+            gamma: 2.0,
             feedback: 0.99,
             vortex_speed: 0.03,
             force_mode: 0.5,
             force_harmony: 0.5,
             force_count: 6.0,
-            contrast: 0.15,
+            rolloff: 0.5,
             warp_amount: 1.0,
-            flow_intensity: 1.0,
-            color_advect: 1.0,
+            _unused1: 0.0,
+            _unused2: 0.0,
             drift_decay: 0.0,
             dye_intensity: 0.8,
             dye_radius: 1.5,
-            bg_boil: 0.15,
+            bg_boil: 0.025,
             normal_amp: 8.0,
             rim_strength: 2.5,
-            _padding: 0.0,
-            _padding2: 0.0,
-            _padding3: 0.0
+            ink: 0.0,
+            dye_diffusion: 0.35,
+            stir: 1.5
         };
 
         let base = RenderKit::new(core);
-        let passes = vec![
-            PassDescription::new("advect_forces", &["project"]),
-            PassDescription::new("pressure", &["advect_forces", "pressure"]),
-            PassDescription::new("pressure", &["advect_forces", "pressure"]),
-            PassDescription::new("pressure", &["advect_forces", "pressure"]),
-            PassDescription::new("pressure", &["advect_forces", "pressure"]),
-            PassDescription::new("pressure", &["advect_forces", "pressure"]),
-            PassDescription::new("pressure", &["advect_forces", "pressure"]),
-            PassDescription::new("pressure", &["advect_forces", "pressure"]),
-            PassDescription::new("pressure", &["advect_forces", "pressure"]),
-            PassDescription::new("pressure", &["advect_forces", "pressure"]),
-            PassDescription::new("pressure", &["advect_forces", "pressure"]),
-            PassDescription::new("pressure", &["advect_forces", "pressure"]),
-            PassDescription::new("pressure", &["advect_forces", "pressure"]),
-            PassDescription::new("project", &["advect_forces", "pressure"]),
-            PassDescription::new("position_field", &["project", "position_field", "color_map"]),
-            PassDescription::new("color_map", &["position_field", "color_map"]),
-            PassDescription::new("main_image", &["color_map", "project"]),
-        ];
-        let config = ComputeShader::builder()
-            .with_entry_point("advect_forces")
-            .with_multi_pass(&passes)
-            .with_channels(1)
-            .with_custom_uniforms::<FluidParams>()
-            .with_workgroup_size([16, 16, 1])
-            .with_texture_format(COMPUTE_TEXTURE_FORMAT_RGBA16)
-            .with_label("Fluid LB")
-            .build();
-        let compute_shader = cuneus::compute_shader!(core, "shaders/fluid.wgsl", config);
+        let compute_shader = build_shader(core);
         compute_shader.set_custom_params(initial_params, &core.queue);
         Self {
             base,
             compute_shader,
-            current_params: initial_params}
+            current_params: initial_params
+        }
     }
     fn update(&mut self, core: &Core) {
         self.base.update_current_texture(core, &core.queue);
@@ -155,10 +146,11 @@ impl ShaderManager for FluidShader {
                     .default_width(300.0)
                     .show(ctx, |ui| {
                         egui::CollapsingHeader::new("Flow").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.flow_speed, 0.1..=5.0).text("Speed")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.viscosity, 0.0..=1.0).text("Viscosity")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.turbulence, 0.0..=0.01).text("Dissipation")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.feedback, 0.0..=1.0).text("Feedback")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.flow_speed, 0.1..=3.0).text("Speed")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.viscosity, 0.0..=0.95).logarithmic(true).text("Viscosity")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.turbulence, 0.0..=0.01).text("Drag")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.dye_diffusion, 0.0..=1.0).text("Dye diffusion (0 = sharp)")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.feedback, 0.0..=1.0).text("Dye memory")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.bg_boil, 0.0..=1.0).text("Noise")).changed();
                         });
 
@@ -166,6 +158,7 @@ impl ShaderManager for FluidShader {
                             changed |= ui.add(egui::Slider::new(&mut params.dye_intensity, 0.0..=2.0).text("Intensity")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.force_mode, 0.0..=1.0).text("Spread")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.dye_radius, 0.1..=5.0).text("Source Tint")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.ink, 0.0..=1.0).text("Ink (0 = texture colours only)")).changed();
                         });
 
                         egui::CollapsingHeader::new("Vortices").default_open(false).show(ui, |ui| {
@@ -173,23 +166,25 @@ impl ShaderManager for FluidShader {
                                 params.force_count = params.force_count.round();
                                 changed = true;
                             }
-                            changed |= ui.add(egui::Slider::new(&mut params.vortex_strength, 0.0..=1.0).text("Confinement")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.vortex_strength, 0.0..=0.6).text("Confinement")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.stir, 0.0..=4.0).text("Stir (spoon wakes)")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.force_harmony, 0.0..=2.0).text("Softness")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.vortex_radius, 0.001..=0.1).text("Radius")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.vortex_speed, 0.005..=0.15).text("Speed")).changed();
                         });
+                        
                         egui::CollapsingHeader::new("Distortion").default_open(false).show(ui, |ui| {
                             changed |= ui.add(egui::Slider::new(&mut params.warp_amount, 0.5..=5.0).text("Warp")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.flow_intensity, 0.5..=5.0).text("Flow Intensity")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.color_advect, 0.0..=3.0).text("Color Advect")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.drift_decay, 0.0..=0.05).text("Drift Decay")).changed();
                         });
+                        
                         egui::CollapsingHeader::new("Physics").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.pressure_scale, 0.0..=2.0).text("Pressure")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.pressure_scale, 0.0..=1.0).text("Incompressibility (1 = physical)")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.gravity, 0.0..=0.2).text("Gravity")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.texture_influence, 0.0..=2.0).text("Buoyancy")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.pos_diffusion, 0.0..=1.0).text("Smoothing")).changed();
                         });
+                        
                         egui::CollapsingHeader::new("Display").default_open(false).show(ui, |ui| {
                             changed |= ui.add(egui::Slider::new(&mut params.light_intensity, 0.3..=3.0).text("Light")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.spec_power, 4.0..=128.0).text("Spec Sharpness")).changed();
@@ -197,9 +192,10 @@ impl ShaderManager for FluidShader {
                             changed |= ui.add(egui::Slider::new(&mut params.normal_amp, 0.5..=16.0).text("Relief")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.rim_strength, 0.0..=5.0).text("Rim")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.color_vibrancy, 0.5..=2.5).text("Saturation")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.contrast, 0.0..=0.8).text("Contrast")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.gamma, 0.5..=2.5).text("Gamma")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.rolloff, 0.0..=1.0).text("Highlight rolloff (0 = clip)")).changed();
                         });
+                        
                         ui.separator();
                         ShaderControls::render_media_panel(ui, &mut controls_request, using_video_texture, video_info, using_hdri_texture, hdri_info, using_webcam_texture, webcam_info);
                         ui.separator();
@@ -211,15 +207,19 @@ impl ShaderManager for FluidShader {
         } else {
             self.base.render_ui(core, |_ctx| {})
         };
+        
         if controls_request.should_clear_buffers {
             self.compute_shader.current_frame = 0;
         }
+        
         if !self.base.export_manager.is_exporting() {
             self.compute_shader.dispatch(&mut frame.encoder, core);
         }
+        
         self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
         self.base.apply_media_requests(core, &controls_request);
         self.base.export_manager.apply_ui_request(export_request);
+        
         if should_start_export {
             self.base.export_manager.start_export();
         }
@@ -230,10 +230,12 @@ impl ShaderManager for FluidShader {
         self.base.end_frame(core, frame, full_output);
         Ok(())
     }
+
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
         self.base.default_handle_input(core, event)
     }
 }
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     cuneus::gst::init()?;
     env_logger::init();

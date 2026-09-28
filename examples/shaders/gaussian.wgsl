@@ -9,12 +9,18 @@ alias v4 = vec4<f32>;
 alias m2 = mat2x2<f32>;
 
 const PI = 3.14159265;
-const MAX_G = 20000u;
-const G_PER_TILE = 512u;
+const MAX_G = 40000u;
+const G_PER_TILE = 2048u;
+const GAUSS_TILE = 2048u;
 const WX = 8u;
 const WY = 8u;
 const WG = WX * WY;
-
+const GRADS = 12u;
+const CELL = 64u;
+const MAXC = 4096u;
+const CAP = 2048u;
+const BIGC = 16u;
+const PALB = 200000u;
 
 struct TimeUniform {
     time: f32,
@@ -37,12 +43,32 @@ struct GaussianParams {
     error_scale: f32,
     min_sigma: f32,
     max_sigma: f32,
-    _reserved1: f32,
+    freq_max: f32,
     random_seed: u32,
     iteration: u32,
     sigma_learning_rate: f32,
-    _padding0: u32,
-    _padding1: u32,
+    draw_progress: f32,
+    draw_grow: f32,
+    oil_enable: u32,
+    hardness: f32,
+    bristle_amt: f32,
+    canvas_amt: f32,
+    edge_rag: f32,
+    impasto: f32,
+    curve_amt: f32,
+    mode: u32,
+    draw_prepare: u32,
+    lr_decay_rate: f32,
+    l1_mix: f32,
+    dens: f32,
+    _pd: u32,
+    par: f32,
+    pal_k: f32,
+    pal_amt: f32,
+    _pe: f32,
+    _pf: f32,
+    _pg: f32,
+    _ph: f32,
 };
 @group(1) @binding(1) var<uniform> p: GaussianParams;
 
@@ -55,14 +81,21 @@ struct GaussianData {
     sigma_xy: f32,
     sigma_yy: f32,
     _padding: f32,
+    gpad0: f32,
+    gpad1: f32,
     color: v3,
     opacity: f32,
 };
 @group(3) @binding(0) var<storage, read_write> g_data: array<GaussianData>;
 
-@group(3) @binding(1) var<storage, read_write> g_grad: array<atomic<u32>>; 
+@group(3) @binding(1) var<storage, read_write> g_grad: array<atomic<u32>>;
 @group(3) @binding(2) var<storage, read_write> adam_m: array<f32>;
 @group(3) @binding(3) var<storage, read_write> adam_v: array<f32>;
+@group(3) @binding(4) var<storage, read_write> draw_rank: array<u32>;
+// per 8x8 tile error, x1000, written by the renderer, read by respawn
+@group(3) @binding(5) var<storage, read_write> err_grid: array<atomic<u32>>;
+@group(3) @binding(6) var<storage, read_write> bin_cnt: array<atomic<u32>>;
+@group(3) @binding(7) var<storage, read_write> bin_idx: array<u32>;
 
 //shared memory
 
@@ -124,9 +157,12 @@ fn aabb_miss(center:v2, rad:f32, tl:v2, th:v2)->bool {
            (center.y + rad < tl.y) || (center.y - rad > th.y);
 }
 
+// radius (in sigmas) where opacity*falloff drops below 1/255
+fn vis_k(op:f32)->f32 { return clamp(sqrt(max(2. * log(max(op, 1e-4) * 255.), 0.)), 0., 3.); }
+
 // gauss bounds
 fn get_bounds(g:GaussianData)->OBB {
-    let s = v2(g.sigma_xx, g.sigma_yy) * 3.; // 3 std devs
+    let s = v2(g.sigma_xx, g.sigma_yy) * vis_k(g.opacity);
     let c = cos(g.sigma_xy); let sn = sin(g.sigma_xy);
     let rot = m2(v2(c, sn), v2(-sn, c));
     return OBB(g.center, rot, s);
@@ -145,16 +181,193 @@ fn eval_g(g:GaussianData, uv:v2)->v4 {
     return v4(g.color, w);
 }
 
+fn h21(p: v2) -> f32 {
+    var q = fract(p * v2(.1031, .1173));
+    q += dot(q, q.yx + 33.33);
+    return fract((q.x + q.y) * q.x);
+}
+fn vn2(p: v2) -> f32 {
+    let i = floor(p); let f = fract(p); let u = f * f * (3. - 2. * f);
+    let a = h21(i); let b = h21(i + v2(1., 0.));
+    let c = h21(i + v2(0., 1.)); let d = h21(i + v2(1., 1.));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// loss gradient: blend of squared error and smooth L1
+fn loss_grad(e:v3, n:f32)->v3 { return mix(2. * e, e / sqrt(e * e + 1e-4), p.l1_mix) / n; }
+
+// respawn spot: the worst of 8 random tiles, or random when dens is 0
+fn err_spawn(h:v4, seed:f32)->v2 {
+    var best = clamp(h.xy, v2(.05), v2(.95));
+    if (p.dens <= 0.) { return best; }
+    let dim = textureDimensions(output);let tw = (dim.x + WX - 1u) / WX;let th = (dim.y + WY - 1u) / WY;
+    var be = -1.;
+    for (var k = 0u; k < 8u; k++) {
+        let q = hash4(v4(seed, f32(k) * 7.1, h.z * 13., h.w * 17.));
+        let c = clamp(q.xy, v2(.02), v2(.98));
+        let t = min(vec2<u32>(c * v2(f32(tw), f32(th))), vec2<u32>(tw - 1u, th - 1u));
+        let e = f32(atomicLoad(&err_grid[min(t.y * tw + t.x, PALB - 1u)])) * mix(1., q.z, 1. - p.dens);
+        if (e > be) { be = e; best = c; }
+    }
+    return best;
+}
+
+// palette colour k
+fn palc(k:u32)->v3 {
+    let a = PALB + k * 4u;
+    return v3(bitcast<f32>(atomicLoad(&err_grid[a])), bitcast<f32>(atomicLoad(&err_grid[a+1u])), bitcast<f32>(atomicLoad(&err_grid[a+2u])));
+}
+// gabor keeps its sizes in sigma_xx/sigma_xy
+fn szn(g:GaussianData)->f32 { return clamp(select(max(g.sigma_xx, g.sigma_xy), max(g.sigma_xx, g.sigma_yy), p.mode == 0u) / max(p.max_sigma, 1e-4), 0., 1.); }
+// display colour: blended toward its palette colour
+fn dcol(g:GaussianData)->v3 {
+    if (p.pal_amt <= 0. || p.pal_k < 2.) { return g.color; }
+    // palette slot: _padding in gaussian mode, the unused opacity in gabor mode
+    return mix(g.color, palc(min(u32(select(g.opacity, g._padding, p.mode == 0u)), 15u)), p.pal_amt);
+}
+// parallax: small strokes sit in front and sway more
+fn poff(g:GaussianData)->v2 {
+    if (p.par <= 0.) { return v2(0.); }
+    let t = u_time.time;
+    return (.5 - szn(g)) * p.par * .03 * v2(sin(t * .6), sin(t * .43) * .6);
+}
+
+fn painter_key(center: v2, size: f32) -> f32 {
+    let size_key = clamp(1. - size / max(p.max_sigma, 1e-4), 0., 1.);
+    let sweep_key = clamp((center.x + center.y) * 0.5 + (h21(center * 91.7) - .5) * 0.14, 0., 1.);
+    return 0.55 * size_key + 0.45 * sweep_key;
+}
+
+fn reveal_alpha(idx: u32) -> f32 {
+    if (p.draw_progress < 0.) { return 1.; }
+    let nr = f32(draw_rank[idx]) / max(f32(p.num_gaussians), 1.);
+    let band = mix(0.06, 0.012, p.draw_grow);
+    return smoothstep(nr, nr + band, p.draw_progress);
+}
+
+fn draw_mult(idx: u32, along: f32, seed: f32) -> f32 {
+    if (p.draw_progress < 0.) { return 1.; }
+    let lr = reveal_alpha(idx);
+    let dir = select(1., -1., fract(seed * .0137) > .5);
+    let t = clamp(along * dir * 0.42 + 0.5, 0., 1.);
+    let along_mask = smoothstep(lr + 0.05, lr - 0.03, t);
+    return lr * mix(1.0, along_mask, p.draw_grow);
+}
+
+fn eval_oil(g: GaussianData, uv: v2, idx: u32) -> v4 {
+    let d_raw = uv - g.center;
+    let c = cos(g.sigma_xy); let s = sin(g.sigma_xy);
+    let d = v2(d_raw.x * c + d_raw.y * s, d_raw.y * c - d_raw.x * s);
+    let sx = max(g.sigma_xx, .0005); let sy = max(g.sigma_yy, .0005);
+    let seed = h21(v2(f32(idx) * .137 + 3.1, f32(idx) * .091 + 7.7)) * 40.;
+    let bend = p.curve_amt * (fract(seed * .137) - .5) * 2.;
+    let nx = d.x / sx;
+    let ny = d.y / sy - bend * min(nx * nx, 4.);
+    let pdf0 = .5 * (nx * nx + ny * ny);
+
+    let streak = vn2(v2(nx * .6, ny * 7.) + seed) - .5;
+    let esf = select(streak * .35, streak, streak < 0.);
+    let pdf = pdf0 * max(1. + p.edge_rag * 2. * esf, 0.4);
+    let hard = 1. + (p.hardness - 1.) * clamp(max(sx, sy) / .02, 0., 1.);
+    let a = g.opacity * exp(-pow(pdf, hard));
+
+    var col = g.color;
+    col *= (1. - p.bristle_amt * .55 * max(0., -streak));
+    col += g.color * p.bristle_amt * .25 * max(0.,  streak);
+    let relief = clamp(ny, -1., 1.);
+    col *= (1. - p.impasto * .5 * max(0., relief));
+    col += g.color * p.impasto * .5 * max(0., -relief);
+    let a2 = a * draw_mult(idx, nx, seed);
+    return v4(clamp(col, v3(0.), v3(2.)), min(.999, a2));
+}
+
+fn gabor_bounds(g: GaussianData) -> OBB {
+    let s = v2(g.sigma_xx, g.sigma_xy) * 3.;
+    let c = cos(g.sigma_yy); let sn = sin(g.sigma_yy);
+    let rot = m2(v2(c, sn), v2(-sn, c));
+    return OBB(g.center, rot, s);
+}
+
+fn gabor_eval(g: GaussianData, uv: v2) -> v3 {
+    let dr = uv - g.center;
+    let c = cos(g.sigma_yy); let s = sin(g.sigma_yy);
+    let dlx = dr.x * c + dr.y * s;
+    let dly = dr.y * c - dr.x * s;
+    let sx = max(g.sigma_xx, .001); let sy = max(g.sigma_xy, .001);
+    let env = exp(-.5 * ((dlx * dlx) / (sx * sx) + (dly * dly) / (sy * sy)));
+    let carrier = .5 + .5 * cos(g._padding * dlx + g.gpad0);   // freq, phase
+    return g.color * (g.gpad1 * env * carrier);                // amplitude
+}
+
+fn gabor_oil_eval(g: GaussianData, uv: v2, idx: u32) -> v3 {
+    let dr = uv - g.center;
+    let c = cos(g.sigma_yy); let s = sin(g.sigma_yy);
+    let dlx = dr.x * c + dr.y * s;
+    let dly = dr.y * c - dr.x * s;
+    let sx = max(g.sigma_xx, .001); let sy = max(g.sigma_xy, .001);
+    let seed = h21(v2(f32(idx) * .137 + 3.1, f32(idx) * .091 + 7.7)) * 40.;
+    let bend = p.curve_amt * (fract(seed * .137) - .5) * 2.;
+    let nx = dlx / sx;
+    let ny = dly / sy - bend * min(nx * nx, 4.);
+    let pdf0 = .5 * (nx * nx + ny * ny);
+    let streak = vn2(v2(nx * .6, ny * 7.) + seed) - .5;
+    let esf = select(streak * .35, streak, streak < 0.);
+    let pdf = pdf0 * max(1. + p.edge_rag * 2. * esf, 0.4);   // floor: ragged but never a runaway scratch
+    let hard = 1. + (p.hardness - 1.) * clamp(max(sx, sy) / .02, 0., 1.);
+    let env = exp(-pow(pdf, hard));
+    let carrier = .5 + .5 * cos(g._padding * dlx + g.gpad0);
+    var col = g.color;
+    col *= (1. - p.bristle_amt * .55 * max(0., -streak));
+    col += g.color * p.bristle_amt * .25 * max(0., streak);
+    let relief = clamp(ny, -1., 1.);
+    col *= (1. - p.impasto * .5 * max(0., relief));
+    col += g.color * p.impasto * .5 * max(0., -relief);
+    let dm = draw_mult(idx, nx, seed);
+    return clamp(col, v3(0.), v3(2.)) * (g.gpad1 * env * carrier * dm);
+}
+
+struct GaborGrads { cx:f32, cy:f32, sxx:f32, syy:f32, ang:f32, fr:f32, ph:f32, cr:f32, cg:f32, cb:f32, amp:f32 };
+
+fn gabor_calc_grads(g: GaussianData, uv: v2, go: v3) -> GaborGrads {
+    var r: GaborGrads;
+    let dr = uv - g.center;
+    let c = cos(g.sigma_yy); let s = sin(g.sigma_yy);
+    let dlx = dr.x * c + dr.y * s;
+    let dly = dr.y * c - dr.x * s;
+    let sx = max(g.sigma_xx, .001); let sy = max(g.sigma_xy, .001);
+    let vx = sx * sx; let vy = sy * sy;
+    let env = exp(-.5 * ((dlx * dlx) / vx + (dly * dly) / vy));
+    let psi = g._padding * dlx + g.gpad0;
+    let carr = .5 + .5 * cos(psi);
+    let dcarr = -.5 * sin(psi);
+    let A = g.gpad1 * env * carr;
+    let gA = dot(go, g.color);
+    let gv = gA * g.gpad1;
+    let gdx = gv * (carr * env * (-dlx / vx) + env * dcarr * g._padding);
+    let gdy = gv * (carr * env * (-dly / vy));
+    r.cx = -(gdx * c - gdy * s);
+    r.cy = -(gdx * s + gdy * c);
+    r.ang = gdx * dly - gdy * dlx;
+    r.sxx = gv * carr * env * dlx * dlx / (vx * sx);
+    r.syy = gv * carr * env * dly * dly / (vy * sy);
+    r.fr = gv * (env * dcarr * dlx);
+    r.ph = gv * (env * dcarr);
+    r.cr = go.r * A; r.cg = go.g * A; r.cb = go.b * A;
+    r.amp = gA * env * carr;
+    return r;
+}
+
 // Bitonic sort for sorting Gaussian indices within a tile
 
-fn sort(lid:u32) {
+// sorts the first n entries (n = power of two)
+fn sort(lid:u32, n:u32) {
     workgroupBarrier();
     var k=2u;
-    while(k<=G_PER_TILE){
+    while(k<=n){
         var j=k/2u;
         while(j>0u){
             var i=lid;
-            while(i<G_PER_TILE){
+            while(i<n){
                 let l=i^j;
                 if(l>i){
                     let swp = (((i&k)==0u) && (b_idx[i]>b_idx[l])) || 
@@ -251,10 +464,29 @@ fn init_gaussians(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (i >= MAX_G) { return; }
     if (p.reset_training == 0u && p.iteration > 1u) { return; }
 
+    for (var k = 0u; k < GRADS; k++) { adam_m[i*GRADS+k] = 0.; adam_v[i*GRADS+k] = 0.; }
+
     let s = f32(p.random_seed);
     let h1 = hash4(v4(f32(i)*.123, s*.456, f32(i)*.789, s*.012));
     let h2 = hash4(v4(s*.345, f32(i)*.678, s*.901, f32(i)*.234));
     let h3 = hash4(v4(f32(i)*.567, s*.234, f32(i)*.890, s*.567));
+
+    if (p.mode != 0u) {
+        var gg: GaussianData;
+        gg.center = clamp(h1.xy, v2(.001), v2(.999));
+        let tcg = textureSampleLevel(t_target, s_target, gg.center, 0.).rgb;
+        gg.color = clamp(tcg + (h2.rgb - .5) * .1, v3(0.), v3(1.));
+        let across = mix(p.min_sigma, p.max_sigma, h1.z * h1.z);
+        gg.sigma_xx = across;                                       // sx
+        gg.sigma_xy = mix(p.min_sigma, p.max_sigma, h1.w * h1.w);   // sy
+        gg.sigma_yy = (h2.w - .5) * 2. * PI;                        // angle
+        gg._padding = min(p.freq_max, (PI / across) * mix(.5, 1., h3.y)); // freq
+        gg.gpad0 = h3.z * 2. * PI;                                  // phase
+        gg.gpad1 = mix(.02, .10, h3.x);                            // amplitude
+        gg.opacity = 0.;
+        g_data[i] = gg;
+        return;
+    }
 
     var g: GaussianData;
     g.center = clamp(h1.xy, v2(.001), v2(.999));
@@ -270,6 +502,101 @@ fn init_gaussians(@builtin(global_invocation_id) gid: vec3<u32>) {
     g_data[i] = g;
 }
 
+fn render_gabor(gid: vec3<u32>, lid: vec3<u32>, wid: vec3<u32>) {
+    let dim = textureDimensions(output);
+    let valid = (gid.x < dim.x && gid.y < dim.y);
+    let uv = (v2(f32(gid.x), f32(gid.y)) + .5) / v2(f32(dim.x), f32(dim.y));
+    let li = lid.x + lid.y * WX;
+
+    if (li == 0u) { b_cnt_atom = 0u; b_cnt = 0u; }
+    workgroupBarrier();
+
+    let tl = v2(f32(wid.x*WX), f32(wid.y*WY)) / v2(f32(dim.x), f32(dim.y));
+    let th = v2(f32((wid.x+1u)*WX), f32((wid.y+1u)*WY)) / v2(f32(dim.x), f32(dim.y));
+    let tb = OBB((tl+th)*.5, m2(v2(1.,0.),v2(0.,1.)), (th-tl)*.5 + .001);
+
+    var i = li;
+    while (i < p.num_gaussians) {
+        let gg = g_data[i];
+        if (reveal_alpha(i) >= 0.004) {
+            let rad = 3. * max(gg.sigma_xx, gg.sigma_xy) + p.par * .03;
+            if (!aabb_miss(gg.center, rad, tl, th) && obb_hit(gabor_bounds(gg), tb)) {
+                let idx = atomicAdd(&b_cnt_atom, 1u);
+                if (idx < G_PER_TILE) { b_idx[idx] = i; }
+            }
+        }
+        i += WG;
+    }
+    workgroupBarrier();
+    if (li == 0u) { b_cnt = min(atomicLoad(&b_cnt_atom), G_PER_TILE); }
+    workgroupBarrier();
+
+    // display: oil, palette and parallax, never touching training
+    let need_disp = p.oil_enable != 0u || p.par > 0. || (p.pal_amt > 0. && p.pal_k >= 2.);
+    var acc = v3(0.);
+    var acc_oil = v3(0.);
+    for (var j = 0u; j < b_cnt; j++) {
+        let g = g_data[b_idx[j]];
+        acc += gabor_eval(g, uv);
+        if (need_disp) {
+            var gd = g; gd.color = dcol(g);
+            let du = uv - poff(g);
+            if (p.oil_enable != 0u) { acc_oil += gabor_oil_eval(gd, du, b_idx[j]); } else { acc_oil += gabor_eval(gd, du); }
+        }
+    }
+    let fin_native = clamp(acc, v3(0.), v3(1.));
+
+    if (p.show_error == 0u && p.draw_progress < 0.) {
+        var go = v3(0.);
+        if (valid) {
+            let tgt = textureSampleLevel(t_target, s_target, uv, 0.).rgb;
+            go = loss_grad(fin_native - tgt, f32(dim.x * dim.y));
+        }
+        for (var j = 0u; j < b_cnt; j++) {
+            let gi = b_idx[j];
+            let g = g_data[gi];
+            var gs = GaborGrads(0.,0.,0.,0.,0.,0.,0.,0.,0.,0.,0.);
+            if (valid) { gs = gabor_calc_grads(g, uv, go); }
+            let base = gi * GRADS;
+            reduce_grad3(li, base, 0u, v3(gs.cx,  gs.cy,  gs.sxx));
+            reduce_grad3(li, base, 3u, v3(gs.syy, gs.ang, gs.fr));
+            reduce_grad3(li, base, 6u, v3(gs.ph,  gs.cr,  gs.cg));
+            reduce_grad3(li, base, 9u, v3(gs.cb,  gs.amp, 0.));
+        }
+    }
+
+    // tile error for error-guided respawn
+    if (p.show_error == 0u && p.draw_progress < 0.) {
+        var te = 0.;
+        if (valid) { te = dot(abs(fin_native - textureSampleLevel(t_target, s_target, uv, 0.).rgb), v3(1.)); }
+        red_buf[li] = v3(te, 0., 0.);
+        workgroupBarrier();
+        var sr = WG / 2u;
+        while (sr > 0u) { if (li < sr) { red_buf[li] += red_buf[li + sr]; } workgroupBarrier(); sr /= 2u; }
+        let ti = wid.y * ((dim.x + WX - 1u) / WX) + wid.x;
+        if (li == 0u && ti < PALB) { atomicStore(&err_grid[ti], u32(red_buf[0].x / f32(WG) * 1000.)); }
+        workgroupBarrier();
+    }
+
+    var out_rgb = fin_native;
+    if (need_disp) {
+        out_rgb = clamp(acc_oil, v3(0.), v3(1.));
+        if (p.oil_enable != 0u && p.canvas_amt > 0.) {
+            let cuv = uv * v2(f32(dim.x), f32(dim.y));
+            let weave = (sin(cuv.x * 1.3) * .5 + .5) * (sin(cuv.y * 1.3) * .5 + .5);
+            let fib = vn2(cuv * .5) - .5;
+            let canvas = 1. + p.canvas_amt * (.28 * (weave - .5) + .18 * fib);
+            out_rgb = clamp(out_rgb * canvas, v3(0.), v3(1.));
+        }
+    }
+    var finstore = v4(out_rgb, 1.);
+    if (p.show_error != 0u && valid) {
+        let tgt = textureSampleLevel(t_target, s_target, uv, 0.).rgb;
+        finstore = v4(abs(fin_native - tgt) * p.error_scale, 1.);
+    }
+    if (valid) { textureStore(output, gid.xy, finstore); }
+}
+
 // The main engine. It performs tile-based culling and sorting for performance.
 // It runs the forward pass to get the pixel color, calculates the error against the target,
 // and then immediately runs the backward pass to compute gradients.
@@ -281,13 +608,15 @@ fn render_display(
 ) {
     let dim = textureDimensions(output);
     let valid = (gid.x < dim.x && gid.y < dim.y);
-    let uv = v2(f32(gid.x), f32(gid.y)) / v2(f32(dim.x), f32(dim.y));
+    let uv = (v2(f32(gid.x), f32(gid.y)) + .5) / v2(f32(dim.x), f32(dim.y));
     let li = lid.x + lid.y * WX;
 
     if (p.show_target != 0u) {
         if(valid){ textureStore(output, gid.xy, textureSampleLevel(t_target, s_target, uv, 0.)); }
         return;
     }
+
+    if (p.mode != 0u) { render_gabor(gid, lid, wid); return; }
 
     // Tile Setup
     if (li == 0u) { b_cnt_atom = 0u; b_cnt = 0u; }
@@ -297,30 +626,40 @@ fn render_display(
     let th = v2(f32((wid.x+1u)*WX), f32((wid.y+1u)*WY)) / v2(f32(dim.x), f32(dim.y));
     let tb = OBB((tl+th)*.5, m2(v2(1.,0.),v2(0.,1.)), (th-tl)*.5 + .001);
 
-    // Culling
+    // Culling: the shared big list, then this tile's 64 px cell
+    let cw = (dim.x + CELL - 1u) / CELL; let chh = (dim.y + CELL - 1u) / CELL;
+    let fall = cw * chh > MAXC;
+    let nbig = min(atomicLoad(&bin_cnt[MAXC]), MAX_G);
+    let cell = (wid.y * WY / CELL) * cw + wid.x * WX / CELL;
+    var ncel = 0u;
+    if (!fall) { ncel = min(atomicLoad(&bin_cnt[cell]), CAP); }
     var i = li;
-    while(i < p.num_gaussians){
-        let gg = g_data[i];
-        let rad = 3. * max(gg.sigma_xx, gg.sigma_yy);
+    while (i < nbig + ncel) {
+        var gi = 0u;
+        if (i < nbig) { gi = bin_idx[MAXC * CAP + i]; } else { gi = bin_idx[cell * CAP + i - nbig]; }
+        let gg = g_data[gi];
+        let rad = vis_k(gg.opacity) * max(gg.sigma_xx, gg.sigma_yy) + p.par * .03;
         if(!aabb_miss(gg.center, rad, tl, th) && obb_hit(get_bounds(gg), tb)){
             let idx = atomicAdd(&b_cnt_atom, 1u);
-            if(idx < G_PER_TILE){ b_idx[idx] = i; }
+            if(idx < GAUSS_TILE){ b_idx[idx] = gi; }
         }
         i += WG;
     }
     workgroupBarrier();
-    
-    if (li == 0u) { b_cnt = min(atomicLoad(&b_cnt_atom), G_PER_TILE); }
-    workgroupBarrier();
+
+    if (li == 0u) { b_cnt = min(atomicLoad(&b_cnt_atom), GAUSS_TILE); }
+    let cnt = workgroupUniformLoad(&b_cnt);
+    var n2 = 2u;
+    while (n2 < cnt) { n2 *= 2u; }
 
     // Padding & Sort
     i = li;
-    while(i < G_PER_TILE){
-        if(i >= b_cnt){ b_idx[i] = 0xFFFFFFFFu; }
+    while(i < n2){
+        if(i >= cnt){ b_idx[i] = 0xFFFFFFFFu; }
         i += WX*WY;
     }
     workgroupBarrier();
-    sort(li);
+    sort(li, n2);
 
     var col = v4(0.,0.,0.,1.);
     for(var j=0u; j<b_cnt; j++){
@@ -332,11 +671,39 @@ fn render_display(
     }
     var fin = v4(clamp(col.rgb, v3(0.), v3(1.)), 1.);
 
-    if (p.show_target == 0u && p.show_error == 0u) {
+    // display composite: oil, palette and parallax never touch training
+    let need_disp = p.oil_enable != 0u || p.par > 0. || (p.pal_amt > 0. && p.pal_k >= 2.);
+    var oil_rgb = fin.rgb;
+    if (need_disp && p.show_error == 0u && p.show_target == 0u) {
+        var oil = v4(0., 0., 0., 1.);
+        for (var j = 0u; j < b_cnt; j++) {
+            if (b_idx[j] >= p.num_gaussians) { break; }
+            let gs0 = g_data[b_idx[j]];
+            var gs = gs0; gs.color = dcol(gs0);
+            let du = uv - poff(gs0);
+            var co = eval_g(gs, du);
+            if (p.oil_enable != 0u) { co = eval_oil(gs, du, b_idx[j]); }
+            let ca = co.a;
+            let rgb = co.rgb * ca; let T = oil.w;
+            oil = v4(oil.rgb + rgb * T, T * (1. - ca));
+            if (oil.w < .001) { break; }
+        }
+        oil_rgb = clamp(oil.rgb, v3(0.), v3(1.));
+
+        if (p.oil_enable != 0u && p.canvas_amt > 0.) {
+            let cuv = uv * v2(f32(dim.x), f32(dim.y));
+            let weave = (sin(cuv.x * 1.3) * .5 + .5) * (sin(cuv.y * 1.3) * .5 + .5);
+            let fib = vn2(cuv * .5) - .5;
+            let canvas = 1. + p.canvas_amt * (.28 * (weave - .5) + .18 * fib);
+            oil_rgb = clamp(oil_rgb * canvas, v3(0.), v3(1.));
+        }
+    }
+
+    if (p.show_target == 0u && p.show_error == 0u && p.draw_progress < 0.) {
         var go = v3(0.);
         if (valid) {
             let tgt = textureSampleLevel(t_target, s_target, uv, 0.).rgb;
-            go = 2. * (fin.rgb - tgt) / f32(dim.x*dim.y);
+            go = loss_grad(fin.rgb - tgt, f32(dim.x*dim.y));
         }
 
         // Backward pass over front to back alpha compositing
@@ -369,13 +736,122 @@ fn render_display(
         }
     }
 
+    // tile error for error-guided respawn
+    if (p.show_error == 0u && p.draw_progress < 0.) {
+        var te = 0.;
+        if (valid) { te = dot(abs(fin.rgb - textureSampleLevel(t_target, s_target, uv, 0.).rgb), v3(1.)); }
+        red_buf[li] = v3(te, 0., 0.);
+        workgroupBarrier();
+        var sr = WG / 2u;
+        while (sr > 0u) { if (li < sr) { red_buf[li] += red_buf[li + sr]; } workgroupBarrier(); sr /= 2u; }
+        let ti = wid.y * ((dim.x + WX - 1u) / WX) + wid.x;
+        if (li == 0u && ti < PALB) { atomicStore(&err_grid[ti], u32(red_buf[0].x / f32(WG) * 1000.)); }
+        workgroupBarrier();
+    }
+
     // Viz
     if (p.show_error != 0u && valid) {
         let tgt = textureSampleLevel(t_target, s_target, uv, 0.).rgb;
         fin = v4(abs(fin.rgb - tgt) * p.error_scale, 1.);
+    } else if (need_disp && p.show_target == 0u && valid) {
+        fin = v4(oil_rgb, 1.);
     }
 
     if (valid) { textureStore(output, gid.xy, fin); }
+}
+
+fn update_gabor(i: u32) {
+    let b1 = .9; let b2 = .999; let eps = 1e-8;
+    let t = f32(p.iteration) + 1.;
+    let b1c = 1. - pow(b1, t);
+    let b2c = 1. - pow(b2, t);
+    let lr_decay = max(.15, 1. / (1. + f32(p.iteration) * p.lr_decay_rate));
+    let pos_lr = p.learning_rate * lr_decay;      // center, angle, phase
+    let sig_lr = p.sigma_learning_rate * lr_decay; // size, frequency
+    let col_lr = p.color_learning_rate * lr_decay;
+    let amp_lr = p.opacity_learning_rate * lr_decay;
+
+    var g = g_data[i];
+    let bi = i * GRADS;
+    let g_cx = bitcast<f32>(atomicLoad(&g_grad[bi+0u]));
+    let g_cy = bitcast<f32>(atomicLoad(&g_grad[bi+1u]));
+    let g_sx = bitcast<f32>(atomicLoad(&g_grad[bi+2u]));
+    let g_sy = bitcast<f32>(atomicLoad(&g_grad[bi+3u]));
+    let g_an = bitcast<f32>(atomicLoad(&g_grad[bi+4u]));
+    let g_fr = bitcast<f32>(atomicLoad(&g_grad[bi+5u]));
+    let g_ph = bitcast<f32>(atomicLoad(&g_grad[bi+6u]));
+    let g_r  = bitcast<f32>(atomicLoad(&g_grad[bi+7u]));
+    let g_g  = bitcast<f32>(atomicLoad(&g_grad[bi+8u]));
+    let g_b  = bitcast<f32>(atomicLoad(&g_grad[bi+9u]));
+    let g_am = bitcast<f32>(atomicLoad(&g_grad[bi+10u]));
+
+    var m=adam_m[bi]; var v=adam_v[bi];
+    m=b1*m+(1.-b1)*g_cx; v=b2*v+(1.-b2)*g_cx*g_cx; adam_m[bi]=m; adam_v[bi]=v;
+    g.center.x -= pos_lr/(sqrt(v/b2c)+eps)*(m/b1c);
+
+    m=adam_m[bi+1u]; v=adam_v[bi+1u];
+    m=b1*m+(1.-b1)*g_cy; v=b2*v+(1.-b2)*g_cy*g_cy; adam_m[bi+1u]=m; adam_v[bi+1u]=v;
+    g.center.y -= pos_lr/(sqrt(v/b2c)+eps)*(m/b1c);
+
+    m=adam_m[bi+2u]; v=adam_v[bi+2u];
+    m=b1*m+(1.-b1)*g_sx; v=b2*v+(1.-b2)*g_sx*g_sx; adam_m[bi+2u]=m; adam_v[bi+2u]=v;
+    g.sigma_xx -= sig_lr/(sqrt(v/b2c)+eps)*(m/b1c);        // sx
+
+    m=adam_m[bi+3u]; v=adam_v[bi+3u];
+    m=b1*m+(1.-b1)*g_sy; v=b2*v+(1.-b2)*g_sy*g_sy; adam_m[bi+3u]=m; adam_v[bi+3u]=v;
+    g.sigma_xy -= sig_lr/(sqrt(v/b2c)+eps)*(m/b1c);        // sy
+
+    m=adam_m[bi+4u]; v=adam_v[bi+4u];
+    m=b1*m+(1.-b1)*g_an; v=b2*v+(1.-b2)*g_an*g_an; adam_m[bi+4u]=m; adam_v[bi+4u]=v;
+    g.sigma_yy -= pos_lr/(sqrt(v/b2c)+eps)*(m/b1c);        // angle
+
+    m=adam_m[bi+5u]; v=adam_v[bi+5u];
+    m=b1*m+(1.-b1)*g_fr; v=b2*v+(1.-b2)*g_fr*g_fr; adam_m[bi+5u]=m; adam_v[bi+5u]=v;
+    g._padding -= sig_lr/(sqrt(v/b2c)+eps)*(m/b1c);        // freq
+
+    m=adam_m[bi+6u]; v=adam_v[bi+6u];
+    m=b1*m+(1.-b1)*g_ph; v=b2*v+(1.-b2)*g_ph*g_ph; adam_m[bi+6u]=m; adam_v[bi+6u]=v;
+    g.gpad0 -= pos_lr/(sqrt(v/b2c)+eps)*(m/b1c);           // phase
+
+    m=adam_m[bi+7u]; v=adam_v[bi+7u];
+    m=b1*m+(1.-b1)*g_r; v=b2*v+(1.-b2)*g_r*g_r; adam_m[bi+7u]=m; adam_v[bi+7u]=v;
+    g.color.r -= col_lr/(sqrt(v/b2c)+eps)*(m/b1c);
+
+    m=adam_m[bi+8u]; v=adam_v[bi+8u];
+    m=b1*m+(1.-b1)*g_g; v=b2*v+(1.-b2)*g_g*g_g; adam_m[bi+8u]=m; adam_v[bi+8u]=v;
+    g.color.g -= col_lr/(sqrt(v/b2c)+eps)*(m/b1c);
+
+    m=adam_m[bi+9u]; v=adam_v[bi+9u];
+    m=b1*m+(1.-b1)*g_b; v=b2*v+(1.-b2)*g_b*g_b; adam_m[bi+9u]=m; adam_v[bi+9u]=v;
+    g.color.b -= col_lr/(sqrt(v/b2c)+eps)*(m/b1c);
+
+    m=adam_m[bi+10u]; v=adam_v[bi+10u];
+    m=b1*m+(1.-b1)*g_am; v=b2*v+(1.-b2)*g_am*g_am; adam_m[bi+10u]=m; adam_v[bi+10u]=v;
+    g.gpad1 -= amp_lr/(sqrt(v/b2c)+eps)*(m/b1c);           // amplitude
+
+    g.center = clamp(g.center, v2(0.), v2(1.));
+    g.sigma_xx = clamp(g.sigma_xx, p.min_sigma, p.max_sigma);
+    g.sigma_xy = clamp(g.sigma_xy, p.min_sigma, p.max_sigma);
+    g._padding = clamp(g._padding, 0., min(p.freq_max, PI / max(g.sigma_xx, .001)));
+    g.color = clamp(g.color, v3(0.), v3(1.));
+    g.gpad1 = clamp(g.gpad1, 0., 2.);
+
+    let dead = g.gpad1 <= .02;
+    let check = ((p.iteration + i) % 97u == 0u) && (p.reset_training == 0u) && (p.iteration > 60u);
+    if (dead && check) {
+        let h = hash4(v4(f32(p.iteration), f32(i), g.center.x, g.center.y));
+        g.center = err_spawn(h, f32(p.iteration) * .37 + f32(i) * .013);
+        let across = mix(p.min_sigma, p.max_sigma, h.x * h.x);
+        g.sigma_xx = across;
+        g.sigma_xy = mix(p.min_sigma, p.max_sigma, h.y * h.y);
+        g.sigma_yy = (h.z - .5) * 2. * PI;
+        g._padding = min(p.freq_max, (PI / across) * mix(.5, 1., h.w));
+        g.gpad0 = h.x * 2. * PI;
+        g.color = textureSampleLevel(t_target, s_target, g.center, 0.).rgb;
+        g.gpad1 = .03;
+        for (var k=0u; k<GRADS; k++) { adam_m[bi+k]=0.; adam_v[bi+k]=0.; }
+    }
+    g_data[i] = g;
 }
 
 // 3. Update (Adam)
@@ -383,12 +859,15 @@ fn render_display(
 fn update_gaussians(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if (i >= p.num_gaussians) { return; }
+    if (p.draw_progress >= 0.) { return; }
+
+    if (p.mode != 0u) { update_gabor(i); return; }
 
     let b1 = .9; let b2 = .999; let eps = 1e-8;
     let t = f32(p.iteration) + 1.;
     let b1c = 1. - pow(b1, t);
     let b2c = 1. - pow(b2, t);
-    let lr_decay = max(.15, 1. / (1. + f32(p.iteration) * .0008));
+    let lr_decay = max(.04, 1. / (1. + f32(p.iteration) * p.lr_decay_rate));
     let pos_lr = p.learning_rate * lr_decay;
     let sig_lr = p.sigma_learning_rate * lr_decay;
     let col_lr = p.color_learning_rate * lr_decay;
@@ -469,18 +948,21 @@ fn update_gaussians(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Densification (Teleport logic)
     // If invisible or huge lazy blob, kill it and respawn
-    let dead = g.opacity <= .02;
+    // error-guided: weak splats are recycled too, and more often
+    let eg = p.dens > 0.;
+    let dead = g.opacity <= select(.02, .05, eg);
     let huge = (g.sigma_xx >= p.max_sigma * .98 || g.sigma_yy >= p.max_sigma * .98) && g.opacity < .1;
-    let check = (p.iteration % 30u == 0u) && (p.reset_training == 0u) && (p.iteration > 60u);
+    let check = ((p.iteration + i) % select(149u, 61u, eg) == 0u) && (p.reset_training == 0u) && (p.iteration > 60u);
 
     if ((dead || huge) && check) {
         let h = hash4(v4(f32(p.iteration), f32(i), g.center.x, g.center.y));
-        g.center = clamp(h.xy, v2(.05), v2(.95));
-        g.sigma_xx = p.min_sigma * 1.5;
-        g.sigma_yy = p.min_sigma * 1.5;
+        g.center = err_spawn(h, f32(p.iteration) * .37 + f32(i) * .013);
+        let rs = select(p.min_sigma * 1.5, max(p.min_sigma * 1.5, .004), eg);
+        g.sigma_xx = rs;
+        g.sigma_yy = rs;
         g.sigma_xy = (h.z-.5) * 2. * PI;
         g.color = textureSampleLevel(t_target, s_target, g.center, 0.).rgb;
-        g.opacity = .15;
+        g.opacity = .06;
         
         // Reset momentum or it flies away
         for(var k=0u; k<9u; k++){
@@ -494,6 +976,85 @@ fn update_gaussians(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(256, 1, 1)
 fn clear_gradients(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if (i >= p.num_gaussians * 9u) { return; }
+    if (i >= p.num_gaussians * GRADS) { return; }   // GRADS=12 covers both modes (gaussian uses 9)
     atomicStore(&g_grad[i], 0u);
+}
+
+// binning: each splat registers in the 64 px cells it covers, or in the shared big list
+@compute @workgroup_size(256, 1, 1)
+fn bin_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x <= MAXC) { atomicStore(&bin_cnt[gid.x], 0u); }
+}
+
+@compute @workgroup_size(256, 1, 1)
+fn bin_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= p.num_gaussians || p.mode != 0u) { return; }
+    let g = g_data[i];
+    let vk = vis_k(g.opacity);
+    if (vk <= 0. || reveal_alpha(i) < .004) { return; }
+    let dim = textureDimensions(output); let df = v2(f32(dim.x), f32(dim.y));
+    let cw = (dim.x + CELL - 1u) / CELL; let chh = (dim.y + CELL - 1u) / CELL;
+    let rad = vk * max(g.sigma_xx, g.sigma_yy) + p.par * .03;
+    let c0 = vec2<u32>(clamp((g.center - rad) * df / f32(CELL), v2(0.), v2(f32(cw - 1u), f32(chh - 1u))));
+    let c1 = vec2<u32>(clamp((g.center + rad) * df / f32(CELL), v2(0.), v2(f32(cw - 1u), f32(chh - 1u))));
+    let n = (c1.x - c0.x + 1u) * (c1.y - c0.y + 1u);
+    if (n > BIGC || cw * chh > MAXC) {
+        let k = atomicAdd(&bin_cnt[MAXC], 1u);
+        if (k < MAX_G) { bin_idx[MAXC * CAP + k] = i; }
+        return;
+    }
+    for (var y = c0.y; y <= c1.y; y++) { for (var x = c0.x; x <= c1.x; x++) {
+        let c = y * cw + x;
+        let k = atomicAdd(&bin_cnt[c], 1u);
+        if (k < CAP) { bin_idx[c * CAP + k] = i; }
+    }}
+}
+
+// palette: online k-means over splat colours (display only)
+@compute @workgroup_size(256, 1, 1)
+fn pal_assign(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= p.num_gaussians || p.pal_k < 2. || p.pal_amt <= 0.) { return; }
+    let K = u32(clamp(p.pal_k, 2., 16.));
+    let c = g_data[i].color;
+    var bk = 0u; var bd = 1e9;
+    for (var k = 0u; k < K; k++) { let e = c - palc(k); let dd = dot(e, e); if (dd < bd) { bd = dd; bk = k; } }
+    if (p.mode == 0u) { g_data[i]._padding = f32(bk); } else { g_data[i].opacity = f32(bk); }
+    let a = PALB + 64u + bk * 4u;
+    atomicAdd(&err_grid[a], u32(c.r * 1024.)); atomicAdd(&err_grid[a+1u], u32(c.g * 1024.));
+    atomicAdd(&err_grid[a+2u], u32(c.b * 1024.)); atomicAdd(&err_grid[a+3u], 1u);
+}
+
+@compute @workgroup_size(16, 1, 1)
+fn pal_update(@builtin(local_invocation_id) lid: vec3<u32>) {
+    let k = lid.x;
+    if (p.pal_k < 2. || p.pal_amt <= 0.) { return; }
+    let a = PALB + 64u + k * 4u;
+    let n = atomicExchange(&err_grid[a+3u], 0u);
+    let sm = v3(f32(atomicExchange(&err_grid[a], 0u)), f32(atomicExchange(&err_grid[a+1u], 0u)), f32(atomicExchange(&err_grid[a+2u], 0u))) / 1024.;
+    var c = palc(k);
+    // empty or fresh: reseed from a splat
+    if (n == 0u || p.iteration <= 2u) { c = g_data[(k * 2654435761u + p.iteration * 97u) % max(p.num_gaussians, 1u)].color; }
+    else { c = sm / f32(n); }
+    let b = PALB + k * 4u;
+    atomicStore(&err_grid[b], bitcast<u32>(c.r)); atomicStore(&err_grid[b+1u], bitcast<u32>(c.g)); atomicStore(&err_grid[b+2u], bitcast<u32>(c.b));
+}
+
+@compute @workgroup_size(256, 1, 1)
+fn compute_draw_rank(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= p.num_gaussians) { return; }
+    if (p.draw_prepare == 0u) { return; }
+    let gi = g_data[i];
+    let si = select(max(gi.sigma_xx, gi.sigma_yy), max(gi.sigma_xx, gi.sigma_xy), p.mode != 0u);
+    let ki = painter_key(gi.center, si);
+    var rank = 0u;
+    for (var j = 0u; j < p.num_gaussians; j++) {
+        let gj = g_data[j];
+        let sj = select(max(gj.sigma_xx, gj.sigma_yy), max(gj.sigma_xx, gj.sigma_xy), p.mode != 0u);
+        let kj = painter_key(gj.center, sj);
+        if (kj < ki || (kj == ki && j < i)) { rank += 1u; }
+    }
+    draw_rank[i] = rank;
 }
