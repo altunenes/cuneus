@@ -47,6 +47,11 @@ struct Params {
     rotation_y: f32,
     use_hdri: u32,
     animate_flow: u32,
+
+    glit_density: f32,
+    glit_size: f32,
+    glit_bright: f32,
+    glit_pad: f32,
 };
 
 @group(1) @binding(0) var out: texture_storage_2d<rgba16float, write>;
@@ -125,6 +130,28 @@ fn f(u: v2) -> f32 {
     var v = 0.0; var a = 0.5; var q = u; let m = mat2x2<f32>(0.8, 0.6, -0.6, 0.8);
     for(var i = 0; i < 4; i++) { v += a * nz(q); q = m * q * 2.0; a *= 0.5; }
     return v;
+}
+
+fn surface_glitter(uv: v2, T: f32) -> v3 {
+    var acc = v3(0.0);
+    let gp = uv * 38.0;
+    let base = floor(gp);
+    for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+            let cell = base + v2(f32(dx), f32(dy));
+            if (h(cell) > p.glit_density) { continue; }
+            let cpos = cell + v2(h(cell + v2(1.7, 9.2)), h(cell + v2(4.1, 2.3)));
+            let d = length(gp - cpos);
+            let rad = 0.12 + 0.28 * p.glit_size;
+            if (d > rad) { continue; }
+            let phase = h(cell + v2(3.7, 6.4)) * tau;
+            let spd = 2.0 + h(cell + v2(8.8, 1.1)) * 5.0;
+            let tw = pow(max(0.0, sin(T * spd + phase)), 6.0);      // smooth twinkle
+            let fall = smoothstep(rad, 0.0, d);
+            acc += pal(h(cell + v2(7.1, 5.5))) * tw * fall;
+        }
+    }
+    return acc * p.glit_bright * 4.0;
 }
 
 fn cosineDirection(n: v3) -> v3 {
@@ -244,12 +271,20 @@ fn get_plane_material(hit_pos: v3) -> Material {
     let ts = p.distortion_amt * 0.02 * wm * ed;
     fuv += v2((n2 - 0.5) * 0.5, n1 - 0.5) * ts;
 
+
     let fr = p.line_freq / S;
-    let line_val = sin(fuv.y * fr);
-    let sl = smoothstep(-0.5, 0.8, line_val); 
-    
+    let gy = fuv.y * fr * 0.159;
+    let cj = round(gy);
+    let fz = 0.05 * (f(v2(fuv.x * 30.0, cj)) - 0.5);         // frayed edge
+    let ut = (gy - cj) / 0.44 + fz;                         // across the cord (half-widths)
+    let cov = 1.0 - smoothstep(0.82, 1.03, abs(ut));        // cord coverage; gaps show bg
+    let th = sqrt(max(0.0, 1.0 - min(abs(ut), 1.0) * min(abs(ut), 1.0)));  // round tube profile
+    var sl = th * cov;
+    let fibv = f(v2(fuv.x * 9.0, ut * 4.0));                // fibre grain along the cord
     let oil = smoothstep(0.2, 0.8, abs(n1 - 0.5) * 2.0 * wm);
-    var bCol = mix(p.col_bg.rgb, mix(p.col_line.rgb, pal(n1 + T * 0.1), oil * 0.6), sl);
+    var yarn = mix(p.col_line.rgb, pal(n1 + T * 0.1), oil * 0.6);
+    yarn *= mix(0.8, 1.12, fibv) * (0.45 + 0.55 * th);      // grain + round shading
+    var bCol = mix(p.col_bg.rgb, yarn, cov);
 
     let swd = p.stream_width;
     let swW = swd + swd * 0.4 * smoothstep(0.0, 2.0, dst.x);
@@ -262,13 +297,16 @@ fn get_plane_material(hit_pos: v3) -> Material {
         em_str = 1.5;
     }
 
-    let pt = rot(v2((n1 - 0.5) * 10.12 * wm, cos(fuv.y * fr) * 0.5 + (n2 - 0.5) * 10.12 * wm), -A);
+    let pt = rot(v2((n1 - 0.5) * 10.12 * wm, ut * 9.0 * cov + (fibv - 0.5) * 2.0 * cov + (n2 - 0.5) * 10.12 * wm), -A);
     mat.mat_normal = normalize(v3(pt.x * 0.05, 1.0, pt.y * 0.05));
 
     mat.albedo = bCol;
-    mat.roughness = mix(0.8, 0.2, sl); 
-    mat.reflectance = 0.04; 
+    mat.roughness = mix(0.8, 0.2, sl);
+    mat.reflectance = 0.04;
     mat.emission = bCol * sl * em_str;
+    if (p.glit_density > 0.0) {
+        mat.emission += surface_glitter(fuv - v2(flow_time * 0.35, 0.0), flow_time);
+    }
     
     return mat;
 }

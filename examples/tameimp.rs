@@ -44,6 +44,10 @@ cuneus::uniform_params! {
         rotation_y: f32,
         use_hdri: u32,
         animate_flow: u32,
+        glit_density: f32,
+        glit_size: f32,
+        glit_bright: f32,
+        glit_pad: f32,
     }
 }
 
@@ -82,13 +86,17 @@ impl Default for ExperimentParams {
             
             accumulate: 1,
             time_offset: 10.0,
-            dof_strength: 0.02,
-            focal_distance: 6.0,
-            
+            dof_strength: 0.045,
+            focal_distance: 5.0,
+
             rotation_x: 0.0,
             rotation_y: 0.0,
             use_hdri: 0,
             animate_flow: 1,
+            glit_density: 0.35,
+            glit_size: 0.5,
+            glit_bright: 1.0,
+            glit_pad: 0.0,
         }
     }
 }
@@ -242,13 +250,19 @@ impl ShaderManager for ExperimentShader {
                             changed |= ui.add(egui::Slider::new(&mut params.cam_fov, 0.5..=2.5).text("FOV")).changed();
                             
                             ui.separator();
-                            changed |= ui.add(egui::Slider::new(&mut params.dof_strength, 0.0..=0.2).text("Depth of Field")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.dof_strength, 0.0..=0.4).text("Depth of Field")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.focal_distance, 1.0..=10.0).text("Focal Distance")).changed();
                         });
 
+                        egui::CollapsingHeader::new("Glitter").default_open(true).show(ui, |ui| {
+                            changed |= ui.add(egui::Slider::new(&mut params.glit_density, 0.0..=1.0).text("Density")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.glit_size, 0.0..=2.0).text("Size")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.glit_bright, 0.0..=4.0).text("Brightness")).changed();
+                        });
+
                         egui::CollapsingHeader::new("Path Tracing").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.max_bounces, 1..=8).text("Max Bounces")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.samples_per_pixel, 1..=8).text("Samples/Frame")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.max_bounces, 1..=12).text("Max Bounces")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.samples_per_pixel, 1..=12).text("Samples/Frame")).changed();
                             
                             let mut accumulate_bool = params.accumulate > 0;
                             if ui.checkbox(&mut accumulate_bool, "Progressive Accumulation").changed() {
