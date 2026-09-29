@@ -64,8 +64,7 @@ pub struct MeshMaterial {
     pub normal_image: Option<usize>,
     pub emissive_image: Option<usize>,
     pub occlusion_image: Option<usize>,
-    /// Which uv set the textures read (0 or 1) and its KHR_texture_transform, as two rows of a
-    /// 2x3 matrix; taken from the base colour texture (else the first texture) and applied to all
+    /// Uv set (0 or 1) and KHR_texture_transform rows, from the base colour texture, for all textures
     pub uv_set: u32,
     pub uv_transform: [[f32; 3]; 2],
     pub sampler: MeshSampler,
