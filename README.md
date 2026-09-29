@@ -49,7 +49,7 @@ Dependencies are packed sequentially — `&["render", "feedback"]` becomes `inpu
 
 ## Keys
 
-- `F` full screen/minimal screen, `H` hide egui
+- `F` full screen/minimal screen, `H` hide egui (for my examples)
 
 #### Usage
 
