@@ -10,6 +10,7 @@ A GPU compute engine for creating, tweaking, and shipping WGSL shader programs. 
 - Hot shader reloading
 - Multi-pass
 - 3DGS Rendering Inference (PLY Import, radix gpu sort)
+- glTF/GLB models with custom WGSL materials (animation, shadows, GPU instancing and crowds)
 - Interactive parameter adjustment, ez media imports through egui
 - Easily use HDR textures, videos/webcam via UI
 - Audio/Visual synchronization: Spectrum and BPM detection
