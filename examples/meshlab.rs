@@ -308,36 +308,36 @@ impl ShaderManager for MeshExample {
             }
         }
 
-        let mut m = self.material;
-        let mut p = self.params;
-        let mut changed = false;
-        let mut load_path: Option<std::path::PathBuf> = None;
-        let mut should_start_export = false;
-        let mut export_request = self.base.export_manager.get_ui_request();
-        let mut controls_request = self.base.controls.get_ui_request(&self.base.start_time, &core.size, self.base.fps_tracker.fps());
-        let (mut fly, mut fov, mut auto_rotate) = (self.camera.fly, self.camera.fov, self.camera.auto_rotate);
-        let mut reset_cam = false;
-        let mut copies = self.copies;
-        let (mut swarm_on, mut swarm_count) = (self.swarm_on, self.swarm_count);
-        let (mut lights_on, mut spot_on, mut light_shadows, mut light_power) = (self.lights_on, self.spot_on, self.light_shadows, self.light_power);
-        let mut env_path: Option<std::path::PathBuf> = None;
-        let (picked, env_name) = (self.picked.clone(), self.env_name.clone());
-        let (mut clip, mut layer, mut anim_speed, mut playing, mut restart) = (self.clip, self.layer, self.anim_speed, self.playing, false);
-        let mut crowd = self.crowd;
-        let clips = self.clips.clone();
-        let (mut sun_yaw, mut sun_pitch, mut sun_power, mut show_floor) = (self.sun_yaw, self.sun_pitch, self.sun_power, self.show_floor);
-        let (mut shadows, mut softness) = (self.scene.sun.shadows, self.scene.sun.softness);
+        // panel values, edited below and applied after the ui
+        // material and post
+        let (mut m, mut p, mut changed) = (self.material, self.params, false);
         let mut opts = self.scene.options(self.material_id);
         let (mut blend, mut cull) = (opts.blend as u8 as f32, opts.cull as u8 as f32);
-        let info = self.info.clone();
+        // camera
+        let (mut fly, mut fov, mut auto_rotate, mut reset_cam) = (self.camera.fly, self.camera.fov, self.camera.auto_rotate, false);
+        // files and labels
+        let (mut load_path, mut env_path): (Option<std::path::PathBuf>, Option<std::path::PathBuf>) = (None, None);
+        let (info, picked, env_name) = (self.info.clone(), self.picked.clone(), self.env_name.clone());
+        // copies and swarm
+        let (mut copies, mut swarm_on, mut swarm_count) = (self.copies, self.swarm_on, self.swarm_count);
+        // animation
+        let (mut clip, mut layer, mut anim_speed, mut playing, mut restart) = (self.clip, self.layer, self.anim_speed, self.playing, false);
+        let (mut crowd, clips) = (self.crowd, self.clips.clone());
+        // sun, shadows, floor
+        let (mut sun_yaw, mut sun_pitch, mut sun_power, mut show_floor) = (self.sun_yaw, self.sun_pitch, self.sun_power, self.show_floor);
+        let (mut shadows, mut softness) = (self.scene.sun.shadows, self.scene.sun.softness);
+        // lights
+        let (mut lights_on, mut spot_on, mut light_shadows, mut light_power) = (self.lights_on, self.spot_on, self.light_shadows, self.light_power);
+        // time controls and export
+        let mut controls_request = self.base.controls.get_ui_request(&self.base.start_time, &core.size, self.base.fps_tracker.fps());
+        let (mut export_request, mut should_start_export) = (self.base.export_manager.get_ui_request(), false);
 
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
                 RenderKit::apply_default_style(ctx);
                 egui::Window::new("Mesh Lab").collapsible(true).resizable(true).default_width(300.0).show(ctx, |ui| {
                     ui.label(&info);
-                    ui.small("drop a .glb/.gltf | drag: orbit | right drag: pan | wheel: zoom | WASD/arrows QE | R: reset");
-                    ui.small("material: examples/shaders/meshlab.wgsl (hot reload) | click: pick");
+                    ui.small("drop a .glb/.gltf | drag: orbit | click: pick | right drag: pan | wheel: zoom | WASD/arrows QE | R: reset");
                     if !picked.is_empty() { ui.label(format!("Picked: {picked}")); }
                     if ui.button("Load model...").clicked() {
                         load_path = rfd::FileDialog::new().add_filter("glTF", &["glb", "gltf"]).pick_file();
@@ -446,21 +446,52 @@ impl ShaderManager for MeshExample {
             self.base.render_ui(core, |_ctx| {})
         };
 
-        self.camera.fly = fly;
-        self.camera.fov = fov;
-        self.camera.auto_rotate = auto_rotate;
+        // apply the panel
+        // camera
+        (self.camera.fly, self.camera.fov, self.camera.auto_rotate) = (fly, fov, auto_rotate);
         if reset_cam { self.camera.reset(); }
+
+        // material and post
         const BLENDS: [Blend; 4] = [Blend::Auto, Blend::Opaque, Blend::Alpha, Blend::Additive];
         const CULLS: [Cull; 4] = [Cull::Auto, Cull::None, Cull::Back, Cull::Front];
         (opts.blend, opts.cull) = (BLENDS[blend as usize], CULLS[cull as usize]);
         if opts != self.scene.options(self.material_id) { self.scene.set_options(self.material_id, opts); }
+        if changed {
+            self.material = m;
+            self.params = PostParams { env_bg: self.params.env_bg, ..p };
+            self.post.set_custom_params(self.params, &core.queue);
+        }
+
+        // copies and swarm (the compute buffer becomes the object's copies)
         if copies != self.copies { self.copies = copies; self.layout_copies(); }
+        let swarm_spread = (swarm_count as f32).sqrt() * 0.6;
+        if swarm_on != self.swarm_on || (swarm_on && swarm_count != self.swarm_count) {
+            let source = swarm_on.then(|| GpuInstances { buffer: self.swarm.storage_buffers[0].clone(), count: swarm_count, bounds: (Vec3::ZERO, swarm_spread + 1.0) });
+            self.scene.set_gpu_instances(core, self.object, source);
+            if swarm_on { self.camera.frame(Vec3::ZERO, swarm_spread + 1.0); } else { self.layout_copies(); }
+        }
+        (self.swarm_on, self.swarm_count) = (swarm_on, swarm_count);
+
+        // animation
+        if clip != self.clip || restart { self.anim_time = 0.0; }
+        (self.clip, self.layer, self.anim_speed, self.playing) = (clip, layer, anim_speed, playing);
+        if crowd != self.crowd { self.crowd = crowd; self.scene.set_crowd(self.object, crowd); }
+
+        // sun, shadows, floor
+        if show_floor != self.show_floor { self.show_floor = show_floor; self.layout_copies(); }
+        (self.sun_yaw, self.sun_pitch, self.sun_power) = (sun_yaw, sun_pitch, sun_power);
+        self.scene.sun.set_angles(sun_yaw, sun_pitch);
+        self.scene.sun.color = [3.0 * sun_power; 3];
+        (self.scene.sun.shadows, self.scene.sun.softness) = (shadows, softness);
+
+        // lights
         (self.lights_on, self.spot_on, self.light_shadows, self.light_power) = (lights_on, spot_on, light_shadows, light_power);
+
+        // environment: HDRI into the material, and behind the scene
         if let Some(path) = env_path {
             match self.scene.set_image_file(core, self.material_id, 0, &path, true) {
                 Ok(()) => {
                     self.env_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    // show it behind the scene too
                     if let Some(view) = self.scene.material_texture(self.material_id, 0).cloned() {
                         self.post.update_channel_texture(2, &view, self.scene.output_sampler(), &core.device, &core.queue);
                         self.params.env_bg = 1.0;
@@ -469,28 +500,11 @@ impl ShaderManager for MeshExample {
                 Err(e) => error!("Texture load error: {e:?}"),
             }
         }
-        // swarm: the compute buffer becomes the object's copies
-        let swarm_spread = (swarm_count as f32).sqrt() * 0.6;
-        if swarm_on != self.swarm_on || (swarm_on && swarm_count != self.swarm_count) {
-            let source = swarm_on.then(|| GpuInstances { buffer: self.swarm.storage_buffers[0].clone(), count: swarm_count, bounds: (Vec3::ZERO, swarm_spread + 1.0) });
-            self.scene.set_gpu_instances(core, self.object, source);
-            if swarm_on { self.camera.frame(Vec3::ZERO, swarm_spread + 1.0); } else { self.layout_copies(); }
-        }
-        (self.swarm_on, self.swarm_count) = (swarm_on, swarm_count);
-        if clip != self.clip || restart { self.anim_time = 0.0; }
-        (self.clip, self.layer, self.anim_speed, self.playing) = (clip, layer, anim_speed, playing);
-        if crowd != self.crowd { self.crowd = crowd; self.scene.set_crowd(self.object, crowd); }
-        if show_floor != self.show_floor { self.show_floor = show_floor; self.layout_copies(); }
-        (self.sun_yaw, self.sun_pitch, self.sun_power) = (sun_yaw, sun_pitch, sun_power);
-        self.scene.sun.set_angles(sun_yaw, sun_pitch);
-        self.scene.sun.color = [3.0 * sun_power; 3];
-        (self.scene.sun.shadows, self.scene.sun.softness) = (shadows, softness);
+
+        // model
         if let Some(path) = load_path { self.load(core, &path); }
-        if changed {
-            self.material = m;
-            self.params = PostParams { env_bg: self.params.env_bg, ..p };
-            self.post.set_custom_params(p, &core.queue);
-        }
+
+        // time controls and export
         self.base.apply_control_request(controls_request);
         self.base.export_manager.apply_ui_request(export_request);
         if should_start_export { self.base.export_manager.start_export(); }
@@ -554,7 +568,7 @@ impl ShaderManager for MeshExample {
                 return true;
             }
         }
-        // a click (press and release without dragging) picks
+        // click without dragging: pick
         match event {
             WindowEvent::CursorMoved { position, .. } => self.cursor = [position.x as f32, position.y as f32],
             WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => match state {
