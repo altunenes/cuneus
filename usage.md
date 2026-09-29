@@ -354,6 +354,121 @@ frame.encoder = core.flush_encoder(frame.encoder);
 self.compute_shader.dispatch_stage(&mut frame.encoder, core, NEXT_PASS);
 ```
 
+## 3D Models (glTF)
+
+`MeshScene` draws `.glb`/`.gltf` models with your own WGSL materials into an HDR texture that a compute pass reads as a channel. `examples/meshlab.rs` uses every feature below.
+
+| Piece | What it is | API |
+| :--- | :--- | :--- |
+| **Mesh** | Geometry, textures, skeleton and clips of a file; drawn any number of times | `add_mesh`, `replace_mesh` |
+| **Material** | A WGSL file + its parameters + options; variants share the shader | `mesh_material!`, `material_variant`, `set_params`, `set_options` |
+| **Object** | Mesh + material + one or many instances | `spawn`, `spawn_instances`, `set_transform`, `instances_mut`, `despawn` |
+
+```rust
+let mut scene = MeshScene::new(core);
+let model = scene.add_mesh(core, &MeshData::from_gltf("model.glb")?);
+// load a material (hot reloads on save)
+let glow = cuneus::mesh_material!(scene, core, "shaders/glow.wgsl", GlowParams);
+let obj = scene.spawn(model, glow, Mat4::IDENTITY);
+// the post shader (built with .with_channels(1)) reads the colour as channel0
+scene.attach(core, &mut post, 0);
+
+// every frame
+scene.set_params(&core.queue, glow, &params);
+scene.render(&mut frame.encoder, core, &mut post, &MeshView::orbit(&camera, camera.pose, aspect));
+post.dispatch(&mut frame.encoder, core);
+
+// in update(): export draws the scene at export size and time
+scene.handle_export(core, &mut post, &mut base, |scene, t, aspect| MeshView::orbit(&camera, camera.turntable(t), aspect));
+```
+
+The post shader needs `.with_channels(1)` in its builder (`2` with `attach_gbuffer`); `attach` keeps the scene's textures at its size through resizes and exports. `OrbitCamera` handles orbit/pan/fly input (`handle_event`, `update`); `MeshData::normalize_transform()` centres a model at unit size.
+
+### Materials
+
+A material is a `fragment` function and optionally a `vertex` function. [`src/mesh/prelude.wgsl`](src/mesh/prelude.wgsl) is prepended to it:
+
+```wgsl
+struct GlowParams { color: vec3<f32>, strength: f32 };
+@group(1) @binding(0) var<uniform> material: GlowParams;
+
+@fragment
+fn fragment(mesh: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    let base = gltf_base_color(mesh);
+    let n = gltf_normal(mesh, is_front);
+    let v = normalize(view.world_position - mesh.world_position.xyz);
+    var col = pbr_direct(n, v, sun.direction, sun.color, base.rgb, 0.0, 0.5)
+            * directional_shadow(mesh.world_position.xyz, mesh.world_normal);
+    col += material.color * pow(1.0 - max(dot(n, v), 0.0), 3.0) * material.strength;
+    return vec4<f32>(col, base.a);
+}
+
+@vertex
+fn vertex(vertex: Vertex) -> VertexOutput {
+    // the default vertex output, then move it
+    var out = mesh_vertex(vertex);
+    let p = out.world_position.xyz + vec3<f32>(0.0, sin(out.world_position.x * 4.0 + globals.time) * 0.05, 0.0);
+    out.world_position = vec4<f32>(p, 1.0);
+    out.position = position_world_to_clip(p);
+    return out;
+}
+```
+
+| Available | What |
+| :--- | :--- |
+| `globals`, `view` | time, delta, frame; camera matrices, `world_position`, `viewport` |
+| `VertexOutput` | `world_position`, `world_normal`, `uv`, `uv_b`, `world_tangent`, `color`, `instance_index` |
+| `mesh_vertex(vertex)` | the default vertex output, to modify in your own `vertex` |
+| `get_world_from_local`, `mesh_position_local_to_world`, `mesh_normal_local_to_world`, `mesh_tangent_local_to_world`, `position_world_to_clip` | instance transforms |
+| `gltf_base_color`, `gltf_normal`, `gltf_metallic_roughness`, `gltf_emissive`, `gltf_occlusion`, `gltf_uv` | the model's own material and textures (missing textures read as neutral) |
+| `material_texture0..3`, `material_sampler`, `equirect_uv(dir)` | the material's own textures |
+| `get_instance_data(instance_index)` | 4 floats per instance |
+| `sun`, `directional_shadow(pos, normal)` | the scene's sun and its shadow (1 lit, 0 shadowed) |
+| `light_count()`, `light_sample(i, pos, normal)`, `light_shadow(i, pos, normal)` | point / spot lights: direction and arriving light (falloff, cone, shadow applied) |
+| `pbr_direct`, `pbr_ambient` | GGX lighting helpers |
+
+Animated models are posed before `vertex` runs, so one material works for static and animated models.
+
+`MaterialOptions` (`scene.set_options`):
+- `blend`: `Auto` (from the file), `Opaque`, `Alpha`, `Additive`
+- `cull`: `Auto` (from the file's double-sided flag), `None`, `Back`, `Front`
+- `shadows`: cast shadows
+- `prepass`: depth-test opaque objects first so `fragment` runs once per visible pixel; set `false` when `fragment` uses `discard`
+
+Material textures: `set_image_file(core, material, slot, path, srgb)` (PNG/JPG; `.hdr`/`.exr` stay HDR, with mipmaps), `set_image` (in memory), `set_texture` (any filterable texture view, e.g. a compute shader's output).
+
+### Scene
+
+- **Instances:** `spawn_instances(mesh, material, instances)` draws all copies in one draw call. Copies outside the camera are skipped (`scene.culling`; raise `scene.cull_margin` if a vertex shader pushes geometry outward).
+- **GPU-driven instances:** `set_gpu_instances(core, obj, Some(GpuInstances { buffer, count, bounds }))` reads copies from a storage buffer, e.g. one a compute shader writes every frame: `array<struct { transform: mat4x4<f32>, data: vec4<f32>, anim: vec4<f32>, anim_b: vec4<f32> }>` (`GPU_INSTANCE_SIZE` = 112 bytes). They are culled on the GPU and drawn indirectly when the device supports `INDIRECT_FIRST_INSTANCE`; shadows see every copy. `bounds` is a world sphere around all of them.
+- **Sun:** `scene.sun`: `direction` (or `set_angles(yaw, height)`), `color`, `shadows`, `shadow_size`, `softness`, `normal_bias`, `bounds` (`None` fits the shadow casters).
+- **Lights:** `scene.lights.push(Light::point(pos, color, range))` or `Light::spot(pos, dir, color, range, angle)`, `.with_shadows()` (a spot uses 1 shadow map, a point 6). `scene.light_shadow_size` sets their resolution.
+- **Picking:** `scene.pick(x, y)` in physical pixels; a frame or two later `scene.take_pick()` returns `Some(Some(Pick { object, instance, position }))`, or `Some(None)` for nothing.
+- **Post channels:** `attach(core, &mut post, 0)` gives the colour (alpha 0 where empty, edges premultiplied: composite with `bg * (1 - a) + rgb`). `attach_gbuffer(core, &mut post, 1)` gives world normal (xyz) and view depth (w), coverage weighted like the colour.
+
+### Animation
+
+Files with skeletons, node animation or blend shapes keep them:
+
+```rust
+// names, durations
+let clips = &scene.skinning(model).unwrap().animations;
+// one clip, loops
+scene.animate(obj, Some(walk), t);
+// body + blend-shape layer
+scene.animate_layers(obj, &[(walk, t, 1.0), (blink, t, 1.0)]);
+// crossfade
+scene.animate_layers(obj, &[(idle, t, 1.0), (attack, t2, fade)]);
+// your own Pose
+scene.set_pose(obj, pose);
+```
+
+Layers apply in order, each blending what it animates by its weight. `MeshAnimation::morph_only()` finds blend-shape-only clips. Pass `t.min(duration)` to play a clip once and hold its last frame. All instances of an object share its pose, unless it is a crowd.
+
+**Crowds:** `scene.set_crowd(obj, true)` gives every instance its own clip: `Instance { anim: InstanceAnim::clip(walk, t).fade_to(run, t2, fade), .. }`, or `anim = (clip, time, next clip, next time)` and `anim_b.x = fade` in a GPU instance buffer. Clips are baked into bone matrices and posed in the vertex shader; blend shapes stay at rest.
+
+**Loader notes:** a material's uv set, `KHR_texture_transform` and sampler come from its base colour texture and apply to all its textures. Not supported: tangent blend-shape deltas, non-uniform joint scale, Draco/meshopt-compressed files.
+
 ## Media & Integration
 
 ### GPU Music Generation & Synthesis
