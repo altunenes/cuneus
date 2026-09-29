@@ -183,6 +183,8 @@ impl ShaderManager for MyShader {
 }
 ```
 
+Built in keys: H toggles the UI and F fullscreen. Rebind or free them with `self.base.key_handler.ui_key` / `fullscreen_key`, e.g. `= Some(Key::Named(NamedKey::F11))` or `= None`.
+
 ## Standard Bind Group Layout
 
 Your WGSL shaders should follow this layout for predictable resource access.
