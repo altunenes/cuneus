@@ -103,8 +103,7 @@ pub enum Cull {
 pub struct MaterialOptions {
     pub blend: Blend,
     pub cull: Cull,
-    /// Opaque only: depth prepass (masking, gbuffer, each pixel shaded once). Turn off when
-    /// the fragment uses `discard`; the object then misses the gbuffer.
+    /// Opaque only: shade each pixel once after a depth prepass; turn off if the fragment uses `discard`
     pub prepass: bool,
     /// Opaque only: cast sun shadows
     pub shadows: bool,
@@ -213,8 +212,7 @@ enum PickState { Idle, Copied, Mapping(Arc<AtomicU8>) }
 
 struct PickTargets { size: [u32; 2], id: wgpu::Texture, pos: wgpu::Texture, id_view: wgpu::TextureView, pos_view: wgpu::TextureView, depth: wgpu::TextureView }
 
-/// One copy of an object: its transform, 4 free floats for the shader (`get_instance_data`),
-/// and, for crowd objects (`MeshScene::set_crowd`), its own animation
+/// One copy: transform, 4 floats for `get_instance_data`, and its animation in crowd objects
 #[derive(Clone, Copy, Debug)]
 pub struct Instance {
     pub transform: Mat4,
@@ -226,8 +224,7 @@ impl From<Mat4> for Instance {
     fn from(transform: Mat4) -> Self { Self { transform, data: [0.0; 4], anim: InstanceAnim::default() } }
 }
 
-/// A crowd copy's animation: `clip` at `time` (loops, -1 = rest pose), crossfading to `next`
-/// at `next_time` by `fade` (0 = only `clip`)
+/// Crowd copy animation: `clip` at `time` (-1 = rest pose), blended to `next` at `next_time` by `fade`
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InstanceAnim {
     pub clip: i32,
@@ -250,11 +247,8 @@ impl InstanceAnim {
     }
 }
 
-/// Copies placed by your own GPU buffer (a compute simulation...): a storage buffer holding
-/// `array<struct { transform: mat4x4<f32>, data: vec4<f32>, anim: vec4<f32>, anim_b: vec4<f32> }>`
-/// (112 bytes each; anim = clip, time, next clip, next time and anim_b.x = fade, used by crowd
-/// objects). Copies outside the camera are culled on the GPU; `bounds` is a world sphere around
-/// them all, for sorting and shadow fitting.
+/// Copies from your storage buffer: `array<struct { transform: mat4x4<f32>, data: vec4<f32>, anim: vec4<f32>, anim_b: vec4<f32> }>`
+/// (anim = clip, time, next clip, next time; anim_b.x = fade); culled on the GPU, `bounds` is a world sphere around all copies
 #[derive(Clone, Debug)]
 pub struct GpuInstances {
     pub buffer: wgpu::Buffer,
@@ -280,8 +274,7 @@ impl MeshView {
     }
 }
 
-/// Add a material from a WGSL file next to the calling file, with hot reload
-/// (like `compute_shader!`): `cuneus::mesh_material!(scene, core, "shaders/glow.wgsl", GlowParams)`
+/// Material from a WGSL file next to the calling file, with hot reload (like `compute_shader!`)
 #[macro_export]
 macro_rules! mesh_material {
     ($scene:expr, $core:expr, $shader_path:literal, $params:ty) => {{
@@ -943,8 +936,7 @@ impl MeshScene {
 
     // materials
 
-    /// A material from WGSL source; `params_size` is the byte size of the uniform at
-    /// `@group(1) @binding(0)` (`size_of::<YourParams>()`). A broken shader falls back to plain shading.
+    /// Material from WGSL source; `params_size` is the uniform's size (`@group(1) @binding(0)`), plain shading if it fails to compile
     pub fn add_material(&mut self, core: &Core, source: &str, params_size: u64) -> MaterialId {
         let module = match Self::compile(&core.device, &self.layout, source) {
             Ok(m) => m,
@@ -994,8 +986,7 @@ impl MeshScene {
         self.materials[id.0].group = group;
     }
 
-    /// Bind any filterable float 2D texture view (an image, a compute shader's output...) to
-    /// `material_texture{slot}`
+    /// Bind any filterable 2D float texture view to `material_texture{slot}`
     pub fn set_texture(&mut self, core: &Core, id: MaterialId, slot: usize, view: &wgpu::TextureView) {
         let Some(m) = self.materials.get_mut(id.0) else { return };
         let Some(t) = m.textures.get_mut(slot) else { warn!("material texture slot {slot} out of range"); return };
@@ -1020,8 +1011,7 @@ impl MeshScene {
         if let Some(o) = self.materials.get_mut(id.0).and_then(|m| m.owned.get_mut(slot)) { *o = Some(tex); }
     }
 
-    /// Load an image file into `material_texture{slot}`: .hdr / .exr stay HDR (linear, values
-    /// above 1 kept), others are 8-bit (`srgb` for colour images, false for data like noise)
+    /// Load an image into `material_texture{slot}`; .hdr / .exr stay HDR, `srgb` for 8-bit colour images
     pub fn set_image_file<P: AsRef<Path>>(&mut self, core: &Core, id: MaterialId, slot: usize, path: P, srgb: bool) -> anyhow::Result<()> {
         let path = path.as_ref();
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
@@ -1152,9 +1142,7 @@ impl MeshScene {
         });
     }
 
-    /// Every copy of this animated object plays its own clip (`Instance::anim`, or the anim
-    /// fields of `GpuInstances`), skinned in the vertex shader from clips baked at load; blend
-    /// shapes stay at their rest weights. Off: all copies share the object's pose.
+    /// Each copy plays its own `Instance::anim` (or GPU anim fields), posed in the vertex shader; blend shapes stay at rest
     pub fn set_crowd(&mut self, id: ObjectId, on: bool) {
         if let Some(o) = self.object_mut(id) { o.crowd = on; }
     }
@@ -1166,8 +1154,7 @@ impl MeshScene {
         id
     }
 
-    /// Pose an animated object: `animation` index at `time` seconds (loops), `None` = rest pose.
-    /// All instances of the object share the pose.
+    /// One clip at `time` (loops), `None` = rest pose; shared by all instances
     pub fn animate(&mut self, id: ObjectId, animation: Option<usize>, time: f32) {
         match animation {
             Some(a) => self.animate_layers(id, &[(a, time, 1.0)]),
@@ -1175,8 +1162,7 @@ impl MeshScene {
         }
     }
 
-    /// Several clips at once as (clip, time, weight), in order; see `MeshSkinning::pose_layers`.
-    /// e.g. `[(walk, t, 1.0), (blink, t, 1.0)]`, or a crossfade `[(idle, t, 1.0), (attack, t2, fade)]`
+    /// (clip, time, weight) layers, see `MeshSkinning::pose_layers`
     pub fn animate_layers(&mut self, id: ObjectId, layers: &[(usize, f32, f32)]) {
         let Some(o) = self.objects.get_mut(id.0).and_then(|o| o.as_mut()) else { return };
         let Some(skin) = self.meshes.get(o.mesh.0).and_then(|m| m.skin.as_ref()) else { return };
@@ -1201,9 +1187,7 @@ impl MeshScene {
         if let Some(o) = self.object_mut(id) { o.mesh = mesh; }
     }
 
-    /// Ask what is under output pixel (x, y), e.g. the cursor position in physical pixels. The
-    /// answer arrives a frame or two later from `take_pick`; your vertex shader is used, so
-    /// animated and deformed models pick exactly.
+    /// Ask what is under pixel (x, y); the answer comes from `take_pick` a frame or two later
     pub fn pick(&mut self, x: u32, y: u32) {
         self.pick_request = Some([x, y]);
     }
@@ -1249,8 +1233,7 @@ impl MeshScene {
         self.follow(core, post, true);
     }
 
-    /// Also feed the gbuffer (xyz world normal, w view depth, 0 where empty) as `channel`.
-    /// Edge pixels are coverage weighted like the colour: divide by the colour's alpha.
+    /// Feed the gbuffer (xyz world normal, w view depth, 0 where empty) as `channel`, coverage weighted like the colour
     pub fn attach_gbuffer(&mut self, core: &Core, post: &mut ComputeShader, channel: u32) {
         self.gbuffer_channel = Some(channel);
         self.follow(core, post, true);
@@ -1289,8 +1272,7 @@ impl MeshScene {
         self.pipelines.insert(key, p);
     }
 
-    /// Draw every object into `post`'s channel at its size and time (dispatch `post` after).
-    /// Hot reloads edited materials.
+    /// Draw every object into `post`'s channel; dispatch `post` after
     pub fn render(&mut self, encoder: &mut wgpu::CommandEncoder, core: &Core, post: &mut ComputeShader, view: &MeshView) {
         self.check_hot_reload(&core.device);
         self.follow(core, post, false);
@@ -1741,9 +1723,7 @@ impl MeshScene {
         }
     }
 
-    /// Use instead of `post.handle_export`: each export frame draws the scene at export size and
-    /// time, then runs `post`. `frame(scene, time, aspect)` animates the scene for that frame and
-    /// returns the camera.
+    /// Use instead of `post.handle_export`; `frame(scene, time, aspect)` animates the scene and returns the camera
     pub fn handle_export(&mut self, core: &Core, post: &mut ComputeShader, base: &mut RenderKit, frame: impl FnOnce(&mut MeshScene, f32, f32) -> MeshView) {
         post.handle_export_dispatch(core, base, |cs, encoder, core| {
             let t = &cs.get_output_texture().texture;
