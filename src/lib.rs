@@ -4,6 +4,7 @@ use winit::window::Window;
 
 pub use anyhow;
 pub use bytemuck;
+pub use math::{Mat4, Quat, Vec3};
 pub use egui;
 pub use env_logger;
 pub use wgpu;
@@ -39,6 +40,7 @@ impl std::fmt::Display for SurfaceError {
 impl std::error::Error for SurfaceError {}
 
 mod app;
+pub mod camera;
 pub mod compute;
 mod controls;
 mod export;
@@ -51,6 +53,8 @@ mod hot;
 mod keyinputs;
 mod mouse;
 pub mod gaussian;
+pub mod math;
+pub mod mesh;
 pub mod ply;
 pub mod radix_sort;
 mod renderer;
@@ -60,6 +64,8 @@ mod spectrum;
 mod texture;
 mod uniforms;
 pub use app::*;
+pub use camera::{OrbitCamera, OrbitPose};
+pub use mesh::{AnimChannel, AnimInterpolation, AnimProperty, Blend, Cull, GpuInstances, Instance, InstanceAnim, Light, LightKind, MaterialId, MaterialOptions, MeshAlpha, MeshAnimation, MeshData, MeshId, MeshImage, MeshMaterial, MeshNode, MeshPrimitive, MeshSampler, MeshScene, MeshSkinning, MeshVertex, MeshView, MeshWrap, MorphSlot, ObjectId, Pick, Pose, Sun, GPU_INSTANCE_SIZE, MATERIAL_TEXTURES, MESH_GBUFFER_FORMAT, MESH_OUTPUT_FORMAT, MESH_PRELUDE};
 pub use controls::{ControlsRequest, ShaderControls};
 pub use export::{save_frame, ExportError, ExportManager, ExportSettings, ExportUiState};
 pub use font::{CharInfo, FontSystem, FontUniforms};
@@ -274,7 +280,8 @@ impl Core {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::empty(),
+                // optional, when available: indirect draws starting at an instance (mesh GPU culling)
+                required_features: adapter.features() & wgpu::Features::INDIRECT_FIRST_INSTANCE,
                 required_limits,
                 memory_hints: Default::default(),
                 experimental_features: Default::default(),

@@ -29,6 +29,8 @@ gstreamer-pbutils = { version = "0.25.2", optional = true }
 anyhow = "1.0.96"
 log = "0.4.25"
 ply-rs-bw = "4.0"
+gltf = { version = "1.4", features = ["KHR_materials_emissive_strength", "KHR_texture_transform", "extras"] }
+serde_json = "1"
 
 [features]
 default = ["media"]
