@@ -43,6 +43,8 @@ pub struct ComputeShader {
 
     // Input texture support (Group 1)
     pub placeholder_input_texture: Option<TextureManager>,
+    // the last texture passed to update_input_texture, kept so resize rebinds it instead of the placeholder
+    input_texture: Option<(wgpu::TextureView, wgpu::Sampler)>,
 
     // Multi-pass support
     pub multipass_manager: Option<MultiPassManager>,
@@ -363,6 +365,7 @@ impl ComputeShader {
             custom_uniform,
             custom_uniform_size: config.custom_uniform_size,
             placeholder_input_texture,
+            input_texture: None,
             channel_textures: Self::initialize_channel_textures(config.num_channels.unwrap_or(0)),
             num_channels: config.num_channels.unwrap_or(0),
             multipass_sampler,
@@ -1052,13 +1055,7 @@ impl ComputeShader {
             return;
         }
 
-        // Update the placeholder texture manager to store the current texture for multipass use
-        if let Some(ref mut _placeholder) = self.placeholder_input_texture {
-            // Note: We can't directly replace the view/sampler references in TextureManager
-            // since they're owned. In practice, fluid.rs calls this method with the texture
-            // from base.get_current_texture_manager() which already updates the correct texture.
-            // The placeholder serves as the fallback, but in multipass we should use the current one.
-        }
+        self.input_texture = Some((texture_view.clone(), sampler.clone()));
 
         // Recreate Group 1 bind group with new input texture
         let group1_layout = self.bind_group_layouts.get(&1).unwrap();
@@ -1580,8 +1577,8 @@ impl ComputeShader {
             self.custom_uniform_size,
             self.has_input_texture,
             self.custom_uniform.as_ref(),
-            self.placeholder_input_texture.as_ref().map(|t| &t.view),
-            self.placeholder_input_texture.as_ref().map(|t| &t.sampler),
+            self.input_texture.as_ref().map(|t| &t.0).or(self.placeholder_input_texture.as_ref().map(|t| &t.view)),
+            self.input_texture.as_ref().map(|t| &t.1).or(self.placeholder_input_texture.as_ref().map(|t| &t.sampler)),
         );
 
         // Resize multi-pass buffers if present
