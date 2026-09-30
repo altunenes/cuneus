@@ -31,7 +31,9 @@ const NE: i32 = 8; const ES: i32 = 8; const EDLY: f32 = 0.18; const CHASE: f32 =
 
 fn hsh(a0: u32) -> u32 { var a = a0; a ^= a >> 16u; a *= 0x7feb352du; a ^= a >> 15u; a *= 0x846ca68bu; a ^= a >> 16u; return a; }
 fn rng(x: i32, y: i32, s: u32) -> f32 { return f32(hsh(u32(x) * 73u + u32(y) * 131u + s * 977u + 12345u)) / 4294967295.0; }
-fn atime() -> f32 { return f32(gm.so) / gm.sr; }
+// events store their start sample as float bits (+EV0 keeps them normal floats), so ages stay sample-exact
+const EV0: u32 = 16777216u;
+fn atime() -> f32 { return bitcast<f32>(gm.so + EV0); }
 
 fn gt(x: i32, y: i32) -> u32 { if (x < 0 || y < 0 || x >= GW || y >= GH) { return 1u; } return u32(g[TB + y * GW + x]); }
 fn st(x: i32, y: i32, v: u32) { if (x >= 0 && y >= 0 && x < GW && y < GH) { g[TB + y * GW + x] = f32(v); } }
@@ -256,51 +258,182 @@ fn word(pp: v2, pos: v2, c: array<u32, 16>, n: u32, sz: f32) -> f32 {
 }
 
 // audio
-fn nz(t: f32) -> f32 { return fract(sin(t * 101.17) * 43758.5453) * 2.0 - 1.0; }
 fn nf(m: f32) -> f32 { return 440.0 * pow(2.0, (m - 69.0) / 12.0); }
-fn sq(ph: f32) -> f32 { return select(-1.0, 1.0, fract(ph) < 0.5); }
-fn mv(t: f32, fr: f32) -> f32 { return sq(t * fr) * (1.0 - exp(-t * 500.0)) * exp(-t * 7.0); }
+fn wn(n: u32, sd: u32) -> f32 { return f32(hsh(n * 0x9e3779b9u ^ sd) >> 8u) / 8388608.0 - 1.0; }
+fn bn(n: u32, m: u32, sd: u32) -> f32 { let i = n / m; var f = f32(n % m) / f32(m); f = f * f * (3.0 - 2.0 * f); return mix(wn(i, sd), wn(i + 1u, sd), f); }
+fn eage(k: i32, n: u32) -> f32 { let e = bitcast<u32>(g[k]); if (g[k] <= 0.0 || n + EV0 < e) { return -1.0; } return f32(n + EV0 - e) / gm.sr; }
+fn rel(a: f32, gate: f32, r: f32) -> f32 { return select(1.0, exp(-(a - gate) / r), a > gate); }
+fn lp12(f: f32, fc: f32, res: f32) -> f32 { let w = f / fc; let q = 0.5 + res * 2.0; let d = 1.0 - w * w; return inverseSqrt(d * d + w * w / (q * q)); }
 
-fn snd(ta: f32) -> f32 {
-    var s = 0.0;
+// band-limited saw at phase `ph` (cycles) through a 12 dB low-pass
+fn saw(ph: f32, f: f32, fc: f32) -> f32 {
+    let th = tau * fract(ph); let c2 = 2.0 * cos(th);
+    var s0 = 0.0; var s1 = sin(th); var s = 0.0;
+    for (var h = 1; h <= 24; h++) {
+        let hz = f * f32(h); if (hz > 12000.0) { break; }
+        s += s1 / f32(h) * lp12(hz, fc, 0.4);
+        let s2 = c2 * s1 - s0; s0 = s1; s1 = s2;
+    }
+    return s;
+}
 
-    // BOMBERMAN BGM 1 (Atsushi Chikuma, 1987) - bass groove, 4 bars / 64 sixteenths @ Q=129
-    if (u32(g[0]) == 1u && g[26] > 0.0) {
-        let mt = ta - g[26];
-        if (mt >= 0.0) {
-            let s16 = 60.0 / 129.0 / 4.0;
-            let pos = (mt / s16) % 64.0;
-            var note = array<f32, 45>(
-                47.,47.,59.,47.,50.,54.,56.,57.,57.,56.,
-                45.,45.,57.,45.,49.,52.,54.,55.,54.,55.,45.,44.,45.,
-                42.,42.,54.,42.,52.,51.,52.,42.,54.,42.,
-                42.,42.,54.,42.,52.,51.,52.,42.,54.,42.,44.,46.
-            );
-            var dur = array<f32, 45>(
-                1.,1.,1.,1.,2.,1.,1.,2.,2.,4.,
-                1.,1.,1.,1.,2.,1.,1.,2.,1.,1.,1.,1.,2.,
-                1.,1.,1.,1.,2.,1.,1.,2.,2.,4.,
-                1.,1.,1.,1.,2.,1.,1.,2.,2.,2.,1.,1.
-            );
-            var acc = 0.0; var cur = 0.0; var nt = 0.0;
-            for (var i = 0u; i < 45u; i++) {
-                if (pos < acc + dur[i]) { cur = note[i]; nt = (pos - acc) * s16; break; }
-                acc += dur[i];
+// drums: integrated pitch sweeps, noise from the sample index
+fn kick(a: f32) -> f32 {
+    if (a < 0.0 || a > 1.2) { return 0.0; }
+    let ph = 48.0 * a + 117.0 * 0.032 * (1.0 - exp(-a / 0.032));
+    return tanh((sin(tau * fract(ph)) * exp(-a / 0.3) + sin(tau * fract(ph * 1.72)) * exp(-a / 0.035) * 0.25) * 1.8) * smoothstep(0.0, 0.0008, a);
+}
+fn clap(a: f32, n: u32) -> f32 {
+    if (a < 0.0 || a > 0.8) { return 0.0; }
+    var e = 0.0;
+    for (var i = 0; i < 3; i++) { let x = a - f32(i) * 0.0105; if (x >= 0.0) { e += exp(-x / 0.0035); } }
+    e += 0.6 * exp(-max(a - 0.021, 0.0) / 0.13) * step(0.021, a);
+    return (bn(n, 2u, 7u) - bn(n, 9u, 7u)) * e * 0.8 + sin(tau * fract(185.0 * a + 1.2 * (1.0 - exp(-a / 0.02)))) * exp(-a / 0.05) * 0.35;
+}
+fn metal(a: f32) -> f32 {
+    let fs = array<f32, 6>(205.3, 304.4, 369.6, 522.7, 540.0, 800.0);
+    var m = 0.0; for (var i = 0; i < 6; i++) { m += select(-1.0, 1.0, fract(fs[i] * 2.0 * a) < 0.5); }
+    return m;
+}
+fn hat(a: f32, n: u32, dc: f32) -> f32 {
+    if (a < 0.0 || a > dc * 8.0) { return 0.0; }
+    let hp = wn(n, 3u) - 0.6 * wn(n - 1u, 3u) - 0.4 * wn(n - 2u, 3u);
+    return (hp * 0.6 + (metal(a) - metal(a - 1.0 / 44100.0)) / 12.0) * exp(-a / dc) * smoothstep(0.0, 0.0004, a);
+}
+// velocity, decay per 16th: offbeat 8ths, 16th ghosts, an open hat every other bar
+fn hhit(st: i32) -> v2 {
+    let p = st % 16;
+    if (p == 14 && (st / 16) % 2 == 1) { return v2(0.75, 0.22); }
+    if (p % 4 == 2) { return v2(0.8, 0.04); }
+    if (p % 2 == 0) { return v2(0.4, 0.03); }
+    if (wn(u32(st), 5u) < 0.0) { return v2(0.18, 0.025); }
+    return v2(0.0);
+}
+
+// bass: sub octave + two detuned saws, filter snaps shut, soft drive
+fn bassv(f: f32, a: f32, gate: f32) -> v2 {
+    if (a < 0.0 || a > gate + 0.2) { return v2(0.0); }
+    let env = smoothstep(0.0, 0.002, a) * (0.55 + 0.45 * exp(-a / 0.12)) * rel(a, gate, 0.02);
+    let fc = f * (1.4 + 9.0 * exp(-a / 0.07));
+    let st = v2(saw(f * 0.9962 * a, f, fc), saw(f * 1.0038 * a + 0.37, f, fc));
+    return tanh((st * 0.45 + sin(tau * fract(f * 0.5 * a)) * 0.7) * 1.3) * env;
+}
+
+// BOMBERMAN BGM 1 (Atsushi Chikuma, 1987) - bass groove, 4 bars / 64 sixteenths @ Q=129, with a drum kit
+fn bgm(n: u32) -> v2 {
+    if (u32(g[0]) != 1u || g[26] <= 0.0) { return v2(0.0); }
+    let e0 = bitcast<u32>(g[26]);
+    if (n + EV0 < e0) { return v2(0.0); }
+    let s16 = 60.0 / 129.0 / 4.0;
+    let mt = f32((n + EV0 - e0) % u32(64.0 * s16 * gm.sr)) / gm.sr;
+    let pos = mt / s16;
+    var note = array<f32, 45>(
+        47.,47.,59.,47.,50.,54.,56.,57.,57.,56.,
+        45.,45.,57.,45.,49.,52.,54.,55.,54.,55.,45.,44.,45.,
+        42.,42.,54.,42.,52.,51.,52.,42.,54.,42.,
+        42.,42.,54.,42.,52.,51.,52.,42.,54.,42.,44.,46.
+    );
+    var dur = array<f32, 45>(
+        1.,1.,1.,1.,2.,1.,1.,2.,2.,4.,
+        1.,1.,1.,1.,2.,1.,1.,2.,1.,1.,1.,1.,2.,
+        1.,1.,1.,1.,2.,1.,1.,2.,2.,4.,
+        1.,1.,1.,1.,2.,1.,1.,2.,2.,2.,1.,1.
+    );
+    var acc = 0.0; var ci = 0u;
+    for (var i = 0u; i < 45u; i++) {
+        if (pos < acc + dur[i]) { ci = i; break; }
+        acc += dur[i];
+    }
+    // current note plus the previous one's release tail (wraps to the last note of the loop)
+    let pi = (ci + 44u) % 45u;
+    var bass = bassv(nf(note[ci]), mt - acc * s16, dur[ci] * s16 * 0.9);
+    bass += bassv(nf(note[pi]), mt - (acc - dur[pi]) * s16, dur[pi] * s16 * 0.9);
+
+    let st = i32(pos);
+    let ka = mt - f32(st / 4 * 4) * s16;
+    let kk = kick(ka) + kick(ka + 4.0 * s16) * exp(-ka / 0.01) + (wn(n, 9u) - wn(n - 1u, 9u)) * 0.2 * exp(-ka / 0.0012);
+    var cs = st / 8 * 8 + 4;
+    if (st % 8 < 4) { cs -= 8; }
+    let cl = clap(mt - f32(cs) * s16, n);
+    let h0 = hhit(st); let h1 = hhit((st + 63) % 64);
+    let ha = mt - f32(st) * s16;
+    let hh = hat(ha, n, h0.y) * h0.x + hat(ha + s16, n, h1.y) * h1.x * select(1.0, exp(-ha / 0.008), h0.x > 0.0);
+    let duck = 1.0 - 0.4 * exp(-ka * 12.0);
+    return bass * 0.55 * duck + v2(kk * 0.5 + cl * 0.2) + hh * v2(0.07, 0.1);
+}
+
+// sfx: place / boom / die / win / step / kill, `dl` seconds late for the echo
+fn sfx(n: u32, dl: f32) -> v2 {
+    var s = v2(0.0);
+    // place: FM blip falling a fifth
+    let dp = eage(20, n) - dl;
+    if (dp >= 0.0 && dp < 0.35) {
+        let ph = 880.0 * dp + 440.0 * 0.03 * (1.0 - exp(-dp / 0.03));
+        let m = 1.2 * exp(-dp / 0.04) * sin(tau * fract(ph * 2.0));
+        s += v2(sin(tau * fract(ph) + m)) * exp(-dp / 0.07) * smoothstep(0.0, 0.002, dp) * 0.22;
+    }
+    // boom: sub drop, noise body, low rumble, first crack and sparse crackle
+    let db = eage(21, n) - dl;
+    if (db >= 0.0 && db < 1.6) {
+        let ph = 38.0 * db + 82.0 * 0.06 * (1.0 - exp(-db / 0.06));
+        let sub = sin(tau * fract(ph)) * exp(-db / 0.35);
+        let body = (bn(n, 6u, 31u) - 0.5 * bn(n, 40u, 31u)) * exp(-db / 0.18);
+        let rumble = bn(n, 90u, 33u) * exp(-db / 0.6);
+        let crack = wn(n, 35u) * exp(-db / 0.02);
+        let m = tanh((sub * 0.9 + body * 0.8 + rumble * 0.9 + crack * 0.5) * 1.5);
+        let pop = select(0.0, 1.0, wn(n / 300u, 37u) > 0.7) * exp(-db / 0.3) * 0.15;
+        s += v2(m) * 0.45 + v2(wn(n, 39u), wn(n, 41u)) * pop;
+    }
+    // die: detuned saw lead falling in three notes, the last one sagging
+    let dd = eage(22, n) - dl;
+    if (dd >= 0.0 && dd < 1.4) {
+        var gn = array<f32, 3>(392.0, 311.13, 233.08);
+        for (var j = 0u; j < 3u; j++) {
+            let a = dd - f32(j) * 0.16;
+            if (a >= 0.0) {
+                let f = gn[j];
+                var ph = f * a;
+                if (j == 2u) { ph = f * (a - 0.12 * a * a); }
+                let fc = f * (3.0 + 4.0 * exp(-a / 0.2));
+                s += v2(saw(ph * 0.996, f, fc), saw(ph * 1.004 + 0.3, f, fc)) * exp(-a * select(6.0, 3.0, j == 2u)) * smoothstep(0.0, 0.004, a) * 0.16;
             }
-            if (cur > 0.5) { s += mv(nt, nf(cur)) * 0.10; }
         }
     }
+    // win: FM bell arpeggio, bouncing left and right
+    let dw = eage(23, n) - dl;
+    if (dw >= 0.0 && dw < 1.6) {
+        var wf = array<f32, 4>(523.25, 659.25, 783.99, 1046.5);
+        for (var j = 0u; j < 4u; j++) {
+            let a = dw - f32(j) * 0.12;
+            if (a >= 0.0) {
+                let w = tau * fract(wf[j] * a);
+                let m = 1.4 * exp(-a / 0.4) * sin(w) + 0.6 * exp(-a / 0.03) * sin(tau * fract(wf[j] * 14.0 * a));
+                let side = select(v2(1.0, 0.55), v2(0.55, 1.0), j % 2u == 1u);
+                s += side * sin(w + m) * exp(-a * 3.0) * smoothstep(0.0, 0.002, a) * 0.16;
+            }
+        }
+    }
+    // step: a short woody tock
+    let dk = eage(24, n) - dl;
+    if (dk >= 0.0 && dk < 0.08) {
+        let ph = 620.0 * dk + 380.0 * 0.006 * (1.0 - exp(-dk / 0.006));
+        s += v2(sin(tau * fract(ph)) * exp(-dk / 0.012) + wn(n, 43u) * exp(-dk / 0.0015) * 0.3) * 0.07;
+    }
+    // kill: FM zap diving down
+    let dx = eage(25, n) - dl;
+    if (dx >= 0.0 && dx < 0.4) {
+        let ph = 200.0 * dx + 1000.0 * 0.05 * (1.0 - exp(-dx / 0.05));
+        let m = 2.5 * exp(-dx / 0.1) * sin(tau * fract(ph * 1.5));
+        s += v2(sin(tau * fract(ph) + m) * exp(-dx / 0.12) + wn(n, 45u) * exp(-dx / 0.01) * 0.2) * 0.2;
+    }
+    return s;
+}
 
-    // sfx: place / boom / die / win / step / kill
-    let dp = ta - g[20]; if (g[20] > 0.0 && dp >= 0.0 && dp < 0.12) { s += sin(dp * tau * 880.0) * exp(-dp * 45.0) * 0.2; }
-    let db = ta - g[21]; if (g[21] > 0.0 && db >= 0.0 && db < 0.5) { let e = exp(-db * 7.0); s += (nz(ta) * 0.6 + sin(db * tau * (90.0 - db * 120.0)) * 0.8) * e * 0.5; }
-    let dd = ta - g[22];
-    if (g[22] > 0.0 && dd >= 0.0 && dd < 1.2) { var gn = array<f32, 3>(392.0, 311.13, 233.08); for (var j = 0u; j < 3u; j++) { let n = dd - f32(j) * 0.16; if (n >= 0.0) { s += sin(n * tau * gn[j]) * exp(-n * 5.0) * 0.22; } } }
-    let dw = ta - g[23];
-    if (g[23] > 0.0 && dw >= 0.0 && dw < 1.3) { var wn = array<f32, 4>(523.25, 659.25, 783.99, 1046.5); for (var j = 0u; j < 4u; j++) { let n = dw - f32(j) * 0.12; if (n >= 0.0) { s += sin(n * tau * wn[j]) * exp(-n * 5.0) * 0.2; } } }
-    let dk = ta - g[24]; if (g[24] > 0.0 && dk >= 0.0 && dk < 0.05) { s += sin(dk * tau * 300.0) * exp(-dk * 60.0) * 0.08; }
-    let dx = ta - g[25]; if (g[25] > 0.0 && dx >= 0.0 && dx < 0.25) { s += sin(dx * tau * (440.0 - dx * 500.0)) * exp(-dx * 16.0) * 0.22; }
-    return clamp(s, -1.0, 1.0);
+fn snd(n: u32) -> v2 {
+    var s = bgm(n) * 0.4 + sfx(n, 0.0);
+    // ping-pong echo on the effects
+    s += sfx(n, 0.19) * v2(0.28, 0.1) + sfx(n, 0.38) * v2(0.05, 0.14);
+    return tanh(s);
 }
 
 // render
@@ -412,15 +545,15 @@ fn hud(pp: v2, ss: v2) -> v3 {
 fn sim(@builtin(global_invocation_id) gid: u3) {
     if (all(gid.xy == vec2(0u))) {
         init(); upd();
-        for (var i = 0u; i < gm.sn; i++) {
-            let v = snd(f32(gm.so + i) / gm.sr) * gm.vol;
-            au[i * 2u] = v; au[i * 2u + 1u] = v;
-        }
     }
 }
 
 @compute @workgroup_size(8, 8, 1)
-fn main_image(@builtin(global_invocation_id) gid: u3) {
+fn main_image(@builtin(global_invocation_id) gid: u3, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: u3, @builtin(num_workgroups) nw: u3) {
+    // audio: one thread per sample, after the sim pass has moved the game on
+    let ai = (wid.y * nw.x + wid.x) * 64u + li;
+    if (ai < gm.sn) { let v = snd(gm.so + ai) * gm.vol; au[ai * 2u] = v.x; au[ai * 2u + 1u] = v.y; }
+
     let ss = v2(textureDimensions(out));
     let pp = v2(gid.xy);
     if (any(pp >= ss)) { return; }
