@@ -45,7 +45,6 @@ struct BlockTowerGame {
     game: GameUniform,
     held_keys: HashSet<KeyCode>,
     pcm_stream: Option<PcmStreamManager>,
-    audio_start: std::time::Instant,
     last_samples_generated: u32,
 }
 
@@ -101,7 +100,6 @@ impl ShaderManager for BlockTowerGame {
             game,
             held_keys: HashSet::new(),
             pcm_stream,
-            audio_start: std::time::Instant::now(),
             last_samples_generated: 0,
         }
     }
@@ -135,10 +133,7 @@ impl ShaderManager for BlockTowerGame {
                 }
             }
 
-            let elapsed = self.audio_start.elapsed().as_secs_f64();
-            let target = (elapsed * SAMPLE_RATE as f64) as u64;
-            let written = stream.samples_written();
-            let needed = (target.saturating_sub(written) as u32).min(MAX_SAMPLES_PER_FRAME);
+            let (written, needed) = stream.next_block(MAX_SAMPLES_PER_FRAME);
             self.game.sample_offset = written as u32;
             self.game.samples_to_generate = needed;
             self.last_samples_generated = needed;
@@ -166,35 +161,21 @@ impl ShaderManager for BlockTowerGame {
                     .resizable(true)
                     .default_width(220.0)
                     .show(ctx, |ui| {
-                        egui::CollapsingHeader::new("Camera")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                ui.add(egui::Slider::new(&mut self.game.camera_height, -20.0..=20.0).text("Height"));
-                                ui.add(egui::Slider::new(&mut self.game.camera_angle, -3.14159..=3.14159).text("Angle"));
-                                ui.add(egui::Slider::new(&mut self.game.camera_scale, 20.0..=200.0).text("Scale"));
-
-                                ui.separator();
-                                ui.add(egui::Slider::new(&mut self.game.volume, 0.0..=1.0).text("Volume"));
-
-                                ui.separator();
-                                ui.label("Controls:");
-                                ui.label("Click: drop block");
-                                ui.label("Q/E: Move up/down");
-                                ui.label("W/S: Rotate left/right");
-
-                                ui.separator();
-                                ui.horizontal(|ui| {
-                                    if ui.button("1080p").clicked() { self.game.camera_scale = 50.0; }
-                                    if ui.button("1440p").clicked() { self.game.camera_scale = 65.0; }
-                                    if ui.button("4K").clicked() { self.game.camera_scale = 100.0; }
-                                });
-
-                                if ui.button("Reset Camera").clicked() {
-                                    self.game.camera_height = 8.0;
-                                    self.game.camera_angle = 0.0;
-                                    self.game.camera_scale = 65.0;
-                                }
-                            });
+                        ui.label("Click: drop block   Q/E: up/down   W/S: rotate   wheel: zoom");
+                        egui::CollapsingHeader::new("Camera").default_open(true).show(ui, |ui| {
+                            ui.add(egui::Slider::new(&mut self.game.camera_height, -20.0..=20.0).text("Height"));
+                            ui.add(egui::Slider::new(&mut self.game.camera_angle, -3.14159..=3.14159).text("Angle"));
+                            ui.add(egui::Slider::new(&mut self.game.camera_scale, 20.0..=200.0).text("Zoom"));
+                            if ui.button("Reset camera").clicked() {
+                                let d = GameUniform::default();
+                                self.game.camera_height = d.camera_height;
+                                self.game.camera_angle = d.camera_angle;
+                                self.game.camera_scale = d.camera_scale;
+                            }
+                        });
+                        egui::CollapsingHeader::new("Sound").show(ui, |ui| {
+                            ui.add(egui::Slider::new(&mut self.game.volume, 0.0..=1.0).text("Volume"));
+                        });
                     });
             })
         } else {
