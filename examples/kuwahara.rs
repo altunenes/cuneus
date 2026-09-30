@@ -6,68 +6,69 @@ cuneus::uniform_params! {
     radius: f32,
     q: f32,
     alpha: f32,
-    filter_strength: f32,
-
-    sigma_d: f32,
-    sigma_r: f32,
-
-    edge_threshold: f32,
-    color_enhance: f32,
-
-    blur_samples: f32,
-    blur_lod: f32,
-    blur_slod: f32,
-
-    filter_mode: i32,
-    show_tensors: i32,
-
+    tensor_sigma: f32,
+    strength: f32,
+    mode: i32,
     lic_length: f32,
     lic_strength: f32,
-    lic_width: f32}
+    lic_step: f32,
+    saturation: f32,
+    view: i32,
+    _pad: f32}
+}
+
+impl Default for KuwaharaParams {
+    fn default() -> Self {
+        Self {
+            radius: 6.0,
+            q: 8.0,
+            alpha: 1.0,
+            tensor_sigma: 2.0,
+            strength: 1.0,
+            mode: 1,
+            lic_length: 8.0,
+            lic_strength: 0.4,
+            lic_step: 1.0,
+            saturation: 1.0,
+            view: 0,
+            _pad: 0.0}
+    }
+}
+
+fn slider(ui: &mut egui::Ui, v: &mut f32, range: std::ops::RangeInclusive<f32>, label: &str) -> bool {
+    ui.add(egui::Slider::new(v, range).text(label)).changed()
 }
 
 struct KuwaharaShader {
     base: RenderKit,
     compute_shader: ComputeShader,
-    current_params: KuwaharaParams}
+    current_params: KuwaharaParams,
+    // frames left to render; a still image only renders after a change
+    dirty: u32,
+    was_exporting: bool}
 
 impl ShaderManager for KuwaharaShader {
     fn init(core: &Core) -> Self {
-        let initial_params = KuwaharaParams {
-            radius: 5.0,
-            q: 1.5,
-            alpha: 4.0,
-            filter_strength: 0.8,
-            sigma_d: 0.8,
-            sigma_r: 1.2,
-            edge_threshold: 0.2,
-            color_enhance: 1.0,
-            blur_samples: 15.0,
-            blur_lod: 2.0,
-            blur_slod: 4.0,
-            filter_mode: 1,
-            show_tensors: 0,
-            lic_length: 15.0,
-            lic_strength: 0.5,
-            lic_width: 1.5};
+        let initial_params = KuwaharaParams::default();
         let base = RenderKit::new(core);
 
         let passes = vec![
-            PassDescription::new("structure_tensor", &[]),
-            PassDescription::new("tensor_field", &["structure_tensor"]),
-            PassDescription::new("kuwahara_filter", &["tensor_field"]),
-            PassDescription::new("lic_edges", &["tensor_field", "kuwahara_filter"])
-                .with_resolution_scale(0.5),
-            PassDescription::new("main_image", &["lic_edges"]),
+            PassDescription::new("source", &[]),
+            PassDescription::new("structure_tensor", &["source"]),
+            PassDescription::new("tensor_blur_h", &["structure_tensor"]),
+            PassDescription::new("tensor_field", &["tensor_blur_h"]),
+            PassDescription::new("kuwahara_filter", &["tensor_field", "source"]),
+            PassDescription::new("lic_edges", &["tensor_field", "kuwahara_filter"]),
+            PassDescription::new("main_image", &["lic_edges", "tensor_field", "source"]),
         ];
 
         let config = ComputeShader::builder()
-            .with_entry_point("structure_tensor")
+            .with_entry_point("source")
             .with_multi_pass(&passes)
             .with_custom_uniforms::<KuwaharaParams>()
             .with_workgroup_size([16, 16, 1])
             .with_texture_format(COMPUTE_TEXTURE_FORMAT_RGBA16)
-            .with_channels(2)
+            .with_channels(1)
             .with_label("Kuwahara Multi-Pass")
             .build();
 
@@ -78,7 +79,9 @@ impl ShaderManager for KuwaharaShader {
         Self {
             base,
             compute_shader,
-            current_params: initial_params}
+            current_params: initial_params,
+            dirty: 2,
+            was_exporting: false}
     }
 
     fn update(&mut self, core: &Core) {
@@ -103,6 +106,7 @@ impl ShaderManager for KuwaharaShader {
 
     fn resize(&mut self, core: &Core) {
         self.base.default_resize(core, &mut self.compute_shader);
+        self.dirty = 2;
     }
 
     fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
@@ -123,8 +127,6 @@ impl ShaderManager for KuwaharaShader {
         let video_info = self.base.get_video_info();
         let hdri_info = self.base.get_hdri_info();
         let webcam_info = self.base.get_webcam_info();
-
-        let current_fps = self.base.fps_tracker.fps();
 
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
@@ -147,121 +149,40 @@ impl ShaderManager for KuwaharaShader {
                         );
 
                         ui.separator();
+                        ui.horizontal(|ui| {
+                            for (i, name) in ["Result", "Original", "Flow"].iter().enumerate() {
+                                changed |= ui.selectable_value(&mut params.view, i as i32, *name).changed();
+                            }
+                        });
 
-                        let mut anisotropy_enabled = params.filter_mode == 1;
-                        if ui
-                            .checkbox(&mut anisotropy_enabled, "Anisotropy?")
-                            .changed()
-                        {
-                            params.filter_mode = if anisotropy_enabled { 1 } else { 0 };
-                            changed = true;
-                        }
+                        egui::CollapsingHeader::new("Kuwahara").default_open(true).show(ui, |ui| {
+                            let mut aniso = params.mode == 1;
+                            if ui.checkbox(&mut aniso, "Anisotropic (follow the flow)").changed() {
+                                params.mode = aniso as i32;
+                                changed = true;
+                            }
+                            changed |= slider(ui, &mut params.radius, 2.0..=12.0, "Radius");
+                            changed |= slider(ui, &mut params.q, 1.0..=18.0, "Sharpness");
+                            if params.mode == 1 {
+                                changed |= ui.add(egui::Slider::new(&mut params.alpha, 0.2..=10.0).logarithmic(true).text("Stretch (lower = more)")).changed();
+                                changed |= slider(ui, &mut params.tensor_sigma, 0.5..=6.0, "Flow smoothing");
+                            }
+                            changed |= slider(ui, &mut params.strength, 0.0..=1.0, "Strength");
+                        });
 
-                        egui::CollapsingHeader::new("Filter Parameters")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.radius, 2.0..=16.0)
-                                            .text("Radius"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.filter_strength, 0.0..=16.0)
-                                            .text("Filter Strength"),
-                                    )
-                                    .changed();
+                        egui::CollapsingHeader::new("Brush strokes").default_open(true).show(ui, |ui| {
+                            changed |= slider(ui, &mut params.lic_strength, 0.0..=1.0, "Strength");
+                            changed |= slider(ui, &mut params.lic_length, 0.0..=30.0, "Length");
+                            changed |= slider(ui, &mut params.lic_step, 0.5..=3.0, "Step");
+                        });
 
-                                if params.filter_mode == 1 {
-                                    ui.separator();
-                                    ui.label("Anisotropic Controls:");
-                                    changed |= ui
-                                        .add(
-                                            egui::Slider::new(&mut params.alpha, 0.1..=16.0)
-                                                .text("Anisotropy"),
-                                        )
-                                        .changed();
-                                }
-                            });
-                        egui::CollapsingHeader::new("Blur Settings")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.blur_samples, 5.0..=25.0)
-                                            .text("Samples"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.blur_lod, 0.0..=5.0)
-                                            .text("LOD"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.blur_slod, 2.0..=5.0)
-                                            .text("Step"),
-                                    )
-                                    .changed();
-                            });
-
-                        egui::CollapsingHeader::new("Brush Strokes (LIC)")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.lic_strength, 0.0..=1.0)
-                                            .text("Strength"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.lic_length, 3.0..=40.0)
-                                            .text("Stroke Length"),
-                                    )
-                                    .changed();
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.lic_width, 0.5..=4.0)
-                                            .text("Stroke Width"),
-                                    )
-                                    .changed();
-                            });
-
-                        egui::CollapsingHeader::new("Post-Processing")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                changed |= ui
-                                    .add(
-                                        egui::Slider::new(&mut params.color_enhance, 0.5..=2.0)
-                                            .text("Color Filter"),
-                                    )
-                                    .changed();
-
-                                ui.separator();
-                                if ui.button("Reset to Defaults").clicked() {
-                                    params = KuwaharaParams {
-                                        radius: 8.0,
-                                        q: 8.0,
-                                        alpha: 1.0,
-                                        filter_strength: 1.0,
-                                        sigma_d: 1.0,
-                                        sigma_r: 2.0,
-                                        edge_threshold: 0.2,
-                                        color_enhance: 1.0,
-                                        blur_samples: 35.0,
-                                        blur_lod: 2.0,
-                                        blur_slod: 4.0,
-                                        filter_mode: params.filter_mode,
-                                        show_tensors: 0,
-                                        lic_length: 15.0,
-                                        lic_strength: 0.5,
-                                        lic_width: 1.5};
-                                    changed = true;
-                                }
-                            });
+                        egui::CollapsingHeader::new("Colour").show(ui, |ui| {
+                            changed |= slider(ui, &mut params.saturation, 0.0..=2.0, "Saturation");
+                            if ui.button("Reset to defaults").clicked() {
+                                params = KuwaharaParams::default();
+                                changed = true;
+                            }
+                        });
 
                         ui.separator();
 
@@ -272,12 +193,6 @@ impl ShaderManager for KuwaharaShader {
                         should_start_export =
                             ExportManager::render_export_ui_widget(ui, &mut export_request);
 
-                        ui.separator();
-                        ui.label(format!(
-                            "Resolution: {}x{}",
-                            core.size.width, core.size.height
-                        ));
-                        ui.label(format!("FPS: {current_fps:.1}"));
                     });
             })
         } else {
@@ -291,12 +206,24 @@ impl ShaderManager for KuwaharaShader {
             self.base.export_manager.start_export();
         }
 
+        if changed || controls_request.load_media_path.is_some() || controls_request.start_webcam {
+            self.dirty = 2;
+        }
         if changed {
             self.current_params = params;
             self.compute_shader.set_custom_params(params, &core.queue);
         }
 
-        self.compute_shader.dispatch(&mut frame.encoder, core);
+        // video, webcam, shader edits and exports render every frame; a still image only after a change
+        let exporting = self.base.export_manager.is_exporting();
+        if self.compute_shader.check_hot_reload(&core.device) || exporting || self.was_exporting {
+            self.dirty = 2;
+        }
+        self.was_exporting = exporting;
+        if self.dirty > 0 || self.base.using_video_texture || self.base.using_webcam_texture {
+            self.compute_shader.dispatch(&mut frame.encoder, core);
+            self.dirty = self.dirty.saturating_sub(1);
+        }
 
         self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
 
@@ -306,6 +233,9 @@ impl ShaderManager for KuwaharaShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
+        if let WindowEvent::DroppedFile(_) = event {
+            self.dirty = 2;
+        }
         self.base.default_handle_input(core, event)
     }
 }

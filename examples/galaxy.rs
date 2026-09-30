@@ -10,9 +10,13 @@ cuneus::uniform_params! {
         brightness: f32, exposure: f32, gamma: f32, saturation: f32,
         travel: f32, orbit: f32, zoom: f32, arms: f32,
         bokeh_edge: f32, bokeh_blades: f32, bokeh_fringe: f32, taa_weight: f32,
-        sharpen: f32, view_tilt: f32, depth_grade: f32, _pad3: f32,
+        sharpen: f32, view_tilt: f32, depth_grade: f32, _q0: f32,
+        log_density: f32, persistence: f32, _q2: f32, _q3: f32,
     }
 }
+
+// trajectories per frame, the shader's NTH
+const TRAJECTORIES: usize = 2_097_152;
 
 struct ExperimentShader {
     base: RenderKit,
@@ -26,11 +30,12 @@ impl ShaderManager for ExperimentShader {
             twist: 2.0, rotate: 0.3, core: 1.0, spread: 3.2,
             coherence: 0.3, fold_balance: 1.0, anim: 2.0, iterations: 20.0,
             hue: 0.0, spectral: 1.0, dust: 1.0, color_var: 0.5,
-            dof: 2.0, focal: 0.0, bloom: 0.6, vignette: 0.3,
+            dof: 0.5, focal: 0.0, bloom: 0.6, vignette: 0.3,
             brightness: 1.5, exposure: 1.0, gamma: 0.8, saturation: 1.0,
             travel: 1.0, orbit: 0.0, zoom: 1.0, arms: 0.0,
-            bokeh_edge: 0.0, bokeh_blades: 0.0, bokeh_fringe: 0.5, taa_weight: 0.85,
-            sharpen: 0.4, view_tilt: 0.0, depth_grade: 0.0, _pad3: 0.0,
+            bokeh_edge: 0.0, bokeh_blades: 0.0, bokeh_fringe: 0.5, taa_weight: 0.0,
+            sharpen: 0.4, view_tilt: 0.0, depth_grade: 0.0, _q0: 0.0,
+            log_density: 0.0, persistence: 0.75, _q2: 0.0, _q3: 0.0,
         };
 
         let base = RenderKit::new(core);
@@ -39,12 +44,22 @@ impl ShaderManager for ExperimentShader {
             PassDescription::new("Splat", &[]).with_workgroup_size([8192, 1, 1]),
             PassDescription::new("resolve_raw", &[]),
             PassDescription::new("taa", &["resolve_raw", "taa"]),
-            PassDescription::new("main_image", &["taa"]),
+            // bloom mip chain
+            PassDescription::new("bloom_d1", &["taa"]).with_resolution_scale(0.5),
+            PassDescription::new("bloom_d2", &["bloom_d1"]).with_resolution_scale(0.25),
+            PassDescription::new("bloom_d3", &["bloom_d2"]).with_resolution_scale(0.125),
+            PassDescription::new("bloom_d4", &["bloom_d3"]).with_resolution_scale(0.0625),
+            PassDescription::new("bloom_u3", &["bloom_d4", "bloom_d3"]).with_resolution_scale(0.125),
+            PassDescription::new("bloom_u2", &["bloom_u3", "bloom_d2"]).with_resolution_scale(0.25),
+            PassDescription::new("bloom_u1", &["bloom_u2", "bloom_d1"]).with_resolution_scale(0.5),
+            PassDescription::new("main_image", &["taa", "bloom_u1"]),
         ];
         let config = ComputeShader::builder()
             .with_entry_point("Clear")
             .with_multi_pass(&passes)
             .with_custom_uniforms::<ExperimentParams>()
+            // trajectory points kept between frames (audio buffer as storage)
+            .with_audio(TRAJECTORIES * 4)
             .with_atomic_buffer(4)
             .with_label("Spectral Galaxy Attractor")
             .build();
@@ -90,7 +105,7 @@ impl ShaderManager for ExperimentShader {
                         changed |= ui.add(egui::Slider::new(&mut params.twist, 1.0..=4.0).text("Twist")).changed();
                         changed |= ui.add(egui::Slider::new(&mut params.core, 0.0..=4.0).text("Core")).changed();
                         changed |= ui.add(egui::Slider::new(&mut params.fold_balance, 0.0..=1.0).text("Swirl Balance")).changed();
-                        changed |= ui.add(egui::Slider::new(&mut params.iterations, 10.0..=30.0).step_by(1.0).text("Iterations")).changed();
+                        changed |= ui.add(egui::Slider::new(&mut params.iterations, 20.0..=60.0).step_by(1.0).text("Iterations")).changed();
                         changed |= ui.add(egui::Slider::new(&mut params.anim, 0.0..=3.0).text("Anim")).changed();
                     });
                     egui::CollapsingHeader::new("Color").default_open(false).show(ui, |ui| {
@@ -104,12 +119,13 @@ impl ShaderManager for ExperimentShader {
                         changed |= ui.add(egui::Slider::new(&mut params.focal, -2.0..=2.0).text("Focal")).changed();
                         changed |= ui.add(egui::Slider::new(&mut params.bokeh_edge, 0.0..=1.0).text("Bokeh Rim")).changed();
                         changed |= ui.add(egui::Slider::new(&mut params.bokeh_fringe, 0.0..=1.5).text("Fringe")).changed();
+                        changed |= ui.add(egui::Slider::new(&mut params.persistence, 0.0..=0.996).text("Persistence")).changed();
                         changed |= ui.add(egui::Slider::new(&mut params.taa_weight, 0.0..=0.99).text("TAA")).changed();
                         changed |= ui.add(egui::Slider::new(&mut params.sharpen, 0.0..=1.5).text("Sharpen")).changed();
                         changed |= ui.add(egui::Slider::new(&mut params.dust, 0.0..=4.0).text("Dust")).changed();
                     });
                     egui::CollapsingHeader::new("Travel & Depth").default_open(false).show(ui, |ui| {
-                        changed |= ui.add(egui::Slider::new(&mut params.travel, 0.0..=4.0).text("Travel")).changed();
+                        changed |= ui.add(egui::Slider::new(&mut params.travel, 0.0..=4.0).text("View angle")).changed();
                         changed |= ui.add(egui::Slider::new(&mut params.orbit, 0.0..=3.0).text("Orbit")).changed();
                         changed |= ui.add(egui::Slider::new(&mut params.zoom, 0.4..=3.0).text("Zoom")).changed();
                         changed |= ui.add(egui::Slider::new(&mut params.view_tilt, -1.5..=1.5).text("Tilt")).changed();
@@ -119,6 +135,9 @@ impl ShaderManager for ExperimentShader {
                         changed |= ui.add(egui::Slider::new(&mut params.brightness, 0.1..=3.0).text("Brightness")).changed();
                         changed |= ui.add(egui::Slider::new(&mut params.exposure, 0.1..=4.0).text("Exposure")).changed();
                         changed |= ui.add(egui::Slider::new(&mut params.gamma, 0.4..=2.2).text("Gamma")).changed();
+                        changed |= ui.add(egui::Slider::new(&mut params.bloom, 0.0..=3.0).text("Bloom")).changed();
+                        changed |= ui.add(egui::Slider::new(&mut params.log_density, 0.0..=1.0).text("Log density")).changed();
+                        changed |= ui.add(egui::Slider::new(&mut params.saturation, 0.0..=2.0).text("Saturation")).changed();
                     });
                     ui.separator();
                     ShaderControls::render_controls_widget(ui, &mut controls_request);

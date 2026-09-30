@@ -6,7 +6,7 @@ cuneus::uniform_params! {
     brush_size: f32,
     input_resolution: f32,
     clear_canvas: i32,
-    show_debug: i32,
+    drawing: i32,
     feature_maps_1: f32,
     feature_maps_2: f32,
     num_classes: f32,
@@ -15,14 +15,14 @@ cuneus::uniform_params! {
     show_frequencies: i32,
     conv1_pool_size: f32,
     conv2_pool_size: f32,
-    _padding1: f32,
-    _padding2: f32,
-    _padding3: f32,
-    _padding4: f32,
-    _padding5: f32,
-    _padding6: f32,
-    _pad_m1: f32,
-    _pad_m2: f32,
+    fibers: f32,
+    yaw: f32,
+    elev: f32,
+    zoom: f32,
+    cam: f32,
+    bloom: f32,
+    expo: f32,
+    height: f32,
     }
 }
 
@@ -30,7 +30,36 @@ struct CNNDigitRecognizer {
     base: RenderKit,
     compute_shader: ComputeShader,
     current_params: CNNParams,
-    first_frame: bool}
+    first_frame: bool,
+    dragging: bool,
+    last_cursor: Option<(f64, f64)>}
+
+// largest window the 3D view's HDR buffer holds
+const MAXPIX: u64 = 3840 * 2400;
+
+// must match the shader's pad_hit and pad2d_rect
+fn over_pad(p: &CNNParams, core: &Core, x: f64, y: f64) -> bool {
+    let (yw, el) = (p.yaw.to_radians(), p.elev.clamp(5.0, 85.0).to_radians());
+    let d = 150.0 / p.zoom.max(0.1);
+    let ro = [74.0 + d * yw.sin() * el.cos(), -d * yw.cos() * el.cos(), 4.0 + d * el.sin()];
+    let n = (ro[0] * ro[0] + ro[1] * ro[1] + (ro[2] - 4.0) * (ro[2] - 4.0)).sqrt();
+    let f = [(74.0 - ro[0]) / n, -ro[1] / n, (4.0 - ro[2]) / n];
+    let rl = (f[1] * f[1] + f[0] * f[0]).sqrt();
+    let rt = [f[1] / rl, -f[0] / rl, 0.0];
+    let up = [rt[1] * f[2] - rt[2] * f[1], rt[2] * f[0] - rt[0] * f[2], rt[0] * f[1] - rt[1] * f[0]];
+    let (w, h) = (core.size.width as f32, core.size.height as f32);
+    let sp = [(x as f32 - 0.5 * w) / h * 0.8, (y as f32 - 0.5 * h) / h * 0.8];
+    let rd: Vec<f32> = (0..3).map(|i| f[i] + sp[0] * rt[i] - sp[1] * up[i]).collect();
+    if rd[2] >= 0.0 {
+        return false;
+    }
+    let t = (0.3 - ro[2]) / rd[2];
+    let (qx, qy) = (ro[0] + rd[0] * t, ro[1] + rd[1] * t + 14.0);
+    let on_3d = (0.0..28.0).contains(&qx) && (0.0..28.0).contains(&qy);
+    let side = (0.3 * h).floor();
+    let (lx, ly) = (x as f32 - 16.0, y as f32 - (h - side - 16.0));
+    on_3d || ((0.0..side).contains(&lx) && (0.0..side).contains(&ly))
+}
 
 impl CNNDigitRecognizer {}
 
@@ -51,6 +80,14 @@ impl ShaderManager for CNNDigitRecognizer {
             PassDescription::new("fully_connected", &["conv_layer2"])
                 .with_workgroup_size([47, 1, 1]),   // 47 Classes
             
+            PassDescription::new("analyze", &[]).with_workgroup_size([1, 1, 1]),
+            PassDescription::new("scene3d", &[]),
+            PassDescription::new("fiber_clear", &[]),
+            // 12512 fibers
+            PassDescription::new("fibers", &[]).with_workgroup_size([196, 1, 1]),
+            PassDescription::new("bloom_down", &[]),
+            PassDescription::new("bloom_h", &[]),
+            PassDescription::new("bloom_v", &[]),
             PassDescription::new("main_image", &["fully_connected"]),
         ];
 
@@ -69,20 +106,20 @@ impl ShaderManager for CNNDigitRecognizer {
                 "conv2_data", 
                 (4 * 4 * 32 * 4) as u64
             )) 
-            .with_storage_buffer(StorageBufferSpec::new(
-                "fc_data", 
-                (47 * 4) as u64
-            ))
+            .with_storage_buffer(StorageBufferSpec::new("fc_data", 128 * 4))
+            .with_storage_buffer(StorageBufferSpec::new("hdr", MAXPIX * 8))
+            .with_storage_buffer(StorageBufferSpec::new("b1", MAXPIX / 16 * 8 + 64))
+            .with_storage_buffer(StorageBufferSpec::new("b2", MAXPIX / 16 * 8 + 64))
+            .with_storage_buffer(StorageBufferSpec::new("fib", (MAXPIX / 4 + 4096) * 3 * 4))
             .build();
 
         let compute_shader = cuneus::compute_shader!(core, "shaders/cnn.wgsl", compute_shader);
-
 
         let current_params = CNNParams {
             brush_size: 0.007,
             input_resolution: 28.0,
             clear_canvas: 0,
-            show_debug: 0,
+            drawing: 0,
             feature_maps_1: 16.0,
             feature_maps_2: 32.0,
             num_classes: 47.0,
@@ -91,24 +128,29 @@ impl ShaderManager for CNNDigitRecognizer {
             show_frequencies: 0,
             conv1_pool_size: 12.0,
             conv2_pool_size: 4.0,
-            _padding1: 0.0,
-            _padding2: 0.0,
-            _padding3: 0.0,
-            _padding4: 0.0,
-            _padding5: 0.0,
-            _padding6: 0.0,
-            _pad_m1: 0.0,
-            _pad_m2: 0.0,
+            fibers: 1.0,
+            yaw: -20.0,
+            elev: 32.0,
+            zoom: 1.3,
+            cam: 0.8,
+            bloom: 0.45,
+            expo: 1.0,
+            height: 1.0,
         };
 
         Self {
             base,
             compute_shader,
             current_params,
-            first_frame: true}
+            first_frame: true,
+            dragging: false,
+            last_cursor: None}
     }
 
-    fn update(&mut self, _core: &Core) {
+    fn update(&mut self, core: &Core) {
+        let current_time = self.base.controls.get_time(&self.base.start_time);
+        self.compute_shader.set_time(current_time, 1.0 / 60.0, &core.queue);
+        self.compute_shader.handle_export(core, &mut self.base);
     }
 
     fn resize(&mut self, core: &Core) {
@@ -118,7 +160,6 @@ impl ShaderManager for CNNDigitRecognizer {
 
     fn render(&mut self, core: &Core) -> Result<(), cuneus::SurfaceError> {
         let mut frame = self.base.begin_frame(core)?;
-
 
         let mut params = self.current_params;
         let mut changed = self.first_frame; // Update params on first frame
@@ -160,6 +201,17 @@ impl ShaderManager for CNNDigitRecognizer {
                                 }
                             });
 
+                        ui.label("Draw on the pad (bottom left, or the one in the scene), right-click to clear. Drag elsewhere to orbit, wheel to zoom, hover a neuron to see what it sees.");
+                        changed |= ui.add(egui::Slider::new(&mut params.cam, 0.0..=1.0).text("Class activation map")).changed();
+                        changed |= ui.add(egui::Slider::new(&mut params.fibers, 0.0..=3.0).text("Fibers")).changed();
+                        changed |= ui.add(egui::Slider::new(&mut params.height, 0.2..=3.0).text("Tower height")).changed();
+                        egui::CollapsingHeader::new("Camera").show(ui, |ui| {
+                            changed |= ui.add(egui::Slider::new(&mut params.yaw, -180.0..=180.0).text("Orbit")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.elev, 5.0..=85.0).text("Tilt")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.zoom, 0.5..=4.0).logarithmic(true).text("Zoom")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.bloom, 0.0..=3.0).text("Bloom")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.expo, 0.2..=4.0).logarithmic(true).text("Exposure")).changed();
+                        });
                         ui.separator();
                         ShaderControls::render_controls_widget(ui, &mut controls_request);
 
@@ -204,6 +256,37 @@ impl ShaderManager for CNNDigitRecognizer {
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
         if self.base.default_handle_input(core, event) {
             return true;
+        }
+        {
+            match event {
+                // a press on the pad draws; anywhere else it orbits
+                WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
+                    let pressed = *state == winit::event::ElementState::Pressed;
+                    let on_pad = self.last_cursor.is_some_and(|(x, y)| over_pad(&self.current_params, core, x, y));
+                    self.dragging = pressed && !on_pad;
+                    self.current_params.drawing = (pressed && on_pad) as i32;
+                    self.compute_shader.set_custom_params(self.current_params, &core.queue);
+                }
+                WindowEvent::MouseWheel { delta, .. } => {
+                    let steps = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => *y,
+                        winit::event::MouseScrollDelta::PixelDelta(d) => d.y as f32 / 40.0,
+                    };
+                    let p = &mut self.current_params;
+                    p.zoom = (p.zoom * 1.1f32.powf(steps)).clamp(0.5, 4.0);
+                    self.compute_shader.set_custom_params(*p, &core.queue);
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    if let (true, Some((x, y))) = (self.dragging, self.last_cursor) {
+                        let p = &mut self.current_params;
+                        p.yaw = (p.yaw - (position.x - x) as f32 * 0.3 + 180.0).rem_euclid(360.0) - 180.0;
+                        p.elev = (p.elev + (position.y - y) as f32 * 0.3).clamp(5.0, 85.0);
+                        self.compute_shader.set_custom_params(*p, &core.queue);
+                    }
+                    self.last_cursor = Some((position.x, position.y));
+                }
+                _ => {}
+            }
         }
         self.base.handle_mouse_input(core, event, false)
     }

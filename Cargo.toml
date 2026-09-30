@@ -1,6 +1,6 @@
 [package]
 name = "cuneus"
-version = "0.6.3"
+version = "0.6.4"
 edition = "2024"
 authors = ["altunenes"]
 description = "A WGPU-based shader development tool"
@@ -49,10 +49,6 @@ name = "bugberman"
 required-features = ["media"]
 
 [[example]]
-name = "computecolors"
-required-features = ["media"]
-
-[[example]]
 name = "debugscreen"
 required-features = ["media"]
 
@@ -73,10 +69,6 @@ name = "kuwahara"
 required-features = ["media"]
 
 [[example]]
-name = "lego"
-required-features = ["media"]
-
-[[example]]
 name = "pathtracing"
 required-features = ["media"]
 
@@ -93,7 +85,7 @@ name = "veridisquo"
 required-features = ["media"]
 
 [[example]]
-name = "voronoi"
+name = "pinscreen"
 required-features = ["media"]
 
 [dev-dependencies]

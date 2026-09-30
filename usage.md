@@ -556,7 +556,7 @@ Two methods for external texture input:
 compute_shader.update_input_texture(&tm.view, &tm.sampler, &core.device);
 ```
 
-**Multi-pass note:** `.with_input_texture()` fits single-pass shaders and storage-buffer multi-pass (`fft.rs`, `computecolors.rs`, run via `dispatch_stage()`). Don't use it with ping-pong (texture) multi-pass — it panics at startup with a Group 1 bind-group mismatch. For an HDRI/environment map, or any texture you sample from an intermediate pass, use `.with_channels()` instead.
+**Multi-pass note:** `.with_input_texture()` fits single-pass shaders and storage-buffer multi-pass (`fft.rs`, `pinscreen.rs`). Don't use it with ping-pong (texture) multi-pass — it panics at startup with a Group 1 bind-group mismatch. For an HDRI/environment map, or any texture you sample from an intermediate pass, use `.with_channels()` instead.
 
 **`.with_channels(N)`** - N texture/sampler pairs in **Group 2**. Accessible from **all passes** with both `.dispatch()` and `dispatch_stage()`.
 

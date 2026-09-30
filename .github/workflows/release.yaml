@@ -18,13 +18,13 @@ jobs:
           - group: "media"
             features: ""
             gstreamer_required: true
-            shaders: "bugberman,audiovis,computecolors,fft,pathtracing,voronoi,fluid,cnn,synth,blockgame,kuwahara,lego,gaussian,tameimp,"
+            shaders: "bugberman,audiovis,fft,pathtracing,pinscreen,fluid,cnn,synth,blockgame,kuwahara,gaussian,tameimp,"
           
           # Shaders that DON'T need GStreamer
           - group: "no-media" 
             features: "--no-default-features"
             gstreamer_required: false
-            shaders: "blackhole,buddhabrot,lich,mandelbulb,sinh,orbits,nebula,rorschach,volumepassage,jfa,gaussian3d,physarum,galaxy,meshlab"
+            shaders: "blackhole,buddhabrot,lich,mandelbulb,orbits,nebula,rorschach,volumepassage,jfa,gaussian3d,physarum,galaxy,meshlab,tree"
         
         include:
           - os: ubuntu-latest

@@ -1,5 +1,4 @@
-// Experimental Buddhabrot Compute Shader, Enes Altun, 2025
-// A special rendering of the Mandelbrot set tracking escape trajectories
+// Spectral Buddhabrot in 4D (orbit points as (z, c)), Metropolis-Hastings sampled, Enes Altun, 2025
 struct TimeUniform {
     time: f32,
     delta: f32,
@@ -17,7 +16,6 @@ struct BuddhabrotParams {
     rotation: f32,
     exposure: f32,
     sample_density: f32,
-    motion_speed: f32,
     dithering: f32,
     wavelength_min: f32,
     wavelength_max: f32,
@@ -29,11 +27,28 @@ struct BuddhabrotParams {
     white_balance_g: f32,
     white_balance_b: f32,
     min_trajectory_len: u32,
+    // 0 uniform, 1 Metropolis
+    sampling: u32,
+    // 4D angles (degrees): Re z-Re c, Im z-Im c, Re z-Im c, Im z-Re c; spin of the first two (degrees/s)
+    rot_a: f32,
+    rot_b: f32,
+    spin_a: f32,
+    spin_b: f32,
+    persist: f32,
+    z0x: f32,
+    z0y: f32,
+    mut_size: f32,
+    rot_c: f32,
+    rot_d: f32,
+    _p0: f32,
+    _p1: f32,
 }
 @group(1) @binding(0) var output: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(1) var<uniform> params: BuddhabrotParams;
 
-@group(2) @binding(0) var<storage, read_write> atomic_buffer: array<atomic<u32>>;
+// Metropolis chain per thread: c, score
+@group(2) @binding(0) var<storage, read_write> chains: array<vec4<f32>>;
+@group(2) @binding(1) var<storage, read_write> atomic_buffer: array<atomic<u32>>;
 
 alias v4 = vec4<f32>;
 alias v3 = vec3<f32>;
@@ -42,6 +57,7 @@ alias m2 = mat2x2<f32>;
 alias m3 = mat3x3<f32>;
 const pi = 3.14159265359;
 const tau = 6.28318530718;
+const K_MH: f32 = 16.0;
 
 // CIE 1931 2-degree color matching functions (390nm - 830nm, 10nm steps)
 const spectrum = array<v3, 45>(
@@ -82,7 +98,6 @@ fn wl_to_xyz(wl: f32) -> v3 {
     return mix(spectrum[index], spectrum[index + 1u], fract(x));
 }
 
-// Convert a single wavelength to linear sRGB
 fn wl_to_rgb(wl: f32) -> v3 {
     return max(v3(0.0), xyz_to_rgb * wl_to_xyz(wl));
 }
@@ -105,6 +120,11 @@ fn hash_f() -> f32 {
     seed = s;
     return (f32(s) / f32(0xffffffffu));
 }
+fn gauss2() -> v2 {
+    let r = sqrt(-2.0 * log(max(hash_f(), 1e-7)));
+    let a = hash_f() * tau;
+    return r * v2(cos(a), sin(a));
+}
 
 fn rot(a: f32) -> m2 {
     return m2(cos(a), -sin(a), sin(a), cos(a));
@@ -112,6 +132,16 @@ fn rot(a: f32) -> m2 {
 
 fn cmul(a: v2, b: v2) -> v2 {
     return v2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+// the first two rows of the 4D rotation, set once per thread
+var<private> px4: v4;
+var<private> py4: v4;
+fn project4(z: v2, c: v2) -> v2 { let p = v4(z, c); return v2(dot(px4, p), dot(py4, p)); }
+fn plane(i: u32, j: u32, a: f32) -> mat4x4<f32> {
+    var m = mat4x4<f32>(v4(1.0, 0.0, 0.0, 0.0), v4(0.0, 1.0, 0.0, 0.0), v4(0.0, 0.0, 1.0, 0.0), v4(0.0, 0.0, 0.0, 1.0));
+    m[i][i] = cos(a); m[j][j] = cos(a); m[j][i] = sin(a); m[i][j] = -sin(a);
+    return m;
 }
 
 fn complex_to_screen(p: v2) -> v2 {
@@ -138,154 +168,128 @@ fn aces_tonemap(color: v3) -> v3 {
     return m2 * (a / b);
 }
 
-fn escape_count(c: v2, max_iters: u32) -> u32 {
-    var z = v2(0.0, 0.0);
-    for (var n: u32 = 0; n < max_iters; n++) {
+// escape length (0 = none), points on screen
+fn score(c: v2) -> v2 {
+    var z = v2(params.z0x, params.z0y);
+    var on = 0.0;
+    for (var n: u32 = 0u; n < params.max_iterations; n++) {
         z = cmul(z, z) + c;
         if (dot(z, z) > params.escape_radius) {
-            return n;
+            if (n < params.min_trajectory_len) { return v2(0.0); }
+            return v2(f32(n), on);
+        }
+        let uv = complex_to_screen(project4(z, c));
+        if (n >= 5u && all(uv >= v2(0.0)) && all(uv < v2(1.0))) { on += 1.0; }
+    }
+    return v2(0.0);
+}
+
+fn band_of(n: u32) -> u32 {
+    let third = (params.max_iterations - params.min_trajectory_len) / 3u;
+    return select(select(2u, 1u, n < params.min_trajectory_len + 2u * third), 0u, n < params.min_trajectory_len + third);
+}
+fn splat(c: v2, n_escape: u32, w: f32) {
+    let Ru = vec2<u32>(R);
+    let pixel_count = Ru.x * Ru.y;
+    let band = band_of(n_escape);
+    let off = band * pixel_count;
+    var z = v2(params.z0x, params.z0y);
+    for (var n: u32 = 0u; n < n_escape; n++) {
+        z = cmul(z, z) + c;
+        if (n < 5u) { continue; }
+        let uv = complex_to_screen(project4(z, c));
+        if (all(uv >= v2(0.0)) && all(uv < v2(1.0))) {
+            let k = u32(w + hash_f());
+            if (k > 0u) { atomicAdd(&atomic_buffer[u32(uv.x * R.x) + Ru.x * u32(uv.y * R.y) + off], k); }
         }
     }
-    return 0u;
 }
+
+fn random_c() -> v2 { return v2(hash_f() * 3.0 - 2.0, hash_f() * 3.0 - 1.5); }
 
 @compute @workgroup_size(64, 1, 1)
 fn Splat(@builtin(global_invocation_id) id: vec3<u32>) {
-    let Ru = vec2<u32>(textureDimensions(output));
-    R = v2(Ru);
-    seed = id.x + hash_u(time_data.frame);
+    R = v2(textureDimensions(output));
+    seed = hash_u(id.x * 747796405u + hash_u(time_data.frame + 1u));
+    let r = plane(0u, 3u, radians(params.rot_d)) * plane(1u, 2u, radians(params.rot_c))
+          * plane(1u, 3u, radians(params.rot_b + time_data.time * params.spin_b)) * plane(0u, 2u, radians(params.rot_a + time_data.time * params.spin_a));
+    px4 = v4(r[0].x, r[1].x, r[2].x, r[3].x);
+    py4 = v4(r[0].y, r[1].y, r[2].y, r[3].y);
+    let steps = 4u + u32(params.sample_density * 10.0);
 
-    let samples_per_thread = 8u + u32(params.sample_density * 12.0);
-    let pixel_count = Ru.x * Ru.y;
-
-    // Iteration range boundaries for 3-channel split
-    let range = params.max_iterations - params.min_trajectory_len;
-    let third = range / 3u;
-    let boundary_low = params.min_trajectory_len + third;
-    let boundary_high = params.min_trajectory_len + 2u * third;
-
-    for (var s: u32 = 0u; s < samples_per_thread; s++) {
-        var c: v2;
-        let sample_strategy = (s + time_data.frame) % 3u;
-
-        if (sample_strategy == 0u) {
-            let angle = hash_f() * tau;
-            let radius = 0.1 + hash_f() * 0.35;
-            c = v2(cos(angle) * radius - 0.25, sin(angle) * radius);
-        } else if (sample_strategy == 1u) {
-            c = v2(hash_f() * 3.0 - 2.0, hash_f() * 2.5 - 1.25);
-        } else {
-            let angle = hash_f() * tau;
-            let base_radius = 0.75 + hash_f() * 0.15;
-            let distortion = 0.15 * (1.0 + cos(angle * 3.0));
-            c = v2(cos(angle) * (base_radius + distortion) - 0.5, sin(angle) * base_radius);
+    if (params.sampling == 0u) {
+        for (var s = 0u; s < steps * 2u; s++) {
+            let c = random_c();
+            let sc = score(c);
+            if (sc.y > 0.0) { splat(c, u32(sc.x), 1.0); }
         }
-
-        let n_escape = escape_count(c, params.max_iterations);
-        if (n_escape < params.min_trajectory_len) {
-            continue;
-        }
-
-        // ch 0 = short escapes
-        // ch 1 = mid escapes
-        // ch 2 = long escapes
-        var channel: u32;
-        if (n_escape < boundary_low) {
-            channel = 0u;
-        } else if (n_escape < boundary_high) {
-            channel = 1u;
-        } else {
-            channel = 2u;
-        }
-
-        let buffer_offset = channel * pixel_count;
-
-        var z = v2(0.0, 0.0);
-        let w_angle = time_data.time * .2;
-        let wind = v2(cos(w_angle), sin(w_angle)) * 0.0001; 
-        for (var n: u32 = 0u; n < n_escape; n++) {
-            z = cmul(z, z) + c;
-            
-            z = z + wind; 
-
-            if (n < 5u) { continue; }
-            if (abs(z.x) > 3.0 || abs(z.y) > 3.0) { continue; }
-
-            let uv = complex_to_screen(z);
-
-            if (uv.x >= 0.0 && uv.x < 1.0 && uv.y >= 0.0 && uv.y < 1.0) {
-                let pixel_x = u32(uv.x * f32(Ru.x));
-                let pixel_y = u32(uv.y * f32(Ru.y));
-                let pixel_idx = pixel_x + Ru.x * pixel_y;
-
-                if (pixel_idx < pixel_count) {
-                    atomicAdd(&atomic_buffer[pixel_idx + buffer_offset], 1u);
-                }
-            }
-        }
+        return;
     }
+
+    // Metropolis on the score; splatting at 1 / score keeps the image unbiased
+    var ch = chains[id.x];
+    var c = ch.xy;
+    var cur = score(c);
+    for (var tries = 0; tries < 8 && cur.y <= 0.0; tries++) {
+        c = random_c();
+        cur = score(c);
+    }
+    let step = params.mut_size * 0.1 / max(params.zoom, 1e-4);
+    for (var s = 0u; s < steps; s++) {
+        var cn = c + gauss2() * step * pow(10.0, -2.0 * hash_f());
+        if (hash_f() < 0.2) { cn = random_c(); }
+        let sn = score(cn);
+        if (sn.y > 0.0 && (cur.y <= 0.0 || hash_f() < sn.y / cur.y)) {
+            c = cn;
+            cur = sn;
+        }
+        if (cur.y > 0.0) { splat(c, u32(cur.x), K_MH / cur.y); }
+    }
+    chains[id.x] = v4(c, cur.y, 0.0);
 }
 
 @compute @workgroup_size(16, 16, 1)
 fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     let res = vec2<u32>(textureDimensions(output));
     if (id.x >= res.x || id.y >= res.y) { return; }
+    R = v2(res);
     let idx = id.x + id.y * res.x;
     let layer_offset = res.x * res.y;
 
-    // Read raw counts per channel
     let count_short = f32(atomicLoad(&atomic_buffer[idx]));
     let count_mid   = f32(atomicLoad(&atomic_buffer[idx + layer_offset]));
     let count_long  = f32(atomicLoad(&atomic_buffer[idx + 2u * layer_offset]));
 
-    // Normalize by frame count
-    let frame_norm = 1.0 / f32(max(time_data.frame, 1u));
+    // frames held in the buffer (a geometric sum while fading)
+    let spinning = params.spin_a != 0.0 || params.spin_b != 0.0;
+    let f = f32(max(time_data.frame, 1u));
+    let p = clamp(params.persist, 0.0, 0.99);
+    let frames = select(f, (1.0 - pow(p, f)) / (1.0 - p), spinning);
 
-    // Derive 3 wavelengths from the user range
-    // color_shift controls the midpoint position (0 = centered, <1 = toward min, >1 = toward max)
     let wl_short = params.wavelength_min;
     let wl_mid   = mix(params.wavelength_min, params.wavelength_max, clamp(params.color_shift, 0.0, 2.0) * 0.5);
     let wl_long  = params.wavelength_max;
-
-    // Convert each wavelength to linear RGB via CIE XYZ
-    let rgb_short = wl_to_rgb(wl_short);
-    let rgb_mid   = wl_to_rgb(wl_mid);
-    let rgb_long  = wl_to_rgb(wl_long);
-
-    // Combine: each channel's count weighted by its spectral color
-    var col = (count_short * rgb_short + count_mid * rgb_mid + count_long * rgb_long)
-              * frame_norm * params.intensity_scale;
-
-    // White balance
+    var col = (count_short * wl_to_rgb(wl_short) + count_mid * wl_to_rgb(wl_mid) + count_long * wl_to_rgb(wl_long))
+              * params.intensity_scale / frames;
     col *= v3(params.white_balance_r, params.white_balance_g, params.white_balance_b);
+    col = max(v3(0.0), col * f32(res.x * res.y) * 2e-9 / 40.0 * pow(2.0, params.exposure));
 
-    // Normalization + exposure
-    let s_size = f32(res.x * res.y);
-    col = col * s_size * 2e-9 / 40.0;
-    col = col * pow(2.0, params.exposure);
-    col = max(v3(0.0), col);
-
-    // Saturation
     let lum = dot(col, v3(0.2126, 0.7152, 0.0722));
-    col = mix(v3(lum), col, params.saturation);
-    col = max(v3(0.0), col);
+    col = max(v3(0.0), mix(v3(lum), col, params.saturation));
 
-    // Dithering
     if (params.dithering > 0.0) {
         seed = idx + hash_u(time_data.frame);
-        let noise = (hash_f() * 2.0 - 1.0) * params.dithering * 0.01;
-        col += v3(noise);
+        col += v3((hash_f() * 2.0 - 1.0) * params.dithering * 0.01);
     }
 
     col = aces_tonemap(col);
     col = pow(max(v3(0.0), col), v3(1.0 / params.gamma));
-
     textureStore(output, vec2<i32>(id.xy), v4(col, 1.0));
 
-    // Clear buffer if animating
-    if (params.motion_speed > 0.0) {
-        atomicStore(&atomic_buffer[idx], 0u);
-        atomicStore(&atomic_buffer[idx + layer_offset], 0u);
-        atomicStore(&atomic_buffer[idx + 2u * layer_offset], 0u);
+    if (spinning) {
+        for (var k = 0u; k < 3u; k++) {
+            let i = idx + k * layer_offset;
+            atomicStore(&atomic_buffer[i], u32(f32(atomicLoad(&atomic_buffer[i])) * p));
+        }
     }
 }

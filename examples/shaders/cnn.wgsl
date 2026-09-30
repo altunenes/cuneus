@@ -14,7 +14,7 @@ struct CNNParams {
     brush_size: f32,        
     input_resolution: f32,  
     clear_canvas: i32,      
-    show_debug: i32,        
+    drawing: i32,        
     feature_maps_1: f32,    
     feature_maps_2: f32,    
     num_classes: f32,       
@@ -23,12 +23,14 @@ struct CNNParams {
     show_frequencies: i32,
     conv1_pool_size: f32,
     conv2_pool_size: f32,
-    _padding1: f32,
-    _padding2: f32,
-    _padding3: f32,
-    _padding4: f32,
-    _padding5: f32,
-    _padding6: f32,
+    fibers: f32,
+    yaw: f32,
+    elev: f32,
+    zoom: f32,
+    cam: f32,
+    bloom: f32,
+    expo: f32,
+    height: f32,
 }
 // Group 1: Primary Pass I/O & Parameters
 @group(1) @binding(0) var output: texture_storage_2d<rgba16float, write>;
@@ -44,48 +46,11 @@ struct CNNParams {
 @group(3) @binding(1) var<storage, read_write> conv1_data: array<f32>;       
 @group(3) @binding(2) var<storage, read_write> conv2_data: array<f32>;       
 @group(3) @binding(3) var<storage, read_write> fc_data: array<f32>;
-
-// Font utilities
-const CHAR_0: u32 = 48u;  // ASCII '0'
-
-// render single character
-fn ch(pp: vec2<f32>, pos: vec2<f32>, code: u32, size: f32) -> f32 {
-    let char_size_pixels = vec2<f32>(size, size);
-    let relative_pos = pp - pos;
-
-    // Check bounds
-    if (relative_pos.x < 0.0 || relative_pos.x >= char_size_pixels.x ||
-        relative_pos.y < 0.0 || relative_pos.y >= char_size_pixels.y) {
-        return 0.0;
-    }
-
-    // Calculate UV coordinates within the character cell
-    let local_uv = relative_pos / char_size_pixels;
-
-    // calc char pos in atlas grid (16x16)
-    let grid_x = code % 16u;
-    let grid_y = code / 16u;
-
-    // padding to avoid cell bleeding
-    let padding = 0.05;
-    let padded_uv = local_uv * (1.0 - 2.0 * padding) + vec2<f32>(padding);
-
-    // atlas UV coords
-    let cell_size_uv = vec2<f32>(1.0 / 16.0, 1.0 / 16.0);
-    let cell_offset = vec2<f32>(f32(grid_x), f32(grid_y)) * cell_size_uv;
-    let final_uv = cell_offset + padded_uv * cell_size_uv;
-
-    // sample font atlas with textureLoad
-    let atlas_coord = vec2<i32>(
-        i32(final_uv.x * font_texture_uniform.atlas_size.x),
-        i32(final_uv.y * font_texture_uniform.atlas_size.y)
-    );
-    let sample = textureLoad(t_font_texture_atlas, atlas_coord, 0);
-
-    // red channel font data + anti-alias
-    let font_alpha = sample.r * 0.8;
-    return smoothstep(0.1, 0.9, font_alpha);
-}
+@group(3) @binding(4) var<storage, read_write> hdr: array<vec2<u32>>;
+@group(3) @binding(5) var<storage, read_write> b1: array<vec2<u32>>;
+@group(3) @binding(6) var<storage, read_write> b2: array<vec2<u32>>;
+// half res, fixed-point rgb
+@group(3) @binding(7) var<storage, read_write> fib: array<atomic<u32>>;
 
 struct FontUniforms {
     atlas_size: vec2<f32>,
@@ -107,7 +72,6 @@ const CONV2_SIZE: u32 = 4u;
 const FEATURE_MAPS_1: u32 = 16u;
 const FEATURE_MAPS_2: u32 = 32u;
 const NUM_CLASSES: u32 = 47u;
-
 
 fn get_conv1_weight(fmap: i32, idx: i32) -> f32 {
   if(fmap==0){ let w=array<f32,25>(1.18588, 0.35615, -0.38243, -0.24644, 0.01405, 0.77449, -0.63260, -1.09675, -0.30755, 0.33544, -0.06384, -1.59731, -0.68631, 0.21995, 0.72299, -0.67751, -0.64746, 0.32838, 0.66092, 0.46369, 0.00305, 0.30506, 0.71913, 0.60292, -0.06305); return w[idx]; }
@@ -763,19 +727,9 @@ fn get_fc_weight(class_idx: i32, input_idx: i32) -> f32 {
 }
 fn get_fc_bias(idx: i32) -> f32 { let b=array<f32,47>(-0.29884, 0.38250, -0.40166, -0.11567, -0.49262, -0.08415, -0.51237, 0.03892, -0.44027, -0.33054, 0.33285, -0.33257, 0.34094, -0.17401, 0.67350, 0.22688, -0.79180, -0.53544, 0.72036, 0.55191, -0.55315, 0.61799, -0.21937, -0.06328, 0.32492, 0.06063, -0.47755, -0.47343, 0.23967, -0.23731, 0.30612, 0.23530, -0.29486, -0.58639, 0.02865, 0.03332, -0.06914, 0.20785, -0.00227, 0.06837, 0.03110, 0.36538, 0.07920, 0.33992, 0.31589, -0.05056, 0.04151); return b[idx]; }
 
-
-fn relu(x: f32) -> f32 {
-    return max(0.0, x);
-}
-
 fn normalize_input(value: f32) -> f32 {
     return (value - params.normalization_mean) / params.normalization_std;
 }
-
-fn render_digit(pos: vec2<f32>, char_pos: vec2<f32>, digit: u32, size: f32) -> f32 {
-    return ch(pos, char_pos, digit + CHAR_0, size);
-}
-
 
 fn canvas_index(x: i32, y: i32) -> u32 {
     return u32(y * i32(INPUT_SIZE) + x);
@@ -787,30 +741,6 @@ fn conv1_index(x: i32, y: i32, fmap: i32) -> u32 {
 
 fn conv2_index(x: i32, y: i32, fmap: i32) -> u32 {
     return u32(fmap * i32(CONV2_SIZE * CONV2_SIZE) + y * i32(CONV2_SIZE) + x);
-}
-
-fn screen_to_canvas(p: vec2<f32>, res: vec2<f32>) -> vec2<i32> {
-    let uv_mouse = vec2(p.x, 1.0 - p.y); 
-    let input_pos = vec2(0.05, 0.5);
-    let input_size = 0.20;
-    let aspect = res.x / res.y;
-    let min_x = input_pos.x;
-    let max_x = input_pos.x + input_size;
-    let half_height = input_size * 0.5 * aspect;
-    let min_y = input_pos.y - half_height;
-    let max_y = input_pos.y + half_height;
-    if (uv_mouse.x < min_x || uv_mouse.x > max_x || 
-        uv_mouse.y < min_y || uv_mouse.y > max_y) {
-        return vec2(-1); // Outside
-    }
-
-    let rel_x = (uv_mouse.x - min_x) / (max_x - min_x);
-    let rel_y = (uv_mouse.y - min_y) / (max_y - min_y);
-    
-    let pixel_x = i32(floor(rel_x * params.input_resolution));
-    let pixel_y = i32(floor(rel_y * params.input_resolution));
-    
-    return vec2(pixel_x, pixel_y);
 }
 
 fn sample_canvas(pos: vec2<i32>) -> f32 {
@@ -834,29 +764,23 @@ fn sample_conv2(pos: vec2<i32>, fmap: i32) -> f32 {
     return conv2_data[conv2_index(pos.x, pos.y, fmap)];
 }
 
+// right button clears
 @compute @workgroup_size(1, 1, 1)
 fn canvas_update(@builtin(global_invocation_id) id: vec3<u32>) {
     let pos = vec2<i32>(id.xy);
     if any(pos >= vec2(i32(INPUT_SIZE))) { return; }
-    
     let idx = canvas_index(pos.x, pos.y);
     let btns = mouse.buttons.x;
-    
     if params.clear_canvas == 1 || (btns & 2u) != 0u {
         canvas_data[idx] = 0.;
         return;
     }
-    
-    if (btns & 1u) != 0u {
-        let mouse_pos = mouse.position;
-        let canvas_pos = screen_to_canvas(mouse_pos, vec2<f32>(textureDimensions(output)));
-        if canvas_pos.x >= 0 {
-            let dist = length(vec2<f32>(canvas_pos - pos));
-            let radius = params.brush_size * params.input_resolution * 10.;
-            let intensity = 1. - smoothstep(0., radius, dist);
-            if intensity > 0. {
-                canvas_data[idx] = min(1., canvas_data[idx] + intensity * 0.3);
-            }
+    if (btns & 1u) != 0u && params.drawing == 1 {
+        let res = vec2<f32>(textureDimensions(output));
+        let mp = mouse_pad(res);
+        if mp.x >= 0.0 {
+            let intensity = 1. - smoothstep(0., brush_r(), length(mp - (vec2<f32>(pos) + 0.5)));
+            if intensity > 0. { canvas_data[idx] = min(1., canvas_data[idx] + intensity * 0.3); }
         }
     }
 }
@@ -942,231 +866,589 @@ fn fully_connected(@builtin(global_invocation_id) id: vec3<u32>) {
     
     fc_data[class_idx] = sum;
 }
-fn get_weight_color(w: f32) -> vec3<f32> {
-    // Visualization: Red = Negative, Black = Zero, Cyan = Positive
-    let val = clamp(w * 2.0, -1.0, 1.0);
-    if (val < 0.0) {
-        return mix(vec3(0.0), vec3(1.0, 0.2, 0.2), -val);
-    } else {
-        return mix(vec3(0.0), vec3(0.2, 1.0, 1.0), val);
+alias v2 = vec2<f32>; alias v3 = vec3<f32>; alias v4 = vec4<f32>;
+const MAXPIX: u32 = 3840u * 2400u;
+const FHP: u32 = MAXPIX / 4u + 4096u;
+const FIX: f32 = 1024.0;
+// fc_data after the 47 logits
+const F_TOP: u32 = 48u;
+const F_PROB: u32 = 51u;
+const F_MAX: u32 = 54u;
+const F_SUM: u32 = 55u;
+const F_PICK: u32 = 56u;
+const F_MOUSE: u32 = 60u;
+const F_INK: u32 = 62u;
+const F_CAM: u32 = 64u;
+// fiber bundles: input -> L1, L1 -> L2, L2 -> averages, averages -> classes
+const FIB1: u32 = 2304u;
+const FIB2: u32 = 10496u;
+const FIB3: u32 = 11008u;
+const FIBN: u32 = 12512u;
+
+// tiles of m x m neurons, one empty slot between tiles
+struct Layer { org: v2, cell: f32, m: i32, cols: i32, rows: i32, n: i32, hs: f32 };
+fn layer(l: i32) -> Layer {
+    switch (l) {
+        case 0: { return Layer(v2(0.0, -14.0), 1.0, 28, 1, 1, 1, 0.25); }
+        case 1: { return Layer(v2(40.0, -14.0), 0.55, 12, 4, 4, 16, 3.0); }
+        case 2: { return Layer(v2(80.0, -14.6), 0.75, 4, 4, 8, 32, 4.0); }
+        case 3: { return Layer(v2(106.0, -12.0), 1.6, 1, 4, 8, 32, 6.0); }
+        default: { return Layer(v2(129.0, -13.5), 1.8, 1, 6, 8, 47, 10.0); }
+    }
+}
+fn layer_col(l: i32) -> v3 {
+    var c = array<v3, 5>(v3(0.9, 0.95, 1.0), v3(1.0, 0.55, 0.15), v3(0.2, 0.8, 1.0), v3(0.75, 0.4, 1.0), v3(1.0, 0.8, 0.3));
+    return c[clamp(l, 0, 4)];
+}
+fn slots(L: Layer) -> vec2<i32> { return vec2<i32>(L.cols, L.rows) * (L.m + 1) - 1; }
+fn top_h(L: Layer) -> f32 { return L.cell * 0.3 + 1.5 * L.hs * params.height + 0.01; }
+
+// (tile, x, y), tile < 0 in a gap
+fn neuron(l: i32, s: vec2<i32>) -> vec3<i32> {
+    let L = layer(l);
+    let u = s % (L.m + 1);
+    let t = s / (L.m + 1);
+    let tile = t.y * L.cols + t.x;
+    if (u.x == L.m || u.y == L.m || tile >= L.n) { return vec3<i32>(-1); }
+    return vec3<i32>(tile, u.x, L.m - 1 - u.y);
+}
+fn prob(c: i32) -> f32 { return exp(fc_data[c] - fc_data[F_MAX]) / max(fc_data[F_SUM], 1e-6); }
+fn gap_avg(k: i32) -> f32 {
+    var s = 0.0;
+    for (var i = 0; i < 16; i++) { s += conv2_data[u32(k * 16 + i)]; }
+    return s / 16.0;
+}
+// roughly 0..1
+fn act(l: i32, nr: vec3<i32>) -> f32 {
+    switch (l) {
+        case 0: { return sample_canvas(vec2<i32>(nr.y, 27 - nr.z)); }
+        case 1: { return sample_conv1(nr.yz, nr.x) / 3.0; }
+        case 2: { return sample_conv2(nr.yz, nr.x) / 4.0; }
+        case 3: { return gap_avg(nr.x) / 2.5; }
+        default: { return prob(nr.x); }
+    }
+}
+fn box_h(l: i32, a: f32) -> f32 { let L = layer(l); return L.cell * 0.3 + clamp(a, 0.0, 1.5) * L.hs * params.height; }
+fn anchor(l: i32, t: i32, c: v2) -> v3 {
+    let L = layer(l);
+    let s = v2(vec2<i32>(t % L.cols, t / L.cols) * (L.m + 1)) + v2(c.x, f32(L.m) - c.y);
+    let q = clamp(vec2<i32>(floor(c)), vec2<i32>(0), vec2<i32>(L.m - 1));
+    return v3(L.org + s * L.cell, box_h(l, act(l, vec3<i32>(t, q))));
+}
+
+struct NHit { t: f32, n: v3, l: i32, s: vec2<i32> };
+
+fn box_hit(ro: v3, rd: v3, lo: v3, hi: v3) -> v4 {
+    let inv = 1.0 / select(rd, v3(1e-8), abs(rd) < v3(1e-8));
+    let t1 = (lo - ro) * inv;
+    let t2 = (hi - ro) * inv;
+    let tn = min(t1, t2);
+    let tf = max(t1, t2);
+    let t0 = max(max(tn.x, tn.y), tn.z);
+    let t3 = min(min(tf.x, tf.y), tf.z);
+    if (t3 < t0 || t0 <= 0.0) { return v4(-1.0); }
+    var n = v3(0.0, 0.0, -sign(rd.z));
+    if (tn.x >= tn.y && tn.x >= tn.z) { n = v3(-sign(rd.x), 0.0, 0.0); } else if (tn.y >= tn.z) { n = v3(0.0, -sign(rd.y), 0.0); }
+    return v4(t0, n);
+}
+
+// towers stay inside their slots, so the first hit is the nearest
+fn trace_layer(ro: v3, rd: v3, l: i32, best: ptr<function, NHit>) {
+    let L = layer(l);
+    let ns = slots(L);
+    let inv = 1.0 / select(rd, v3(1e-8), abs(rd) < v3(1e-8));
+    let lo = v3(L.org, 0.0);
+    let hi = v3(L.org + v2(ns) * L.cell, top_h(L));
+    let tn = min((lo - ro) * inv, (hi - ro) * inv);
+    let tf = max((lo - ro) * inv, (hi - ro) * inv);
+    let te = max(max(max(tn.x, tn.y), tn.z), 0.0);
+    let tx = min(min(tf.x, tf.y), tf.z);
+    if (tx <= te || te > (*best).t) { return; }
+    let q = ro.xy + rd.xy * (te + 1e-3);
+    var c = clamp(vec2<i32>(floor((q - L.org) / L.cell)), vec2<i32>(0), ns - 1);
+    let stp = select(vec2<i32>(-1), vec2<i32>(1), rd.xy > v2(0.0));
+    var tm = (L.org + (v2(c) + select(v2(0.0), v2(1.0), rd.xy > v2(0.0))) * L.cell - ro.xy) * inv.xy;
+    let dt = abs(L.cell * inv.xy);
+    for (var i = 0; i < 160; i++) {
+        if (any(c < vec2<i32>(0)) || any(c >= ns)) { break; }
+        let nr = neuron(l, c);
+        if (nr.x >= 0) {
+            let blo = L.org + (v2(c) + 0.12) * L.cell;
+            let b = box_hit(ro, rd, v3(blo, 0.0), v3(blo + 0.76 * L.cell, box_h(l, act(l, nr))));
+            if (b.x > 0.0) {
+                if (b.x < (*best).t) { *best = NHit(b.x, b.yzw, l, c); }
+                return;
+            }
+        }
+        if (min(tm.x, tm.y) > tx) { break; }
+        if (tm.x < tm.y) { tm.x += dt.x; c.x += stp.x; } else { tm.y += dt.y; c.y += stp.y; }
+    }
+}
+fn trace_net(ro: v3, rd: v3) -> NHit {
+    var best = NHit(1e30, v3(0.0, 0.0, 1.0), -1, vec2<i32>(0));
+    for (var l = 0; l < 5; l++) { trace_layer(ro, rd, l, &best); }
+    return best;
+}
+
+struct Cam { ro: v3, f: v3, rt: v3, up: v3 };
+fn cam() -> Cam {
+    let aim = v3(74.0, 0.0, 4.0);
+    let el = radians(clamp(params.elev, 5.0, 85.0));
+    let yw = radians(params.yaw);
+    let ro = aim + 150.0 / max(params.zoom, 0.1) * v3(sin(yw) * cos(el), -cos(yw) * cos(el), sin(el));
+    let f = normalize(aim - ro);
+    let rt = normalize(cross(f, v3(0.0, 0.0, 1.0)));
+    return Cam(ro, f, rt, cross(rt, f));
+}
+fn cam_ray(c: Cam, px: v2, D: v2) -> v3 {
+    let sp = (px - 0.5 * D) / D.y * 0.8;
+    return normalize(c.f + sp.x * c.rt - sp.y * c.up);
+}
+// distance < 0 behind the camera
+fn project(c: Cam, p: v3, D: v2) -> v3 {
+    let d = p - c.ro;
+    let z = dot(d, c.f);
+    if (z <= 0.1) { return v3(-1.0); }
+    return v3(v2(dot(d, c.rt), -dot(d, c.up)) / z * D.y / 0.8 + 0.5 * D, length(d));
+}
+// negative off the pad
+fn pad_hit(px: v2, D: v2) -> v2 {
+    let c = cam();
+    let rd = cam_ray(c, px, D);
+    let L = layer(0);
+    if (rd.z >= 0.0) { return v2(-1.0); }
+    let q = (c.ro.xy + rd.xy * ((L.cell * 0.3 - c.ro.z) / rd.z) - L.org) / L.cell;
+    if (any(q < v2(0.0)) || any(q >= v2(28.0))) { return v2(-1.0); }
+    return q;
+}
+// xy top-left, z side
+fn pad2d_rect(D: v2) -> v3 { let s = floor(0.3 * D.y); return v3(16.0, D.y - s - 16.0, s); }
+// row 0 at the bottom like the canvas; negative off the pad
+fn pad2d(px: v2, D: v2) -> v2 {
+    let r = pad2d_rect(D);
+    let q = (px - r.xy) / r.z * 28.0;
+    if (any(q < v2(0.0)) || any(q >= v2(28.0))) { return v2(-1.0); }
+    return v2(q.x, 28.0 - q.y);
+}
+fn mouse_pad(D: v2) -> v2 {
+    let m = pad2d(mouse.position * D, D);
+    if (m.x >= 0.0) { return m; }
+    return pad_hit(mouse.position * D, D);
+}
+fn brush_r() -> f32 { return params.brush_size * params.input_resolution * 10.0; }
+
+// the last conv cells see 16 x 16 input pixels, stride 4
+fn cam_at(p: v2) -> f32 {
+    let g = clamp((p + 0.5 - 7.5) / 4.0, v2(0.0), v2(3.0));
+    let i = vec2<i32>(min(floor(g), v2(2.0)));
+    let f = g - v2(i);
+    let a = fc_data[F_CAM + u32(i.y * 4 + i.x)];
+    let b = fc_data[F_CAM + u32(i.y * 4 + i.x + 1)];
+    let c = fc_data[F_CAM + u32((i.y + 1) * 4 + i.x)];
+    let d = fc_data[F_CAM + u32((i.y + 1) * 4 + i.x + 1)];
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+fn heat(x: f32) -> v3 { return clamp(v3(1.5 * x, 1.5 * x - 0.5, 3.0 * x - 2.0), v3(0.0), v3(1.0)) + v3(0.0, 0.0, 0.25 * (1.0 - x)); }
+
+// xy min, zw max; empty when none
+fn pick_rf() -> v4 {
+    let l = i32(fc_data[F_PICK]);
+    let nr = neuron(max(l, 0), vec2<i32>(i32(fc_data[F_PICK + 1u]), i32(fc_data[F_PICK + 2u])));
+    if (l == 1) { let o = v2(nr.yz) * 2.0; return v4(o, o + 5.0); }
+    if (l == 2) { let o = v2(nr.yz) * 4.0; return v4(o, o + 15.0); }
+    if (l >= 3) { return v4(0.0, 0.0, 27.0, 27.0); }
+    return v4(1.0, 1.0, -1.0, -1.0);
+}
+fn in_rect(p: v2, r: v4) -> bool { return all(p >= r.xy) && all(p <= r.zw); }
+
+fn class_char(idx: i32) -> u32 {
+    if (idx <= 9) { return 48u + u32(idx); }
+    if (idx <= 35) { return 65u + u32(idx - 10); }
+    var lower = array<u32, 11>(97u, 98u, 100u, 101u, 102u, 103u, 104u, 110u, 113u, 114u, 116u);
+    return lower[clamp(idx - 36, 0, 10)];
+}
+// bilinear, uv y down
+fn glyph(code: u32, uv: v2) -> f32 {
+    if (any(uv < v2(0.0)) || any(uv >= v2(1.0))) { return 0.0; }
+    let a = (v2(f32(code % 16u), f32(code / 16u)) + 0.05 + uv * 0.9) / 16.0 * font_texture_uniform.atlas_size - 0.5;
+    let i = clamp(vec2<i32>(floor(a)), vec2<i32>(0), vec2<i32>(font_texture_uniform.atlas_size) - 2);
+    let f = fract(a);
+    let s00 = textureLoad(t_font_texture_atlas, i, 0).r;
+    let s10 = textureLoad(t_font_texture_atlas, i + vec2<i32>(1, 0), 0).r;
+    let s01 = textureLoad(t_font_texture_atlas, i + vec2<i32>(0, 1), 0).r;
+    let s11 = textureLoad(t_font_texture_atlas, i + vec2<i32>(1, 1), 0).r;
+    return smoothstep(0.1, 0.9, mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y) * 0.8);
+}
+// asp = box width / height
+fn percent(uv: v2, pr: f32, asp: f32) -> f32 {
+    let pc = u32(round(clamp(pr, 0.0, 1.0) * 100.0));
+    var d = array<u32, 4>(pc / 100u, (pc / 10u) % 10u, pc % 10u, 37u);
+    let first = select(select(2u, 1u, pc >= 10u), 0u, pc >= 100u);
+    let n = 4u - first;
+    let x = uv.x * asp - (asp - f32(n) * 0.55) * 0.5;
+    if (x < 0.0 || any(uv < v2(0.0)) || uv.y >= 1.0) { return 0.0; }
+    let k = u32(floor(x / 0.55));
+    if (k >= n) { return 0.0; }
+    var code = 48u + d[first + k];
+    if (first + k == 3u) { code = 37u; }
+    return glyph(code, v2(fract(x / 0.55), uv.y));
+}
+
+@compute @workgroup_size(1, 1, 1)
+fn analyze(@builtin(global_invocation_id) id: vec3<u32>) {
+    var mx = -1e9;
+    for (var i = 0; i < 47; i++) { mx = max(mx, fc_data[i]); }
+    var sum = 0.0;
+    for (var i = 0; i < 47; i++) { sum += exp(fc_data[i] - mx); }
+    fc_data[F_MAX] = mx;
+    fc_data[F_SUM] = sum;
+    var top = vec3<i32>(0);
+    var tp = v3(-1.0);
+    for (var i = 0; i < 47; i++) {
+        let pr = exp(fc_data[i] - mx) / sum;
+        if (pr > tp.x) { tp = v3(pr, tp.xy); top = vec3<i32>(i, top.xy); }
+        else if (pr > tp.y) { tp = v3(tp.x, pr, tp.y); top = vec3<i32>(top.x, i, top.y); }
+        else if (pr > tp.z) { tp.z = pr; top.z = i; }
+    }
+    for (var k = 0u; k < 3u; k++) { fc_data[F_TOP + k] = f32(top[k]); fc_data[F_PROB + k] = tp[k]; }
+    // CAM (Zhou et al. 2016), exact under global average pooling
+    var cm: array<f32, 16>;
+    var cmax = 1e-4;
+    for (var c = 0; c < 16; c++) {
+        var s = 0.0;
+        for (var k = 0; k < 32; k++) { s += get_fc_weight(top.x, k) * conv2_data[u32(k * 16 + c)]; }
+        cm[c] = max(s, 0.0);
+        cmax = max(cmax, cm[c]);
+    }
+    for (var c = 0; c < 16; c++) { fc_data[F_CAM + u32(c)] = cm[c] / cmax; }
+    var ink = 0.0;
+    for (var i = 0u; i < 784u; i++) { ink += canvas_data[i]; }
+    fc_data[F_INK] = f32(ink > 2.0);
+    let res = v2(textureDimensions(output));
+    let mp = mouse_pad(res);
+    fc_data[F_MOUSE] = mp.x;
+    fc_data[F_MOUSE + 1u] = mp.y;
+    fc_data[F_PICK] = -1.0;
+    if (mp.x < 0.0) {
+        let c = cam();
+        let h = trace_net(c.ro, cam_ray(c, mouse.position * res, res));
+        if (h.l > 0) {
+            fc_data[F_PICK] = f32(h.l);
+            fc_data[F_PICK + 1u] = f32(h.s.x);
+            fc_data[F_PICK + 2u] = f32(h.s.y);
+        }
     }
 }
 
+fn ray_seg(ro: v3, rd: v3, a: v3, b: v3) -> v2 {
+    let ba = b - a;
+    let oa = ro - a;
+    let bb = dot(ba, ba);
+    let rb = dot(rd, ba);
+    let den = bb - rb * rb;
+    var s = clamp((dot(oa, ba) - rb * dot(oa, rd)) / max(den, 1e-6), 0.0, 1.0);
+    let t = max(dot(a + ba * s - ro, rd), 0.0);
+    return v2(length(ro + rd * t - a - ba * s), t);
+}
+
+fn hologram(c: Cam, rd: v3, tmax: f32) -> v3 {
+    if (fc_data[F_INK] < 0.5) { return v3(0.0); }
+    let ctr = v3(138.9, 6.0, 30.0 * clamp(params.height, 0.5, 2.0));
+    let sz = 18.0;
+    var col = v3(0.0);
+    let win = i32(fc_data[F_TOP]);
+    let w = anchor(4, win, v2(0.5));
+    let bm = ray_seg(c.ro, rd, w, ctr - c.up * sz * 0.52);
+    if (bm.y < tmax) { col += v3(1.0, 0.85, 0.5) * exp(-bm.x * bm.x / 0.04) * 3.0 + v3(1.0, 0.7, 0.3) * exp(-bm.x * bm.x / 1.2) * 0.25; }
+    let th = dot(ctr - c.ro, c.f) / dot(rd, c.f);
+    if (th <= 0.0 || th > tmax) { return col; }
+    let q = c.ro + rd * th - ctr;
+    let uv = v2(dot(q, c.rt), -dot(q, c.up)) / sz + 0.5;
+    if (any(uv < v2(0.0)) || any(uv > v2(1.0))) { return col; }
+    let gold = v3(1.0, 0.8, 0.35);
+    let scan = 0.8 + 0.2 * sin(uv.y * 260.0 - time_data.time * 3.0);
+    var a = glyph(class_char(win), (uv - v2(0.18, 0.0)) / 0.64) * 3.2;
+    a += percent((uv - v2(0.3, 0.66)) / v2(0.4, 0.12), fc_data[F_PROB], 3.33) * 1.6;
+    for (var k = 1u; k < 3u; k++) {
+        let o = v2(select(0.12, 0.66, k == 2u), 0.83);
+        a += glyph(class_char(i32(fc_data[F_TOP + k])), (uv - o) / 0.11) * 0.7;
+        a += percent((uv - o - v2(0.11, 0.02)) / v2(0.2, 0.07), fc_data[F_PROB + k], 2.86) * 0.5;
+    }
+    let e = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+    col += gold * (a * scan + smoothstep(0.012, 0.0, e) * 0.6 + 0.025);
+    return col;
+}
+
+fn net_view(px: v2, D: v2) -> v4 {
+    let c = cam();
+    let ro = c.ro;
+    let rd = cam_ray(c, px, D);
+    let h = trace_net(ro, rd);
+    let l = normalize(v3(-0.4, -0.6, 0.7));
+    let sky = mix(v3(0.01, 0.012, 0.02), v3(0.03, 0.035, 0.06), clamp(rd.z * 2.0 + 0.5, 0.0, 1.0));
+    let mp = v2(fc_data[F_MOUSE], fc_data[F_MOUSE + 1u]);
+    var col: v3;
+    var depth = 6e4;
+    if (h.l < 0) {
+        if (rd.z >= 0.0) { return v4(sky + hologram(c, rd, 1e30), depth); }
+        let tf = -ro.z / rd.z;
+        depth = tf;
+        let fp = ro + rd * tf;
+        col = v3(0.006);
+        for (var k = 0; k < 5; k++) {
+            let L = layer(k);
+            let q = (fp.xy - L.org) / (v2(slots(L)) * L.cell);
+            if (all(q > v2(-0.03)) && all(q < v2(1.03))) {
+                let e = min(min(q.x + 0.03, 1.03 - q.x), min(q.y + 0.03, 1.03 - q.y)) * 30.0;
+                col = v3(0.018) + layer_col(k) * select(0.06, 0.18, k == 0) * smoothstep(0.4, 0.0, e);
+            }
+        }
+        col = mix(col, sky, clamp(tf / 500.0, 0.0, 1.0));
+    } else {
+        let pos = ro + rd * h.t;
+        depth = h.t;
+        let nr = neuron(h.l, h.s);
+        let a = act(h.l, nr);
+        var base = layer_col(h.l);
+        var glow = pow(clamp(a, 0.0, 1.5), 1.3) * 2.5;
+        let top = h.n.z > 0.5;
+        let L = layer(h.l);
+        if (h.l == 0) {
+            let cm = cam_at(v2(nr.yz));
+            base = mix(v3(0.9), heat(cm), clamp(params.cam, 0.0, 1.0) * smoothstep(0.05, 0.3, cm) * smoothstep(0.0, 0.2, a));
+            glow = a * 1.1 + 0.03;
+        }
+        if (h.l == 4) {
+            glow = sqrt(a) * 4.0;
+            if (nr.x == i32(fc_data[F_TOP])) { base = v3(1.0, 0.95, 0.8); }
+        }
+        let pl = i32(fc_data[F_PICK]);
+        var hi = 0.0;
+        if (pl == h.l && all(vec2<i32>(i32(fc_data[F_PICK + 1u]), i32(fc_data[F_PICK + 2u])) == h.s)) { hi = 1.0; }
+        if (h.l == 0 && in_rect(v2(nr.yz), pick_rf())) { hi = 0.5; }
+        if (h.l == 1 && pl == 2) {
+            let o = v2(neuron(2, vec2<i32>(i32(fc_data[F_PICK + 1u]), i32(fc_data[F_PICK + 2u]))).yz) * 2.0;
+            if (in_rect(v2(nr.yz), v4(o, o + 5.0))) { hi = 0.5; }
+        }
+        let ndl = max(dot(h.n, l), 0.0);
+        col = base * (0.04 + 0.12 * ndl) + base * glow * select(0.35, 1.0, top);
+        col += v3(0.35, 0.6, 1.0) * hi * select(0.4, 1.2, top);
+        let lq = fract((pos.xy - L.org) / L.cell) - 0.5;
+        col += base * 0.25 * smoothstep(0.33, 0.38, max(abs(lq.x), abs(lq.y))) * f32(top);
+        if (h.l == 4 && top) {
+            let g = glyph(class_char(nr.x), v2(lq.x, -lq.y) / 0.76 + 0.5);
+            col = mix(col, select(v3(0.6), v3(0.02), glow > 1.0), g * 0.85);
+        }
+    }
+    if (mp.x >= 0.0 && depth < 6e4) {
+        let L = layer(0);
+        let q = ((ro + rd * depth).xy - L.org) / L.cell;
+        col += v3(0.4, 0.7, 1.0) * smoothstep(0.18, 0.0, abs(length(q - mp) - brush_r())) * 1.5;
+    }
+    return v4(col + hologram(c, rd, depth), depth);
+}
+
+fn pack_px(c: v3, d: f32) -> vec2<u32> { return vec2<u32>(pack2x16float(c.rg), pack2x16float(v2(c.b, d))); }
+fn unpack_px(q: vec2<u32>) -> v3 { return v3(unpack2x16float(q.x), unpack2x16float(q.y).x); }
+fn aces(x: v3) -> v3 { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), v3(0.0), v3(1.0)); }
+fn qdims(d: vec2<u32>) -> vec2<u32> { return (d + 3u) / 4u; }
+fn hdims(d: vec2<u32>) -> vec2<u32> { return (d + 1u) / 2u; }
+
+@compute @workgroup_size(16, 16, 1)
+fn scene3d(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let dims = textureDimensions(output);
+    if (gid.x >= dims.x || gid.y >= dims.y || dims.x * dims.y > MAXPIX) { return; }
+    var c = net_view(v2(gid.xy) + 0.5, v2(dims));
+    c = select(c, v4(0.0, 0.0, 0.0, 6e4), c != c);
+    hdr[gid.y * dims.x + gid.x] = pack_px(clamp(c.rgb, v3(0.0), v3(1000.0)), min(c.w, 6e4));
+}
+
+@compute @workgroup_size(16, 16, 1)
+fn fiber_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let hd = hdims(textureDimensions(output));
+    if (gid.x >= hd.x || gid.y >= hd.y) { return; }
+    let i = gid.y * hd.x + gid.x;
+    for (var k = 0u; k < 3u; k++) { atomicStore(&fib[k * FHP + i], 0u); }
+}
+
+// one fiber per thread, depth-tested, splatted at half res
+@compute @workgroup_size(64, 1, 1)
+fn fibers(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let id = gid.x;
+    let dims = textureDimensions(output);
+    if (id >= FIBN || params.fibers <= 0.0 || dims.x * dims.y > MAXPIX) { return; }
+    var p0: v3;
+    var p1: v3;
+    var b = 0.0;
+    var l0 = 0;
+    if (id < FIB1) {
+        let k = i32(id / 144u);
+        let x = i32(id % 144u) % 12;
+        let y = i32(id % 144u) / 12;
+        // only where there's ink
+        let ink = sample_canvas(vec2<i32>(2 * x + 2, 25 - 2 * y)) + sample_canvas(vec2<i32>(2 * x + 3, 24 - 2 * y));
+        b = act(1, vec3<i32>(k, x, y)) * clamp(ink, 0.0, 1.0) * 0.12;
+        p0 = anchor(0, 0, v2(f32(2 * x) + 3.0, f32(2 * y) + 3.0));
+        p1 = anchor(1, k, v2(f32(x), f32(y)) + 0.5);
+    } else if (id < FIB2) {
+        let g = i32(id - FIB1);
+        let n = g / 16;
+        let k = g % 16;
+        let j = n / 16;
+        let x = (n % 16) % 4;
+        let y = (n % 16) / 4;
+        b = act(2, vec3<i32>(j, x, y)) * clamp(act(1, vec3<i32>(k, 2 * x + 2, 2 * y + 2)) * 1.5, 0.0, 1.0) * 0.06;
+        p0 = anchor(1, k, v2(f32(2 * x) + 3.0, f32(2 * y) + 3.0));
+        p1 = anchor(2, j, v2(f32(x), f32(y)) + 0.5);
+        l0 = 1;
+    } else if (id < FIB3) {
+        let g = i32(id - FIB2);
+        let j = g / 16;
+        let x = (g % 16) % 4;
+        let y = (g % 16) / 4;
+        b = act(2, vec3<i32>(j, x, y)) * 0.35;
+        p0 = anchor(2, j, v2(f32(x), f32(y)) + 0.5);
+        p1 = anchor(3, j, v2(0.5));
+        l0 = 2;
+    } else {
+        let g = i32(id - FIB3);
+        let k = g / 47;
+        let cl = g % 47;
+        b = max(get_fc_weight(cl, k) * gap_avg(k), 0.0) * 0.25 * (0.05 + 3.0 * prob(cl));
+        p0 = anchor(3, k, v2(0.5));
+        p1 = anchor(4, cl, v2(0.5));
+        l0 = 3;
+    }
+    b = min(b, 1.5) * params.fibers;
+    if (b < 0.004) { return; }
+    let c = cam();
+    let D = v2(dims);
+    let hd = hdims(dims);
+    let lift = v3(0.0, 0.0, 0.3 * length(p1 - p0) + 2.0);
+    let c0 = p0 + lift;
+    let c1 = p1 + lift;
+    // about one sample per half-res pixel
+    let s0 = project(c, p0, D);
+    let sm = project(c, 0.125 * (p0 + p1) + 0.375 * (c0 + c1), D);
+    let s1 = project(c, p1, D);
+    let n = u32(clamp((length(sm.xy - s0.xy) + length(s1.xy - sm.xy)) * 0.6, 8.0, 240.0));
+    let ph = f32(hu(id) >> 8u) / 16777216.0 * 6.2832;
+    let ca = layer_col(l0);
+    let cb = layer_col(l0 + 1);
+    for (var i = 0u; i < n; i++) {
+        let s = (f32(i) + 0.5) / f32(n);
+        let u = 1.0 - s;
+        let p = u * u * u * p0 + 3.0 * u * u * s * c0 + 3.0 * u * s * s * c1 + s * s * s * p1;
+        let pr = project(c, p, D);
+        if (pr.z < 0.0 || any(pr.xy < v2(0.0)) || any(pr.xy >= D - 1.0)) { continue; }
+        let fp = vec2<u32>(pr.xy);
+        if (pr.z > unpack2x16float(hdr[fp.y * dims.x + fp.x].y).y + 0.5) { continue; }
+        let pulse = 0.15 + 0.85 * pow(0.5 + 0.5 * sin(6.2832 * (s * 2.0 - time_data.time * 0.7) + ph), 8.0);
+        let v = mix(ca, cb, s) * b * pulse * 0.35 * FIX;
+        let hp = pr.xy * 0.5 - 0.5;
+        let hi = vec2<u32>(max(floor(hp), v2(0.0)));
+        let f = fract(hp);
+        var w = array<f32, 4>((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+        for (var k = 0u; k < 4u; k++) {
+            let q = min(hi + vec2<u32>(k & 1u, k >> 1u), hd - 1u);
+            let o = q.y * hd.x + q.x;
+            atomicAdd(&fib[o], u32(v.r * w[k]));
+            atomicAdd(&fib[FHP + o], u32(v.g * w[k]));
+            atomicAdd(&fib[2u * FHP + o], u32(v.b * w[k]));
+        }
+    }
+}
+fn hu(a0: u32) -> u32 { var a = a0; a ^= a >> 16u; a *= 0x7feb352du; a ^= a >> 15u; a *= 0x846ca68bu; a ^= a >> 16u; return a; }
+
+fn scene_px(px: vec2<u32>, dims: vec2<u32>) -> v3 {
+    let hd = hdims(dims);
+    let x = clamp((v2(px) + 0.5) * 0.5 - 0.5, v2(0.0), v2(hd) - 1.0);
+    let i = vec2<u32>(floor(x));
+    let f = fract(x);
+    let j = min(i + 1u, hd - 1u);
+    var fc = v3(0.0);
+    for (var k = 0u; k < 4u; k++) {
+        let q = vec2<u32>(select(i.x, j.x, (k & 1u) == 1u), select(i.y, j.y, k >= 2u));
+        let o = q.y * hd.x + q.x;
+        let w = select(1.0 - f.x, f.x, (k & 1u) == 1u) * select(1.0 - f.y, f.y, k >= 2u);
+        fc += v3(f32(atomicLoad(&fib[o])), f32(atomicLoad(&fib[FHP + o])), f32(atomicLoad(&fib[2u * FHP + o]))) * w;
+    }
+    return unpack_px(hdr[px.y * dims.x + px.x]) + fc / FIX;
+}
+
+// bloom: Karis 4x4 above white, then a separable gaussian at quarter res
+@compute @workgroup_size(16, 16, 1)
+fn bloom_down(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let dims = textureDimensions(output);
+    let q = qdims(dims);
+    if (gid.x >= q.x || gid.y >= q.y || dims.x * dims.y > MAXPIX) { return; }
+    var c = v3(0.0);
+    var ws = 0.0;
+    for (var k = 0u; k < 16u; k++) {
+        let s = scene_px(min(gid.xy * 4u + vec2<u32>(k & 3u, k >> 2u), dims - 1u), dims);
+        let w = 1.0 / (1.0 + max(s.r, max(s.g, s.b)));
+        c += s * w;
+        ws += w;
+    }
+    c /= ws;
+    b1[gid.y * q.x + gid.x] = pack_px(c * smoothstep(0.6, 1.3, max(c.r, max(c.g, c.b)) * params.expo), 0.0);
+}
+fn blur(src_b1: bool, gid: vec2<u32>, dir: vec2<i32>) {
+    let dims = textureDimensions(output);
+    let q = qdims(dims);
+    if (gid.x >= q.x || gid.y >= q.y || dims.x * dims.y > MAXPIX) { return; }
+    var c = v3(0.0);
+    var ws = 0.0;
+    for (var k = -12; k <= 12; k++) {
+        let s = clamp(vec2<i32>(gid) + dir * k, vec2<i32>(0), vec2<i32>(q) - 1);
+        let i = u32(s.y) * q.x + u32(s.x);
+        let w = exp(-f32(k * k) / 50.0);
+        c += unpack_px(select(b2[i], b1[i], src_b1)) * w;
+        ws += w;
+    }
+    let o = gid.y * q.x + gid.x;
+    if (src_b1) { b2[o] = pack_px(c / ws, 0.0); } else { b1[o] = pack_px(c / ws, 0.0); }
+}
+@compute @workgroup_size(16, 16, 1) fn bloom_h(@builtin(global_invocation_id) gid: vec3<u32>) { blur(true, gid.xy, vec2<i32>(1, 0)); }
+@compute @workgroup_size(16, 16, 1) fn bloom_v(@builtin(global_invocation_id) gid: vec3<u32>) { blur(false, gid.xy, vec2<i32>(0, 1)); }
+fn bloom_at(qp: v2, dims: vec2<u32>) -> v3 {
+    let q = qdims(dims);
+    let x = clamp(qp - 0.5, v2(0.0), v2(q) - 1.0);
+    let i = vec2<u32>(floor(x));
+    let f = fract(x);
+    let j = min(i + 1u, q - 1u);
+    return mix(mix(unpack_px(b1[i.y * q.x + i.x]), unpack_px(b1[i.y * q.x + j.x]), f.x),
+               mix(unpack_px(b1[j.y * q.x + i.x]), unpack_px(b1[j.y * q.x + j.x]), f.x), f.y);
+}
 
 @compute @workgroup_size(16, 16, 1)
 fn main_image(@builtin(global_invocation_id) id: vec3<u32>) {
     let res = textureDimensions(output);
     if any(id.xy >= res) { return; }
-    
-    let uv = vec2<f32>(f32(id.x), f32(res.y - id.y)) / vec2<f32>(res);
-    
-    var color = vec3(0.05, 0.05, 0.08);
-
-    let input_pos = vec2(0.05, 0.5);
-    let input_size = 0.20;
-    let aspect = f32(res.x) / f32(res.y);
-    let input_rect_min = vec2(input_pos.x, input_pos.y - input_size * 0.5 * aspect);
-    let input_rect_max = vec2(input_pos.x + input_size, input_pos.y + input_size * 0.5 * aspect);
-
-    if all(uv >= input_rect_min) && all(uv <= input_rect_max) {
-        let local_uv = (uv - input_rect_min) / (input_rect_max - input_rect_min);
-        
-        // Draw Border
-        let border = 0.02;
-        if any(local_uv < vec2(border)) || any(local_uv > vec2(1.0 - border)) {
-             color = vec3(0.5);
-        } else {
-            // Sample actual canvas data
-            let content_uv = (local_uv - border) / (1.0 - 2.0 * border);
-            let canvas_coord = vec2<i32>(content_uv * params.input_resolution);
-            let val = sample_canvas(canvas_coord);
-            color = mix(vec3(0.0), vec3(1.0), val);
-        }
-        
-        // Draw Mouse Cursor Overlay
-        let mouse_uv = vec2<f32>(mouse.position.x, 1.0 - mouse.position.y);
-        if (distance(uv, mouse_uv) < 0.005) {
-             color = vec3(1.0, 0.2, 0.2);
+    var c: v3;
+    if (res.x * res.y > MAXPIX) { c = net_view(v2(id.xy) + 0.5, v2(res)).rgb; } else {
+        c = scene_px(id.xy, res) + bloom_at((v2(id.xy) + 0.5) / 4.0, res) * params.bloom;
+    }
+    var col = aces(c * params.expo);
+    let D = v2(res);
+    let px = v2(id.xy) + 0.5;
+    let r = pad2d_rect(D);
+    let lq = (px - r.xy) / r.z;
+    if (all(lq >= v2(-0.012)) && all(lq <= v2(1.012))) {
+        col = v3(0.35);
+        let q = pad2d(px, D);
+        if (q.x >= 0.0) {
+            let cc = vec2<i32>(q);
+            let v = sample_canvas(cc);
+            let np = v2(f32(cc.x), f32(27 - cc.y));
+            let cm = cam_at(np);
+            col = mix(v3(0.03, 0.035, 0.05), v3(0.95), v);
+            col = mix(col, heat(cm) * (0.35 + 0.65 * v), clamp(params.cam, 0.0, 1.0) * 0.7 * smoothstep(0.05, 0.3, cm));
+            let rf = pick_rf();
+            if (in_rect(np, rf) && !in_rect(np, rf + v4(1.0, 1.0, -1.0, -1.0))) { col = mix(col, v3(0.35, 0.6, 1.0), 0.8); }
+            let mp = v2(fc_data[F_MOUSE], fc_data[F_MOUSE + 1u]);
+            if (mp.x >= 0.0) { col = mix(col, v3(0.4, 0.7, 1.0), smoothstep(0.15, 0.0, abs(length(q - mp) - brush_r()))); }
         }
     }
-
-    // LAYER 1 (Middle Left)
-    // 8 Rows: [Kernel 5x5] -> [Feature Map 12x12]
-    let l1_start_x = 0.32;
-    let l1_width = 0.25;
-    let l1_row_height = 0.11;
-    let l1_start_y = 0.90;
-    
-    for (var i = 0; i < 8; i++) {
-        let row_y = l1_start_y - f32(i) * l1_row_height;
-        
-        // Kernel 5x5
-        let k_size = 0.04;
-        let k_pos = vec2(l1_start_x, row_y);
-        
-        if (uv.x >= k_pos.x && uv.x < k_pos.x + k_size && 
-            uv.y >= k_pos.y && uv.y < k_pos.y + k_size * aspect) {
-            let local_uv = (uv - k_pos) / vec2(k_size, k_size * aspect);
-            let k_coord = vec2<i32>(local_uv * 5.0);
-            let w_idx = (4 - k_coord.y) * 5 + k_coord.x;
-            let weight = get_conv1_weight(i, w_idx);
-            color = get_weight_color(weight);
-            // Grid lines
-            let grid = fract(local_uv * 5.0);
-            if (any(grid < vec2(0.1)) || any(grid > vec2(0.9))) { color *= 0.5; }
-        }
-
-        // Feature Map 12x12
-        let map_size = 0.08;
-        let map_pos = vec2(l1_start_x + 0.06, row_y - 0.02);
-        
-        if (uv.x >= map_pos.x && uv.x < map_pos.x + map_size && 
-            uv.y >= map_pos.y && uv.y < map_pos.y + map_size * aspect) {
-            let local_uv = (uv - map_pos) / vec2(map_size, map_size * aspect);
-            var map_coord = vec2<i32>(local_uv * f32(CONV1_SIZE));
-            map_coord.y = i32(CONV1_SIZE) - 1 - map_coord.y;
-            let val = sample_conv1(map_coord, i);
-            let hot = vec3(1.0, 0.7, 0.2);
-            color = mix(vec3(0.0), hot, clamp(val * 0.5, 0.0, 1.0));
-            if (val > 2.0) { color = vec3(1.0); }
-            if (any(local_uv < vec2(0.02)) || any(local_uv > vec2(0.98))) { color = vec3(0.3); }
-        }
-        let arrow_p = vec2(l1_start_x + 0.048, row_y + k_size * aspect * 0.5);
-        if (distance(uv, arrow_p) < 0.002) { color = vec3(0.6); }
-    }
-
-    // Layer 2 Visualization
-    let l2_start_x = 0.58;
-    let l2_row_height = 0.15;
-    let l2_start_y = 0.80;
-    
-    for (var i = 0; i < 5; i++) {
-        let row_y = l2_start_y - f32(i) * l2_row_height;
-        let map_size = 0.10;
-        let map_pos = vec2(l2_start_x, row_y);
-
-        if (uv.x >= map_pos.x && uv.x < map_pos.x + map_size && 
-            uv.y >= map_pos.y && uv.y < map_pos.y + map_size * aspect) {
-            let local_uv = (uv - map_pos) / vec2(map_size, map_size * aspect);
-            var map_coord = vec2<i32>(local_uv * f32(CONV2_SIZE));
-            map_coord.y = i32(CONV2_SIZE) - 1 - map_coord.y;
-            let val = sample_conv2(map_coord, i);
-            let hot = vec3(0.0, 0.9, 0.9);
-            color = mix(vec3(0.0), hot, clamp(val * 0.3, 0.0, 1.0));
-            if (any(local_uv < vec2(0.02)) || any(local_uv > vec2(0.98))) { color = vec3(0.3); }
-        }
-    }
-
-    // Softmax & Predictions
-    var max_logit = -1000.0;
-    for (var i = 0; i < 47; i++) { max_logit = max(max_logit, fc_data[i]); }
-    var exp_sum = 0.0;
-    for (var i = 0; i < 47; i++) { exp_sum += exp(fc_data[i] - max_logit); }
-
-    var top1_idx = -1; var top1_val = -1.0;
-    var top2_idx = -1; var top2_val = -1.0;
-    var top3_idx = -1; var top3_val = -1.0;
-
-    for (var i = 0; i < 47; i++) {
-        let prob = exp(fc_data[i] - max_logit) / max(exp_sum, 0.0001);
-        if (prob > top1_val) {
-            top3_val = top2_val; top3_idx = top2_idx;
-            top2_val = top1_val; top2_idx = top1_idx;
-            top1_val = prob;     top1_idx = i;
-        } else if (prob > top2_val) {
-            top3_val = top2_val; top3_idx = top2_idx;
-            top2_val = prob;     top2_idx = i;
-        } else if (prob > top3_val) {
-            top3_val = prob;     top3_idx = i;
-        }
-    }
-
-    let out_start_x = 0.80;
-    let out_start_y = 0.65; 
-    let bar_spacing = 0.14;
-    var display_indices = vec3<i32>(top1_idx, top2_idx, top3_idx);
-    var display_probs = vec3<f32>(top1_val, top2_val, top3_val);
-
-    for (var k = 0; k < 3; k++) {
-        let idx = display_indices[k];
-        let prob = display_probs[k];
-        if (idx < 0) { continue; }
-
-        let row_y = out_start_y - f32(k) * bar_spacing;
-        let bar_pos = vec2(out_start_x, row_y);
-        
-        if (uv.x >= bar_pos.x && uv.x < bar_pos.x + 0.15 &&
-            uv.y >= bar_pos.y && uv.y < bar_pos.y + 0.05) {
-            color = vec3(0.15);
-            if (uv.x < bar_pos.x + 0.15 * prob) {
-                color = mix(vec3(0.0, 0.6, 1.0), vec3(1.0, 0.9, 0.1), prob);
-            }
-        }
-
-        var char_code = 63u; 
-        if (idx <= 9) { char_code = 48u + u32(idx); } 
-        else if (idx <= 35) { char_code = 65u + u32(idx - 10); } 
-        else { 
-            let sub = idx - 36;
-            if(sub==0){char_code=97u;} else if(sub==1){char_code=98u;}
-            else if(sub==2){char_code=100u;} else if(sub==3){char_code=101u;}
-            else if(sub==4){char_code=102u;} else if(sub==5){char_code=103u;}
-            else if(sub==6){char_code=104u;} else if(sub==7){char_code=110u;}
-            else if(sub==8){char_code=113u;} else if(sub==9){char_code=114u;}
-            else {char_code=116u;}
-        }
-
-        // Draw Label Left of Bar
-        let label_pos = vec2(bar_pos.x - 0.04, bar_pos.y + 0.015); 
-        let screen_px = vec2<f32>(f32(res.x), f32(res.y));
-        let label_screen_pos = vec2(label_pos.x * screen_px.x, (1.0 - label_pos.y) * screen_px.y);
-        let alpha = ch(vec2<f32>(f32(id.x), f32(id.y)), label_screen_pos, char_code, 28.0); // Size 28
-        color = mix(color, vec3(1.0), alpha);
-    }
-
-    let pixel_pos = vec2<f32>(f32(id.x), f32(id.y));
-    let screen_px = vec2<f32>(f32(res.x), f32(res.y));
-    var t_alpha = 0.0;
-    
-    let title_y_bottom = 0.05;
-    let title_size = 22.0;
-    let char_spacing = 0.012; 
-    let title_color = vec3(0.9, 0.5, 0.1);
-
-    // "DRAW INPUT"
-    let t1_pos = vec2(input_rect_min.x+0.03, input_rect_max.y + 0.03);
-    let t1_codes = array<u32, 10>(68u, 82u, 65u, 87u, 0u, 73u, 78u, 80u, 85u, 84u);
-    for(var c=0; c<10; c++) {
-        let cp = vec2(t1_pos.x + f32(c)*char_spacing, t1_pos.y);
-        let scr = vec2(cp.x * screen_px.x, (1.0 - cp.y) * screen_px.y);
-        if(t1_codes[c] != 0u) { t_alpha += ch(pixel_pos, scr, t1_codes[c], title_size); }
-    }
-    // LAYER 1
-    let t2_pos = vec2(0.375, title_y_bottom);
-    let t2_codes = array<u32, 7>(76u, 65u, 89u, 69u, 82u, 0u, 49u);
-    for(var c=0; c<7; c++) {
-        let cp = vec2(t2_pos.x + f32(c)*char_spacing, t2_pos.y);
-        let scr = vec2(cp.x * screen_px.x, (1.0 - cp.y) * screen_px.y);
-        if(t2_codes[c] != 0u) { t_alpha += ch(pixel_pos, scr, t2_codes[c], title_size); }
-    }
-
-    //  "LAYER 2"
-    let t3_pos = vec2(0.58, title_y_bottom);
-    let t3_codes = array<u32, 7>(76u, 65u, 89u, 69u, 82u, 0u, 50u);
-    for(var c=0; c<7; c++) {
-        let cp = vec2(t3_pos.x + f32(c)*char_spacing, t3_pos.y);
-        let scr = vec2(cp.x * screen_px.x, (1.0 - cp.y) * screen_px.y);
-        if(t3_codes[c] != 0u) { t_alpha += ch(pixel_pos, scr, t3_codes[c], title_size); }
-    }
-
-    // "PREDICTIONS"
-    let t4_pos = vec2(out_start_x, out_start_y + 0.1);
-    let t4_codes = array<u32, 11>(80u, 82u, 69u, 68u, 73u, 67u, 84u, 73u, 79u, 78u, 83u);
-    for(var c=0; c<11; c++) {
-        let cp = vec2(t4_pos.x + f32(c)*char_spacing, t4_pos.y);
-        let scr = vec2(cp.x * screen_px.x, (1.0 - cp.y) * screen_px.y);
-        if(t4_codes[c] != 0u) { t_alpha += ch(pixel_pos, scr, t4_codes[c], title_size); }
-    }
-    color = mix(color, title_color, clamp(t_alpha, 0.0, 1.0));
-    textureStore(output, vec2<i32>(id.xy), vec4(pow(color, vec3(0.8)), 1.0));
+    textureStore(output, vec2<i32>(id.xy), v4(col, 1.0));
 }

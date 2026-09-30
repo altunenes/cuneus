@@ -13,17 +13,22 @@ struct Params {
     br: f32, expo: f32, gam: f32, sat: f32,
     trv: f32, orb: f32, zm: f32, arm: f32,
     bke: f32, bkb: f32, bkf: f32, taw: f32,
-    shp: f32, tlt: f32, dg: f32, p3: f32,
+    // pers: share of last frame's light the grid keeps
+    shp: f32, tlt: f32, dg: f32, q0: f32,
+    // logd: log-density tone mapping amount
+    logd: f32, pers: f32, q2: f32, q3: f32,
 };
 @group(1) @binding(0) var out: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(1) var<uniform> p: Params;
-@group(2) @binding(0) var<storage, read_write> atm: array<atomic<u32>>;
+// trajectory points kept between frames (w = 1 once valid)
+@group(2) @binding(0) var<storage, read_write> trj: array<v4>;
+@group(2) @binding(1) var<storage, read_write> atm: array<atomic<u32>>;
 @group(3) @binding(0) var t0: texture_2d<f32>; @group(3) @binding(1) var s0: sampler;
 @group(3) @binding(2) var t1: texture_2d<f32>; @group(3) @binding(3) var s1: sampler;
 
 alias v2 = vec2<f32>; alias v3 = vec3<f32>; alias v4 = vec4<f32>;
 alias m2 = mat2x2<f32>; alias m3 = mat3x3<f32>; alias u3 = vec3<u32>;
-const pi = 3.14; const tau = 6.28;
+const pi = 3.14159265; const tau = 6.28318531;
 // trajectories/frame (= 8192*256, must match Splat workgroup)
 const NTH = 2097152u;
 const GAIN = 800.0;
@@ -77,22 +82,14 @@ fn aces(c: v3) -> v3 {
     return n2*(a/b);
 }
 
-// one bounds checked pixel
+// one bounds checked pixel, stochastically rounded so faint light isn't dropped
 fn adp(ix: i32, iy: i32, Ru: vec2<u32>, ly: u32, c: v3) {
     if(ix<0||iy<0||ix>=i32(Ru.x)||iy>=i32(Ru.y)){return;}
     let i=u32(ix)+Ru.x*u32(iy);
-    atomicAdd(&atm[i], u32(max(0.,c.x)));
-    atomicAdd(&atm[i+ly], u32(max(0.,c.y)));
-    atomicAdd(&atm[i+2u*ly], u32(max(0.,c.z)));
-}
-// bilinear tent splat (sub pixel, energy preserving)
-fn bsp(fx: f32, fy: f32, Ru: vec2<u32>, ly: u32, c: v3) {
-    let gx=fx-0.5; let gy=fy-0.5; let x0=floor(gx); let y0=floor(gy);
-    let wx=gx-x0; let wy=gy-y0; let ix=i32(x0); let iy=i32(y0);
-    adp(ix,   iy,   Ru, ly, c*((1.-wx)*(1.-wy)));
-    adp(ix+1, iy,   Ru, ly, c*(wx*(1.-wy)));
-    adp(ix,   iy+1, Ru, ly, c*((1.-wx)*wy));
-    adp(ix+1, iy+1, Ru, ly, c*(wx*wy));
+    let d=hf();
+    atomicAdd(&atm[i], u32(max(0.,c.x)+d));
+    atomicAdd(&atm[i+ly], u32(max(0.,c.y)+d));
+    atomicAdd(&atm[i+2u*ly], u32(max(0.,c.z)+d));
 }
 fn rbf(ix: i32, iy: i32, w: u32, h: u32) -> v3 {
     if(ix<0||iy<0||ix>=i32(w)||iy>=i32(h)){return v3(0.);}
@@ -105,14 +102,12 @@ fn rbf(ix: i32, iy: i32, w: u32, h: u32) -> v3 {
 fn Clear(@builtin(global_invocation_id) id: u3) {
     let d=vec2<u32>(textureDimensions(out)); if(id.x>=d.x||id.y>=d.y){return;}
     let i=id.x+d.x*id.y; let o=d.x*d.y;
-    atomicStore(&atm[i],0u); atomicStore(&atm[i+o],0u); atomicStore(&atm[i+2u*o],0u); atomicStore(&atm[i+3u*o],0u);
-}
-
-fn op(mn: f32, mx: f32, iv: f32, pd: f32, ct: f32) -> f32 {
-    let cy=2.*iv+pd; let t=ct%cy; var q: f32;
-    if(t<iv){ q=0.5-0.5*cos(pi*(t/iv)); return mix(mx,mn,q); }
-    else if(t<iv+pd){ return mn; }
-    q=0.5-0.5*cos(pi*((t-iv-pd)/iv)); return mix(mn,mx,q);
+    // fade instead of clearing, so particles blend over frames
+    let r=f32(hu(i*1664525u+u_t.frame*1013904223u))/4294967295.;
+    for(var k=0u;k<4u;k++){
+        let j=i+k*o;
+        atomicStore(&atm[j], u32(f32(atomicLoad(&atm[j]))*p.pers+r));
+    }
 }
 
 // P2: simple chaos game box (see chaos game tutorial if you looking somewhere to start: https://compute.toys/view/120 by Slerpy)
@@ -127,18 +122,22 @@ fn Splat(@builtin(global_invocation_id) id: u3) {
 
     let wl=clamp(400.+p.hue*240.+hf()*p.spc*280., 390., 700.);
     let wx=(wl-600.)/200.;
-    var pt=(hv3()-0.5)*4.;
+    // continue from last frame's point: already on the attractor, so little warm-up
+    let prev=trj[id.x];
+    let carried=prev.w>0.5 && u_t.frame>2u;
+    var pt=select((hv3()-0.5)*4., prev.xyz, carried);
+    let warm=select(12, 2, carried);
 
     let ra=rX(1.8+sin(t*0.5)*0.1);
     let rb=rZ(0.6+cos(t*0.3)*0.1);
     let rc=rY(p.rot*3.);
-    let o2=op(4.1,4.1,6.,0.5,u_t.time);
+    let drift=sin(4.1)*0.2;
     let its=i32(clamp(p.it,20.,120.));
     // spherical fold dominance
     let th=mix(0.35,0.85,p.fb); 
     // we are creating the shape in bellow loop. most of them experimentally found
     for(var i=0; i<its; i++){
-        let r=hf()+p.coh*wx+0.15*f32(i)*(sin(o2)*0.2);
+        let r=hf()+p.coh*wx+0.15*f32(i)*drift;
         if(r<0.08){
             pt=abs(pt)-v3(1.2,0.2,1.1); pt=pt*ra; pt*=(1.1+p.tw*0.2);
         } else if(r<0.4){ 
@@ -155,7 +154,7 @@ fn Splat(@builtin(global_invocation_id) id: u3) {
             pt+=v3(sin(t),cos(t*0.7),0.)*0.1; pt*=0.3; pt=pt*rc;
         }
 
-        if(i<12){ continue; }
+        if(i<warm){ continue; }
 
         let ct=30.*p.trv*0.1;
         var q=pt;
@@ -179,7 +178,6 @@ fn Splat(@builtin(global_invocation_id) id: u3) {
         }
 
         sp.x*=R.y/R.x;
-        _=hf(); _=hf(); _=hf(); _=hf();
         let uv=sp*0.5+0.5; if(uv.x<=0.||uv.x>=1.||uv.y<=0.||uv.y>=1.){ continue; }
         let fx=uv.x*R.x; let fy=uv.y*R.y;
 
@@ -191,16 +189,22 @@ fn Splat(@builtin(global_invocation_id) id: u3) {
         let il=1.+4.5/(0.25+rc2*rc2*1.3); 
         let l=min(2., 0.16/(1.+z*0.12));
         let dg=max(0.1, 1.+p.dg*(0.5-dp)*2.2);
-        bsp(fx,fy,Ru,ly, cx*l*il*dg*p.br*GAIN);
+        // one jittered pixel: a box splat over frames, 1/4 of the atomics
+        let jo=v2(hf(),hf())-0.5;
+        adp(i32(floor(fx+jo.x)), i32(floor(fy+jo.y)), Ru, ly, cx*l*il*dg*p.br*GAIN);
 
-        // some dusts
-        let dn=vn3(pt*2.6+v3(0.,0.,t*0.15)+vn3(pt*1.1)*0.6);
-        let dm=smoothstep(0.52,0.80,dn);
-        if(dm>0.){
-            let dx=i32(fx); let dy=i32(fy);
-            if(dx>=0&&dy>=0&&dx<i32(Ru.x)&&dy<i32(Ru.y)){ atomicAdd(&atm[u32(dx)+Ru.x*u32(dy)+3u*ly], u32(dm*l*500.)); }
+        // some dusts (skipped when off, the noise is costly)
+        if(p.dst>0.){
+            let dn=vn3(pt*2.6+v3(0.,0.,t*0.15)+vn3(pt*1.1)*0.6);
+            let dm=smoothstep(0.52,0.80,dn);
+            if(dm>0.){
+                let dx=i32(floor(fx+jo.x)); let dy=i32(floor(fy+jo.y));
+                if(dx>=0&&dy>=0&&dx<i32(Ru.x)&&dy<i32(Ru.y)){ atomicAdd(&atm[u32(dx)+Ru.x*u32(dy)+3u*ly], u32(dm*l*500.+hf())); }
+            }
         }
     }
+    // keep the point; a runaway one restarts
+    trj[id.x]=select(v4(0.), v4(pt,1.), length(pt)<1e3);
 }
 
 // P3: resolve atomic -> linear (emission + dust extinction, D65)
@@ -209,23 +213,30 @@ fn resolve_raw(@builtin(global_invocation_id) id: u3) {
     let d=vec2<u32>(textureDimensions(out)); if(id.x>=d.x||id.y>=d.y){return;}
     let ss=f32(d.x*d.y);
     var xyz=rbf(i32(id.x),i32(id.y),d.x,d.y); xyz*=v3(0.95,1.,1.08);
-    var col=max(v3(0.), xyz_rgb*xyz)*ss*2e-9/256.;
-    let dst=f32(atomicLoad(&atm[(id.x+d.x*id.y)+3u*(d.x*d.y)]))*ss*2e-9/256.;
+    // the faded sum holds 1/(1-pers) frames of light: scale back to one
+    let nrm=1.-p.pers;
+    var col=max(v3(0.), xyz_rgb*xyz)*ss*2e-9/256.*nrm;
+    let dst=f32(atomicLoad(&atm[(id.x+d.x*id.y)+3u*(d.x*d.y)]))*ss*2e-9/256.*nrm;
     col*=exp(-dst*p.dst*2.2);
     textureStore(out, vec2<i32>(id.xy), v4(col,1.));
 }
+
+// clamp half a texel inside: the sampler repeats
+fn cuv(uv: v2, d: v2) -> v2 { return clamp(uv, 0.5/d, 1.-0.5/d); }
+fn tap0(uv: v2) -> v3 { let d=v2(textureDimensions(t0)); return textureSampleLevel(t0,s0,cuv(uv,d),0.).rgb; }
+fn tap1(uv: v2) -> v3 { let d=v2(textureDimensions(t1)); return textureSampleLevel(t1,s1,cuv(uv,d),0.).rgb; }
 
 // P4: TAA
 @compute @workgroup_size(16,16,1)
 fn taa(@builtin(global_invocation_id) id: u3) {
     let d=vec2<u32>(textureDimensions(out)); if(id.x>=d.x||id.y>=d.y){return;}
     let Rl=v2(d); let uv=(v2(id.xy)+0.5)/Rl;
-    let cur=r2y(textureSampleLevel(t0,s0,uv,0.).rgb);
+    let cur=r2y(tap0(uv));
     var mn=cur; var mx=cur;
     for(var y=-1;y<=1;y++){ for(var x=-1;x<=1;x++){
-        let n=r2y(textureSampleLevel(t0,s0,uv+v2(f32(x),f32(y))/Rl,0.).rgb); mn=min(mn,n); mx=max(mx,n);
+        let n=r2y(tap0(uv+v2(f32(x),f32(y))/Rl)); mn=min(mn,n); mx=max(mx,n);
     }}
-    let hr=r2y(textureSampleLevel(t1,s1,uv,0.).rgb);
+    let hr=r2y(tap1(uv));
     let hc=clamp(hr,mn,mx);
     let mo=abs(hr.x-hc.x)/(abs(cur.x)+0.02);
     let w=p.taw*(1.-clamp(mo*3.,0.,0.85));
@@ -233,38 +244,108 @@ fn taa(@builtin(global_invocation_id) id: u3) {
     textureStore(out, vec2<i32>(id.xy), v4(max(v3(0.), y2r(mix(cur,hc,bl))),1.));
 }
 
-//  post
+// bloom mip chain; Karis weights on the first step stop single sparks flickering
+fn karis(c: v3) -> f32 { return 1./(1.+dot(c,v3(0.2126,0.7152,0.0722))); }
+fn down13(uv: v2, first: bool) -> v3 {
+    let e=1./v2(textureDimensions(t0));
+    let a=tap0(uv+e*v2(-2.,-2.)); let b=tap0(uv+e*v2(0.,-2.)); let c=tap0(uv+e*v2(2.,-2.));
+    let d=tap0(uv+e*v2(-1.,-1.)); let f=tap0(uv+e*v2(1.,-1.));
+    let g=tap0(uv+e*v2(-2.,0.)); let h=tap0(uv); let i=tap0(uv+e*v2(2.,0.));
+    let j=tap0(uv+e*v2(-1.,1.)); let k=tap0(uv+e*v2(1.,1.));
+    let l=tap0(uv+e*v2(-2.,2.)); let m=tap0(uv+e*v2(0.,2.)); let n=tap0(uv+e*v2(2.,2.));
+    // five overlapping 2x2 boxes: the centre one counts half
+    let q0=(d+f+j+k)*0.25; let q1=(a+b+g+h)*0.25; let q2=(b+c+h+i)*0.25; let q3=(g+h+l+m)*0.25; let q4=(h+i+m+n)*0.25;
+    if(first){
+        let w0=karis(q0)*0.5; let w1=karis(q1)*0.125; let w2=karis(q2)*0.125; let w3=karis(q3)*0.125; let w4=karis(q4)*0.125;
+        return (q0*w0+q1*w1+q2*w2+q3*w3+q4*w4)/(w0+w1+w2+w3+w4);
+    }
+    return q0*0.5+(q1+q2+q3+q4)*0.125;
+}
+// only light above white on screen feeds the bloom (soft knee)
+fn bright_part(c: v3) -> v3 {
+    let t=1./max(p.expo,0.01); let knee=0.5*t;
+    let br=max(c.r,max(c.g,c.b));
+    var soft=clamp(br-t+knee, 0., 2.*knee); soft=soft*soft/(4.*knee+1e-4);
+    return c*(max(soft, br-t)/max(br,1e-4));
+}
+// tent of the smaller level (t0) + this level (t1)
+fn up9(uv: v2) -> v3 {
+    let e=1./v2(textureDimensions(t0));
+    var c=tap0(uv)*4.;
+    c+=(tap0(uv+v2(e.x,0.))+tap0(uv-v2(e.x,0.))+tap0(uv+v2(0.,e.y))+tap0(uv-v2(0.,e.y)))*2.;
+    c+=tap0(uv+e)+tap0(uv-e)+tap0(uv+v2(e.x,-e.y))+tap0(uv+v2(-e.x,e.y));
+    return c/16.+tap1(uv);
+}
+fn px_uv(id: u3) -> v2 { return (v2(id.xy)+0.5)/v2(textureDimensions(out)); }
+// bloom levels: down to 1/16, then back up
+@compute @workgroup_size(16,16,1)
+fn bloom_d1(@builtin(global_invocation_id) id: u3) {
+    let d=textureDimensions(out); if(id.x>=d.x||id.y>=d.y){return;}
+    textureStore(out, vec2<i32>(id.xy), v4(bright_part(down13(px_uv(id), true)),1.));
+}
+@compute @workgroup_size(16,16,1)
+fn bloom_d2(@builtin(global_invocation_id) id: u3) {
+    let d=textureDimensions(out); if(id.x>=d.x||id.y>=d.y){return;}
+    textureStore(out, vec2<i32>(id.xy), v4(down13(px_uv(id), false),1.));
+}
+@compute @workgroup_size(16,16,1)
+fn bloom_d3(@builtin(global_invocation_id) id: u3) {
+    let d=textureDimensions(out); if(id.x>=d.x||id.y>=d.y){return;}
+    textureStore(out, vec2<i32>(id.xy), v4(down13(px_uv(id), false),1.));
+}
+@compute @workgroup_size(16,16,1)
+fn bloom_d4(@builtin(global_invocation_id) id: u3) {
+    let d=textureDimensions(out); if(id.x>=d.x||id.y>=d.y){return;}
+    textureStore(out, vec2<i32>(id.xy), v4(down13(px_uv(id), false),1.));
+}
+@compute @workgroup_size(16,16,1)
+fn bloom_u3(@builtin(global_invocation_id) id: u3) {
+    let d=textureDimensions(out); if(id.x>=d.x||id.y>=d.y){return;}
+    textureStore(out, vec2<i32>(id.xy), v4(up9(px_uv(id)),1.));
+}
+@compute @workgroup_size(16,16,1)
+fn bloom_u2(@builtin(global_invocation_id) id: u3) {
+    let d=textureDimensions(out); if(id.x>=d.x||id.y>=d.y){return;}
+    textureStore(out, vec2<i32>(id.xy), v4(up9(px_uv(id)),1.));
+}
+@compute @workgroup_size(16,16,1)
+fn bloom_u1(@builtin(global_invocation_id) id: u3) {
+    let d=textureDimensions(out); if(id.x>=d.x||id.y>=d.y){return;}
+    textureStore(out, vec2<i32>(id.xy), v4(up9(px_uv(id)),1.));
+}
+
+//  post: t0 = TAA result, t1 = bloom
 @compute @workgroup_size(16,16,1)
 fn main_image(@builtin(global_invocation_id) id: u3) {
     let d=vec2<u32>(textureDimensions(out)); if(id.x>=d.x||id.y>=d.y){return;}
     let Rl=v2(d); let uv=(v2(id.xy)+0.5)/Rl;
-    var col=textureSampleLevel(t0,s0,uv,0.).rgb;
+    var col=tap0(uv);
 
     if(p.shp>0.001){ 
         let e=1./Rl;
-        let bl=(textureSampleLevel(t0,s0,uv+v2(e.x,0.),0.).rgb + textureSampleLevel(t0,s0,uv-v2(e.x,0.),0.).rgb
-              + textureSampleLevel(t0,s0,uv+v2(0.,e.y),0.).rgb + textureSampleLevel(t0,s0,uv-v2(0.,e.y),0.).rgb)*0.25;
+        let bl=(tap0(uv+v2(e.x,0.))+tap0(uv-v2(e.x,0.))+tap0(uv+v2(0.,e.y))+tap0(uv-v2(0.,e.y)))*0.25;
         col=max(v3(0.), col+(col-bl)*p.shp*2.);
     }
 
     let l0=dot(col,v3(1.)); var wd=0.;
     for(var k=0;k<8;k++){ let a=f32(k)*0.785398; let dd=v2(cos(a),sin(a));
-        wd+=dot(textureSampleLevel(t0,s0,uv+dd*6./Rl,0.).rgb,v3(1.));
-        wd+=dot(textureSampleLevel(t0,s0,uv+dd*14./Rl,0.).rgb,v3(1.)); }
+        wd+=dot(tap0(uv+dd*6./Rl),v3(1.));
+        wd+=dot(tap0(uv+dd*14./Rl),v3(1.)); }
     wd*=1./16.;
     let ao=mix(1., clamp(0.15+0.85*l0/(wd+0.003),0.,1.), 0.7);
 
-    if(p.blm>0.001){
-        var g=v3(0.);
-        for(var k=0;k<8;k++){ let a=f32(k)*0.785398; let dd=v2(cos(a),sin(a));
-            g+=textureSampleLevel(t0,s0,uv+dd*5./Rl,0.).rgb; g+=textureSampleLevel(t0,s0,uv+dd*13./Rl,0.).rgb; }
-        col+=g*(1./16.)*p.blm;
+    // four summed levels, so a quarter is their average
+    if(p.blm>0.001){ col+=tap1(uv)*0.25*p.blm; }
+
+    // log density (flame style): compress the dense core, lift thin filaments; level 1 unchanged
+    if(p.logd>0.){
+        let k=8.; let L=max(max(col.r,col.g),max(col.b,1e-5));
+        col*=mix(1., log(1.+k*L)/(k*L)*(k/log(1.+k)), p.logd);
     }
 
     col*=p.expo*ao;
     let l=dot(col,v3(0.2126,0.7152,0.0722)); col=mix(v3(l),col,p.sat);
     col=aces(col);
     col=pow(max(col,v3(0.)),v3(1./p.gam));
-    col*=1.-dot(uv-0.5,uv-0.5)*p.vig;
     textureStore(out, vec2<i32>(id.xy), v4(max(col,v3(0.)),1.));
 }

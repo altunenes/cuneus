@@ -1,6 +1,6 @@
 use cuneus::compute::{
     ComputeShader, PassDescription, StorageBufferSpec, COMPUTE_TEXTURE_FORMAT_RGBA16};
-use cuneus::{wgpu, Core, ExportManager, RenderKit, ShaderControls, ShaderManager};
+use cuneus::{Core, ExportManager, RenderKit, ShaderControls, ShaderManager};
 use log::error;
 use cuneus::WindowEvent;
 use std::ops::RangeInclusive;
@@ -26,53 +26,14 @@ cuneus::uniform_params! {
     phase_seed: u32,
     slope_on: i32,
     slope_target: f32,
-    _padding: u32}
+    run: u32}
 }
-
-// the stats buffer: radial profiles, then the fits (alpha_in, b_in, alpha_out, b_out) at this float
-const S_FIT: u64 = 2048;
-
-// pipeline stages, in dispatch order
-const MEAN: usize = 0;
-const INIT: usize = 1;
-const FFT_H: usize = 2;
-const FFT_V: usize = 3;
-const RADIAL_IN: usize = 4;
-const FIT_IN: usize = 5;
-const MODIFY: usize = 6;
-const RADIAL_OUT: usize = 7;
-const FIT_OUT: usize = 8;
-const IFFT_H: usize = 9;
-const IFFT_V: usize = 10;
-const MAIN: usize = 11;
 
 struct FFTShader {
     base: RenderKit,
     compute_shader: ComputeShader,
     should_initialize: bool,
     current_params: FFTParams,
-    // 1/f fits read back from the GPU: alpha of the input and of the result
-    alpha: [f32; 2],
-    fit_staging: wgpu::Buffer,
-    fit_pending: bool,
-}
-
-impl FFTShader {
-    fn read_fit(&mut self, core: &Core) {
-        let slice = self.fit_staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        let _ = core.device.poll(wgpu::PollType::wait_indefinitely());
-        if let Ok(Ok(())) = rx.recv() {
-            if let Ok(data) = slice.get_mapped_range() {
-                let fit: &[f32] = bytemuck::cast_slice(&data);
-                self.alpha = [fit[0], fit[2]];
-            }
-        }
-        self.fit_staging.unmap();
-    }
 }
 
 fn slider(ui: &mut egui::Ui, v: &mut f32, range: RangeInclusive<f32>, label: &str) -> bool {
@@ -108,22 +69,24 @@ impl ShaderManager for FFTShader {
             phase_seed: 1,
             slope_on: 0,
             slope_target: 1.0,
-            _padding: 0};
+            run: 1};
         let base = RenderKit::new(core);
 
+        // sized for the largest resolution: rows, columns and radii past the current one return early
+        let tiles = [2048 / 16, 2048 / 16, 1];
         let passes = vec![
-            PassDescription::new("image_mean", &[]),
-            PassDescription::new("initialize_data", &["image_mean"]),
-            PassDescription::new("fft_horizontal", &["initialize_data"]),
-            PassDescription::new("fft_vertical", &["fft_horizontal"]),
-            PassDescription::new("radial_in", &["fft_vertical"]),
-            PassDescription::new("fit_in", &["radial_in"]),
-            PassDescription::new("modify_frequencies", &["fit_in"]),
-            PassDescription::new("radial_out", &["modify_frequencies"]),
-            PassDescription::new("fit_out", &["radial_out"]),
-            PassDescription::new("ifft_horizontal", &["fit_out"]),
-            PassDescription::new("ifft_vertical", &["ifft_horizontal"]),
-            PassDescription::new("main_image", &["ifft_vertical"]),
+            PassDescription::new("image_mean", &[]).with_workgroup_size([1, 1, 1]),
+            PassDescription::new("initialize_data", &[]).with_workgroup_size(tiles),
+            PassDescription::new("fft_horizontal", &[]).with_workgroup_size([2048, 1, 1]),
+            PassDescription::new("fft_vertical", &[]).with_workgroup_size([2048, 1, 1]),
+            PassDescription::new("radial_in", &[]).with_workgroup_size([1024, 1, 1]),
+            PassDescription::new("fit_in", &[]).with_workgroup_size([1, 1, 1]),
+            PassDescription::new("modify_frequencies", &[]).with_workgroup_size(tiles),
+            PassDescription::new("radial_out", &[]).with_workgroup_size([1024, 1, 1]),
+            PassDescription::new("fit_out", &[]).with_workgroup_size([1, 1, 1]),
+            PassDescription::new("ifft_horizontal", &[]).with_workgroup_size([2048, 1, 1]),
+            PassDescription::new("ifft_vertical", &[]).with_workgroup_size([2048, 1, 1]),
+            PassDescription::new("main_image", &[]),
         ];
 
         let config = ComputeShader::builder()
@@ -131,6 +94,8 @@ impl ShaderManager for FFTShader {
             .with_multi_pass(&passes)
             .with_input_texture()
             .with_custom_uniforms::<FFTParams>()
+            // the 1/f slopes are printed in the radial plot
+            .with_fonts()
             // FFT working memory at the largest resolution, 3 complex channels
             .with_storage_buffer(StorageBufferSpec::new("image_data", 2048 * 2048 * 3 * 8))
             .with_storage_buffer(StorageBufferSpec::new("stats", 4096 * 4))
@@ -142,21 +107,12 @@ impl ShaderManager for FFTShader {
         let compute_shader = cuneus::compute_shader!(core, "shaders/fft.wgsl", config);
         compute_shader.set_custom_params(initial_params, &core.queue);
 
-        let fit_staging = core.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("FFT fit readback"),
-            size: 16,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         Self {
             base,
             compute_shader,
             should_initialize: true,
             current_params: initial_params,
-            alpha: [0.0; 2],
-            fit_staging,
-            fit_pending: false}
+}
     }
 
     fn update(&mut self, core: &Core) {
@@ -164,12 +120,6 @@ impl ShaderManager for FFTShader {
         let delta = 1.0 / 60.0;
         self.compute_shader
             .set_time(current_time, delta, &core.queue);
-
-        // the fit written by the last FFT run
-        if self.fit_pending {
-            self.read_fit(core);
-            self.fit_pending = false;
-        }
 
         // Update input textures for image proc.
         self.base.update_current_texture(core, &core.queue);
@@ -206,7 +156,6 @@ impl ShaderManager for FFTShader {
         let video_info = self.base.get_video_info();
         let hdri_info = self.base.get_hdri_info();
         let webcam_info = self.base.get_webcam_info();
-        let alpha = self.alpha;
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
                 RenderKit::apply_default_style(ctx);
@@ -233,7 +182,6 @@ impl ShaderManager for FFTShader {
                                 changed |= ui.selectable_value(&mut params.view, i as i32, *name).changed();
                             }
                         });
-                        ui.label(format!("Amplitude slope α: input {:.2}, result {:.2}", alpha[0], alpha[1]));
 
                         let half = (params.resolution / 2) as f32;
                         egui::CollapsingHeader::new("Filter").default_open(true).show(ui, |ui| {
@@ -321,33 +269,17 @@ impl ShaderManager for FFTShader {
             self.should_initialize = true;
         }
 
-        // a still image runs once per change; video and webcam every frame
-        let run = self.should_initialize || self.base.using_video_texture || self.base.using_webcam_texture;
-        let n = params.resolution;
-        if run && self.base.get_current_texture_manager().is_some() {
-            let tiles = [n.div_ceil(16), n.div_ceil(16), 1];
-            let cs = &mut self.compute_shader;
-            let enc = &mut frame.encoder;
-            cs.dispatch_stage_with_workgroups(enc, MEAN, [1, 1, 1]);
-            cs.dispatch_stage_with_workgroups(enc, INIT, tiles);
-            cs.dispatch_stage_with_workgroups(enc, FFT_H, [n, 1, 1]);
-            cs.dispatch_stage_with_workgroups(enc, FFT_V, [n, 1, 1]);
-            cs.dispatch_stage_with_workgroups(enc, RADIAL_IN, [n / 2, 1, 1]);
-            cs.dispatch_stage_with_workgroups(enc, FIT_IN, [1, 1, 1]);
-            cs.dispatch_stage_with_workgroups(enc, MODIFY, tiles);
-            cs.dispatch_stage_with_workgroups(enc, RADIAL_OUT, [n / 2, 1, 1]);
-            cs.dispatch_stage_with_workgroups(enc, FIT_OUT, [1, 1, 1]);
-            // the spectrum view shows the modified spectrum, so the inverse is only needed for the picture
-            if params.view == 0 {
-                cs.dispatch_stage_with_workgroups(enc, IFFT_H, [n, 1, 1]);
-                cs.dispatch_stage_with_workgroups(enc, IFFT_V, [n, 1, 1]);
-            }
-            enc.copy_buffer_to_buffer(&cs.storage_buffers[1], S_FIT * 4, &self.fit_staging, 0, 16);
-            self.fit_pending = true;
+        // a still image runs the FFT once per change; video and webcam every frame
+        let run = (self.should_initialize || self.base.using_video_texture || self.base.using_webcam_texture)
+            && self.base.get_current_texture_manager().is_some();
+        if self.current_params.run != run as u32 {
+            self.current_params.run = run as u32;
+            self.compute_shader.set_custom_params(self.current_params, &core.queue);
+        }
+        self.compute_shader.dispatch(&mut frame.encoder, core);
+        if run {
             self.should_initialize = false;
         }
-
-        self.compute_shader.dispatch_stage(&mut frame.encoder, core, MAIN);
 
         self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
 

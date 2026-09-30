@@ -49,13 +49,19 @@ struct FFTParams {
     // reshape the amplitude spectrum to 1/f^slope_target
     slope_on: i32,
     slope_target: f32,
-    _padding2: u32,
+    // 1 on frames where the FFT is recomputed (a change, or video); otherwise the last result is shown
+    run: u32,
 };
 // Group 1: Primary Pass I/O & Parameters
 @group(1) @binding(0) var output: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(1) var<uniform> params: FFTParams;
 @group(1) @binding(2) var input_texture: texture_2d<f32>;
 @group(1) @binding(3) var input_sampler: sampler;
+
+// font atlas (16 x 16 ASCII grid), for the slopes printed in the radial plot
+struct FontUniforms { atlas_size: vec2f, char_size: vec2f, screen_size: vec2f, grid_size: vec2f };
+@group(2) @binding(0) var<uniform> font: FontUniforms;
+@group(2) @binding(1) var font_atlas: texture_2d<f32>;
 
 // Storage buffer for FFT data
 @group(3) @binding(0) var<storage, read_write> image_data: array<vec2f>;
@@ -125,6 +131,7 @@ fn content_rect() -> vec4f {
 // mean colour of the input, from a 64 x 64 grid of samples
 @compute @workgroup_size(256, 1, 1)
 fn image_mean(@builtin(local_invocation_index) li: u32) {
+    if (params.run == 0u) { return; }
     var acc = vec3f(0.0);
     for (var i = 0u; i < 16u; i++) {
         let k = li * 16u + i;
@@ -147,6 +154,7 @@ fn image_mean(@builtin(local_invocation_index) li: u32) {
 
 @compute @workgroup_size(16, 16, 1)
 fn initialize_data(@builtin(global_invocation_id) id: vec3u) {
+    if (params.run == 0u) { return; }
     let N = params.resolution;
 
     if (any(id.xy >= vec2(N))) {
@@ -186,6 +194,7 @@ fn initialize_data(@builtin(global_invocation_id) id: vec3u) {
 // FFT on rows
 @compute @workgroup_size(64, 1, 1)
 fn fft_horizontal(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invocation_index) local_index: u32) {
+    if (params.run == 0u || workgroup_id.x >= params.resolution) { return; }
     let LOG2_N = firstLeadingBit(params.resolution);
     let LOG4_N = LOG2_N / 2u;
     let N = params.resolution;
@@ -268,6 +277,7 @@ fn fft_horizontal(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_inv
 // FFT on columns
 @compute @workgroup_size(64, 1, 1)
 fn fft_vertical(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invocation_index) local_index: u32) {
+    if (params.run == 0u || workgroup_id.x >= params.resolution) { return; }
     let LOG2_N = firstLeadingBit(params.resolution);
     let LOG4_N = LOG2_N / 2u;
     let N = params.resolution;
@@ -373,10 +383,16 @@ fn radial(r: u32, li: u32, off: u32) {
 }
 
 @compute @workgroup_size(64, 1, 1)
-fn radial_in(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) { radial(wid.x, li, S_IN); }
+fn radial_in(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
+    if (params.run == 0u || wid.x >= params.resolution / 2u) { return; }
+    radial(wid.x, li, S_IN);
+}
 
 @compute @workgroup_size(64, 1, 1)
-fn radial_out(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) { radial(wid.x, li, S_OUT); }
+fn radial_out(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
+    if (params.run == 0u || wid.x >= params.resolution / 2u) { return; }
+    radial(wid.x, li, S_OUT);
+}
 
 // the fit range skips the lowest bins and the top octave, where aliasing and the window dominate
 fn fit_range() -> vec2u { return vec2u(2u, params.resolution / 4u); }
@@ -406,10 +422,16 @@ fn fit(li: u32, off: u32, dst: u32) {
 }
 
 @compute @workgroup_size(64, 1, 1)
-fn fit_in(@builtin(local_invocation_index) li: u32) { fit(li, S_IN, S_FIT); }
+fn fit_in(@builtin(local_invocation_index) li: u32) {
+    if (params.run == 0u) { return; }
+    fit(li, S_IN, S_FIT);
+}
 
 @compute @workgroup_size(64, 1, 1)
-fn fit_out(@builtin(local_invocation_index) li: u32) { fit(li, S_OUT, S_FIT + 2u); }
+fn fit_out(@builtin(local_invocation_index) li: u32) {
+    if (params.run == 0u) { return; }
+    fit(li, S_OUT, S_FIT + 2u);
+}
 
 fn hash_u(x: u32) -> u32 {
     var v = x;
@@ -440,6 +462,7 @@ fn phase_noise(fx: i32, fy: i32, half: i32) -> f32 {
 // Frequency domain operations: spectral slope, phase scramble, then the filter
 @compute @workgroup_size(16, 16, 1)
 fn modify_frequencies(@builtin(global_invocation_id) id: vec3u) {
+    if (params.run == 0u) { return; }
     let N = params.resolution;
 
     if (any(id.xy >= vec2(N))) {
@@ -499,6 +522,7 @@ fn modify_frequencies(@builtin(global_invocation_id) id: vec3u) {
 // inverse FFT on rows
 @compute @workgroup_size(64, 1, 1)
 fn ifft_horizontal(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invocation_index) local_index: u32) {
+    if (params.run == 0u || params.view != 0 || workgroup_id.x >= params.resolution) { return; }
     let LOG2_N = firstLeadingBit(params.resolution);
     let LOG4_N = LOG2_N / 2u;
     let N = params.resolution;
@@ -579,6 +603,7 @@ fn ifft_horizontal(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_in
 // now on columns inverse... 
 @compute @workgroup_size(64, 1, 1)
 fn ifft_vertical(@builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invocation_index) local_index: u32) {
+    if (params.run == 0u || params.view != 0 || workgroup_id.x >= params.resolution) { return; }
     let LOG2_N = firstLeadingBit(params.resolution);
     let LOG4_N = LOG2_N / 2u;
     let N = params.resolution;
@@ -663,6 +688,32 @@ fn radial_log(off: u32, f: f32) -> f32 {
     return lg10(max(a, 1e-12));
 }
 
+// one ASCII glyph of height sz with its top-left at pos
+fn glyph(p: vec2f, pos: vec2f, code: u32, sz: f32) -> f32 {
+    let r = (p - pos) / sz;
+    if (any(r < vec2f(0.0)) || any(r >= vec2f(1.0))) { return 0.0; }
+    let uv = (vec2f(f32(code % 16u), f32(code / 16u)) + 0.05 + r * 0.9) / 16.0;
+    return smoothstep(0.1, 0.9, textureLoad(font_atlas, vec2i(uv * font.atlas_size), 0).r * 0.8);
+}
+
+// "alpha in  1.92" / "alpha out 1.00": the fitted slope, rounded to two decimals
+fn slope_label(p: vec2f, pos: vec2f, sz: f32, out: bool, x: f32) -> f32 {
+    var c = array<u32, 16>(97u, 108u, 112u, 104u, 97u, 32u, 105u, 110u, 32u, 32u, 0u, 0u, 0u, 0u, 0u, 0u);
+    if (out) { c[6] = 111u; c[7] = 117u; c[8] = 116u; }
+    var n = 10u;
+    let v = u32(round(min(abs(x), 99.99) * 100.0));
+    if (x < 0.0 && v > 0u) { c[n] = 45u; n++; }
+    if (v >= 1000u) { c[n] = 48u + v / 1000u; n++; }
+    c[n] = 48u + (v / 100u) % 10u;
+    c[n + 1u] = 46u;
+    c[n + 2u] = 48u + (v / 10u) % 10u;
+    c[n + 3u] = 48u + v % 10u;
+    n += 4u;
+    var a = 0.0;
+    for (var i = 0u; i < n; i++) { a = max(a, glyph(p, pos + vec2f(f32(i) * sz * 0.5, 0.0), c[i], sz)); }
+    return a;
+}
+
 // log-log plot of the radial amplitude: input white, result orange, their 1/f fits dashed.
 // x spans 1 .. N/2 cycles per image, y spans 1e-6 .. 1
 fn radial_plot(p: vec2f, D: vec2f) -> vec4f {
@@ -698,6 +749,12 @@ fn radial_plot(p: vec2f, D: vec2f) -> vec4f {
     }
     let e = min(min(q.x, 1.0 - q.x), min(q.y, 1.0 - q.y)) * size;
     col += vec3f(0.25) * smoothstep(1.2, 0.0, e);
+    // the fitted slopes, bottom left where the curves never reach, each in its curve's colour
+    let ts = max(size * 0.06, 11.0);
+    for (var k = 0u; k < 2u; k++) {
+        let pos = lo + vec2f(8.0, size - 8.0 - f32(2u - k) * ts * 1.15);
+        col = mix(col, tints[k], slope_label(p, pos, ts, k == 1u, stats[S_FIT + k * 2u]));
+    }
     return vec4f(col, 0.92);
 }
 
