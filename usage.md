@@ -525,16 +525,18 @@ if prev > 0 {
         pcm.push_samples(&data[..(prev * 2) as usize])?;
     }
 }
-// Time-sync: generate exactly the samples real-time demands
-let needed = ((elapsed * 44100.0) as u64 - pcm.samples_written()).min(1024) as u32;
-params.sample_offset = pcm.samples_written() as u32;
+// Time-sync: real time plus a small lead (50 ms, change it with set_lead)
+let (offset, needed) = pcm.next_block(1024);
+params.sample_offset = offset as u32;
 params.samples_to_generate = needed;
 ```
 
+A song with no state carried between samples can give every sample its own thread instead of the (0,0) loop, which leaves far more room for rich instruments (see `veridisquo.wgsl`). Keep the single-thread loop when filters or delay lines carry state (`synth.wgsl`). Time notes from their start in whole samples, `f32(n - note_on) / sr`, rather than `f32(n) / sr`: large times lose f32 precision and the tone gets gritty after a few minutes.
+
 **Examples:**
 
-- `veridisquo.rs` - Full song: drawbar organ, Moog bass, chord pads, kick drums, delay lines, sidechain
-- `synth.rs` - Interactive keyboard synth with per-sample ADSR, filter, distortion, chorus, reverb
+- `veridisquo.rs` - Full song: soft saw lead, Moog bass, saw pads, strummed guitar, drums, tape echo, room, sidechain
+- `synth.rs` - Interactive keyboard synth: guitar, e-piano and string voices, ADSR, filter, distortion, chorus, reverb, drum machine
 - `debugscreen.rs` - Simple tone generation using `SynthesisManager` (oscillator-based, not PCM)
 
 **Pro-tip - Persistent GPU state:** A `storage, read_write` array of floats persists across frames, so you can keep arbitrary GPU-side state in it. Use `.with_storage_buffer(StorageBufferSpec::new("name", bytes))` for a dedicated state buffer (bound in group 3); the `.with_audio()` buffer is the same kind of array and can also be repurposed as scratch storage when you don't need sound.

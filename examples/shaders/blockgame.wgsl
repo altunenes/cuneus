@@ -50,52 +50,6 @@ struct FontUniforms {
 
 const FONT_SPACING: f32 = 2.0;
 
-// Character definitions (Direct ASCII values)
-const CHAR_SPACE: u32 = 32u;        // ASCII space
-const CHAR_EXCLAMATION: u32 = 33u;  // ASCII 33
-const CHAR_COLON: u32 = 58u;        // ASCII 58
-const CHAR_EQUAL: u32 = 61u;        // ASCII 61
-
-// Numbers 0-9 (ASCII 48-57)
-const CHAR_0: u32 = 48u;
-const CHAR_1: u32 = 49u;
-const CHAR_2: u32 = 50u;
-const CHAR_3: u32 = 51u;
-const CHAR_4: u32 = 52u;
-const CHAR_5: u32 = 53u;
-const CHAR_6: u32 = 54u;
-const CHAR_7: u32 = 55u;
-const CHAR_8: u32 = 56u;
-const CHAR_9: u32 = 57u;
-
-// Uppercase letters (ASCII 65-90)
-const CHAR_A: u32 = 65u;
-const CHAR_B: u32 = 66u;
-const CHAR_C: u32 = 67u;
-const CHAR_D: u32 = 68u;
-const CHAR_E: u32 = 69u;
-const CHAR_F: u32 = 70u;
-const CHAR_G: u32 = 71u;
-const CHAR_H: u32 = 72u;
-const CHAR_I: u32 = 73u;
-const CHAR_J: u32 = 74u;
-const CHAR_K: u32 = 75u;
-const CHAR_L: u32 = 76u;
-const CHAR_M: u32 = 77u;
-const CHAR_N: u32 = 78u;
-const CHAR_O: u32 = 79u;
-const CHAR_P: u32 = 80u;
-const CHAR_Q: u32 = 81u;
-const CHAR_R: u32 = 82u;
-const CHAR_S: u32 = 83u;
-const CHAR_T: u32 = 84u;
-const CHAR_U: u32 = 85u;
-const CHAR_V: u32 = 86u;
-const CHAR_W: u32 = 87u;
-const CHAR_X: u32 = 88u;
-const CHAR_Y: u32 = 89u;
-const CHAR_Z: u32 = 90u;
-
 // render single character
 fn ch(pp: vec2<f32>, pos: vec2<f32>, code: u32, size: f32) -> f32 {
     let char_size_pixels = vec2<f32>(size, size);
@@ -162,7 +116,7 @@ fn num(pp: vec2<f32>, pos: vec2<f32>, number: u32, size: f32) -> f32 {
     temp_num = number;
     for (var i = 0u; i < digit_count; i++) {
         let digit = temp_num % 10u;
-        let digit_char_code = CHAR_0 + digit;
+        let digit_char_code = 48u + digit;
         let digit_pos = pos + vec2<f32>(f32(digit_count - 1u - i) * char_advance, 0.0);
         let char_alpha = ch(pp, digit_pos, digit_char_code, size);
         alpha = max(alpha, char_alpha);
@@ -172,94 +126,39 @@ fn num(pp: vec2<f32>, pos: vec2<f32>, number: u32, size: f32) -> f32 {
     return alpha;
 }
 
-// word rendering functions
-fn word_perfect(pp: vec2<f32>, pos: vec2<f32>, size: f32) -> f32 {
-    let chars = array<u32, 8>(CHAR_P, CHAR_E, CHAR_R, CHAR_F, CHAR_E, CHAR_C, CHAR_T, CHAR_EXCLAMATION);
-    let char_advance = adv(size);
-    var alpha = 0.0;
-    for (var i = 0u; i < 8u; i++) {
-        let char_pos = pos + vec2<f32>(f32(i) * char_advance, 0.0);
-        alpha = max(alpha, ch(pp, char_pos, chars[i], size));
+// a word of up to 16 ASCII codes
+fn word(pp: vec2<f32>, pos: vec2<f32>, c: array<u32, 16>, n: u32, size: f32) -> f32 {
+    var a = 0.0;
+    for (var i = 0u; i < n; i++) {
+        a = max(a, ch(pp, pos + vec2<f32>(f32(i) * adv(size), 0.0), c[i], size));
     }
-    return alpha;
+    return a;
 }
 
-fn word_block_tower(pp: vec2<f32>, pos: vec2<f32>, size: f32) -> f32 {
-    let chars = array<u32, 11>(CHAR_B, CHAR_L, CHAR_O, CHAR_C, CHAR_K, CHAR_SPACE, CHAR_T, CHAR_O, CHAR_W, CHAR_E, CHAR_R);
-    let char_advance = adv(size);
-    var alpha = 0.0;
-    for (var i = 0u; i < 11u; i++) {
-        let char_pos = pos + vec2<f32>(f32(i) * char_advance, 0.0);
-        alpha = max(alpha, ch(pp, char_pos, chars[i], size));
-    }
-    return alpha;
+// the same word centred on x; glyphs sit in the middle of their cells
+fn centered(pp: vec2<f32>, x: f32, y: f32, c: array<u32, 16>, n: u32, size: f32) -> f32 {
+    return word(pp, vec2<f32>(x - (f32(n - 1u) * adv(size) + size) * 0.5, y), c, n, size);
 }
 
-fn word_click_to_start(pp: vec2<f32>, pos: vec2<f32>, size: f32) -> f32 {
-    let chars = array<u32, 14>(CHAR_C, CHAR_L, CHAR_I, CHAR_C, CHAR_K, CHAR_SPACE, CHAR_T, CHAR_O, CHAR_SPACE, CHAR_S, CHAR_T, CHAR_A, CHAR_R, CHAR_T);
-    let char_advance = adv(size);
-    var alpha = 0.0;
-    for (var i = 0u; i < 14u; i++) {
-        let char_pos = pos + vec2<f32>(f32(i) * char_advance, 0.0);
-        alpha = max(alpha, ch(pp, char_pos, chars[i], size));
-    }
-    return alpha;
+fn digits(n: u32) -> u32 {
+    var c = 1u;
+    var v = n / 10u;
+    while (v > 0u) { v /= 10u; c++; }
+    return c;
 }
 
-fn word_perfect_match_equals(pp: vec2<f32>, pos: vec2<f32>, size: f32) -> f32 {
-    let chars = array<u32, 15>(CHAR_P, CHAR_E, CHAR_R, CHAR_F, CHAR_E, CHAR_C, CHAR_T, CHAR_SPACE, CHAR_M, CHAR_A, CHAR_T, CHAR_C, CHAR_H, CHAR_SPACE, CHAR_EQUAL);
-    let char_advance = adv(size);
-    var alpha = 0.0;
-    for (var i = 0u; i < 15u; i++) {
-        let char_pos = pos + vec2<f32>(f32(i) * char_advance, 0.0);
-        alpha = max(alpha, ch(pp, char_pos, chars[i], size));
-    }
-    return alpha;
-}
+// BLOCK TOWER, CLICK TO START, PERFECT MATCH =, MORE POINTS, SCORE:, GAME OVER, CLICK TO RESTART, PERFECT!
+const W_TITLE = array<u32, 16>(66u, 76u, 79u, 67u, 75u, 32u, 84u, 79u, 87u, 69u, 82u, 32u, 32u, 32u, 32u, 32u);
+const W_START = array<u32, 16>(67u, 76u, 73u, 67u, 75u, 32u, 84u, 79u, 32u, 83u, 84u, 65u, 82u, 84u, 32u, 32u);
+const W_MATCH = array<u32, 16>(80u, 69u, 82u, 70u, 69u, 67u, 84u, 32u, 77u, 65u, 84u, 67u, 72u, 32u, 61u, 32u);
+const W_POINTS = array<u32, 16>(77u, 79u, 82u, 69u, 32u, 80u, 79u, 73u, 78u, 84u, 83u, 32u, 32u, 32u, 32u, 32u);
+const W_SCORE = array<u32, 16>(83u, 67u, 79u, 82u, 69u, 58u, 32u, 32u, 32u, 32u, 32u, 32u, 32u, 32u, 32u, 32u);
+const W_OVER = array<u32, 16>(71u, 65u, 77u, 69u, 32u, 79u, 86u, 69u, 82u, 32u, 32u, 32u, 32u, 32u, 32u, 32u);
+const W_RESTART = array<u32, 16>(67u, 76u, 73u, 67u, 75u, 32u, 84u, 79u, 32u, 82u, 69u, 83u, 84u, 65u, 82u, 84u);
+const W_PERFECT = array<u32, 16>(80u, 69u, 82u, 70u, 69u, 67u, 84u, 33u, 32u, 32u, 32u, 32u, 32u, 32u, 32u, 32u);
 
-fn word_more_points(pp: vec2<f32>, pos: vec2<f32>, size: f32) -> f32 {
-    let chars = array<u32, 11>(CHAR_M, CHAR_O, CHAR_R, CHAR_E, CHAR_SPACE, CHAR_P, CHAR_O, CHAR_I, CHAR_N, CHAR_T, CHAR_S);
-    let char_advance = adv(size);
-    var alpha = 0.0;
-    for (var i = 0u; i < 11u; i++) {
-        let char_pos = pos + vec2<f32>(f32(i) * char_advance, 0.0);
-        alpha = max(alpha, ch(pp, char_pos, chars[i], size));
-    }
-    return alpha;
-}
-
-fn word_score(pp: vec2<f32>, pos: vec2<f32>, size: f32) -> f32 {
-    let chars = array<u32, 6>(CHAR_S, CHAR_C, CHAR_O, CHAR_R, CHAR_E, CHAR_COLON);
-    let char_advance = adv(size);
-    var alpha = 0.0;
-    for (var i = 0u; i < 6u; i++) {
-        let char_pos = pos + vec2<f32>(f32(i) * char_advance, 0.0);
-        alpha = max(alpha, ch(pp, char_pos, chars[i], size));
-    }
-    return alpha;
-}
-
-fn word_game_over(pp: vec2<f32>, pos: vec2<f32>, size: f32) -> f32 {
-    let chars = array<u32, 9>(CHAR_G, CHAR_A, CHAR_M, CHAR_E, CHAR_SPACE, CHAR_O, CHAR_V, CHAR_E, CHAR_R);
-    let char_advance = adv(size);
-    var alpha = 0.0;
-    for (var i = 0u; i < 9u; i++) {
-        let char_pos = pos + vec2<f32>(f32(i) * char_advance, 0.0);
-        alpha = max(alpha, ch(pp, char_pos, chars[i], size));
-    }
-    return alpha;
-}
-
-fn word_click_to_restart(pp: vec2<f32>, pos: vec2<f32>, size: f32) -> f32 {
-    let chars = array<u32, 16>(CHAR_C, CHAR_L, CHAR_I, CHAR_C, CHAR_K, CHAR_SPACE, CHAR_T, CHAR_O, CHAR_SPACE, CHAR_R, CHAR_E, CHAR_S, CHAR_T, CHAR_A, CHAR_R, CHAR_T);
-    let char_advance = adv(size);
-    var alpha = 0.0;
-    for (var i = 0u; i < 16u; i++) {
-        let char_pos = pos + vec2<f32>(f32(i) * char_advance, 0.0);
-        alpha = max(alpha, ch(pp, char_pos, chars[i], size));
-    }
-    return alpha;
-}
+// one unit of screen size: 1 at the 600x800 reference window, following the smaller side
+fn ui_scale(ss: vec2<f32>) -> f32 { return min(ss.x / 600.0, ss.y / 800.0); }
 
 // game indices
 const O = array<u32,9>(0,1,2,3,4,5,6,7,8); // state,score,block,click,cam_y,cam_h,cam_a,cam_s,perf_time
@@ -340,23 +239,19 @@ fn sct(t: bool) { game_data[O[3]] = select(0., 1., t); } // set click triggered
 fn gcy() -> f32 { return game_data[O[4]]; } // get camera y
 fn scy(y: f32) { game_data[O[4]] = y; } // set camera y
 fn gch() -> f32 { return u_game.camera_height; } // camera
-fn sch(h: f32) { game_data[O[5]] = h; }
 fn gca() -> f32 { return u_game.camera_angle; }
-fn sca(a: f32) { game_data[O[6]] = a; }
 fn gcs() -> f32 { return u_game.camera_scale; }
-fn scs(s: f32) { game_data[O[7]] = s; }
-fn atime() -> f32 { return f32(u_game.sample_offset) / u_game.sample_rate; }
+// events store their start sample as float bits (+EV0 keeps them normal floats), so ages stay sample-exact
+const EV0: u32 = 16777216u;
+fn atime() -> f32 { return bitcast<f32>(u_game.sample_offset + EV0); }
 fn gpt() -> f32 { return game_data[O[8]]; } // get perfect time
 fn spt(t: f32) { game_data[O[8]] = t; } // set perfect time
 
-// update camera for tower
-fn updcam(sy: f32) {
+// camera follows the tower in world units, once it is a few blocks tall
+fn updcam() {
     let cb = gcb();
     if (cb > 0u) {
-        let th = f32(cb) * .6;
-        let tcy = th * 40. * (sy / 800.);
-        let ccy = gcy();
-        scy(mix(ccy, tcy, .1));
+        scy(mix(gcy(), max(f32(cb) * .6 - 2.4, 0.), .1));
     }
 }
 
@@ -424,9 +319,8 @@ fn rbl(pp: vec2<f32>, b: Block, ss: vec2<f32>, id: u32) -> vec3<f32> {
         fm = Mat(m.alb + vec3(.3, .2, .1) * pulse, m.r * .5, m.m, m.f + .2); 
     }
     
-    let scale = gcs() * ss.y / 800.;
-    let cy = gcy();
-    let co = vec2(ss.x * .5, ss.y * .7 + cy);
+    let scale = gcs() * ui_scale(ss);
+    let co = vec2(ss.x * .5, ss.y * .7 + gcy() * scale);
      let cs = w2i(b.p + vec3(0., b.s.y * .5, 0.)) * scale + co;
     let rad = (b.s.x + b.s.z + b.s.y + 1.) * scale;
     if (distance(pp, cs) > rad) { return vec3(0.); }
@@ -521,15 +415,15 @@ fn init() {
         // foundation
         sb(0u, Block(vec3(0., 0., 0.), vec3(4., .6, 4.), vec3(.8, .6, .4), 0.));
         
-        ss(0u); ssc(0u); scb(1u); sct(false); scy(0.); sch(8.); sca(0.); scs(65.); spt(-999.);
+        ss(0u); ssc(0u); scb(1u); sct(false); scy(0.); spt(-999.);
     }
 }
 
 // update game logic
-fn upd(sy: f32) {
+fn upd() {
     let mc = (u_mouse.buttons.x & 1u) != 0u;
     let state = gs();
-    updcam(sy);
+    updcam();
     
     // click detection
     let wc = gct();
@@ -568,7 +462,7 @@ fn upd(sy: f32) {
                 nb.c = m.alb;
                 
                 if (nb.s.x < .5) { ss(2u); game_data[11] = atime(); } // game over tone
-                else { sb(cb, nb); scb(cb + 1u); ssc(gsc() + select(10u, 20u, nb.perf > .5)); game_data[9] = atime(); game_data[12] = f32(cb); }
+                else { sb(cb, nb); scb(cb + 1u); ssc(gsc() + select(10u, 20u, nb.perf > .5)); game_data[9] = atime(); game_data[12] = f32(cb); game_data[13] = clamp(mp.x / 2.5, -1., 1.); }
             }
         }
         else if (state == 2u) {
@@ -581,115 +475,169 @@ fn upd(sy: f32) {
     } else if (!mc) { sct(false); }
 }
 
+// all text is sized and placed in ui_scale units, centred on the window
 fn txt(pp: vec2<f32>, ss: vec2<f32>) -> vec3<f32> {
     let state = gs();
+    let u = ui_scale(ss);
+    let cx = ss.x * .5;
     var tc = vec3(0.);
-    
-    // perfect placement feedback 
+
+    // perfect placement feedback
     let pt = gpt();
     let dt = u_time.time - pt;
     if (dt < 2. && dt > 0. && pt > 0. && state == 1u) {
         let fade = 1. - dt / 2.;
-        let scale_factor = 1. + sin(dt * 8.) * .2 * fade;
-        let text_size = 80. * scale_factor;
-        let text_pos = vec2(ss.x * .5 - 200., ss.y * .3);
-        if (word_perfect(pp, text_pos, text_size) > 0.01) {
-            tc = vec3(0.1, 0.05, 0.0) * fade;
-        }
+        let size = 80. * u * (1. + sin(dt * 8.) * .2 * fade);
+        if (centered(pp, cx, ss.y * .3 - size * .5, W_PERFECT, 8u, size) > 0.01) { tc = vec3(0.1, 0.05, 0.0) * fade; }
     }
-    
+
     if (state == 0u) {
-        // menu - properly centered text
-        // "BLOCK TOWER" (11 chars, size 64)
-        let block_tower_width = 11.0 * adv(64.0);
-        if (word_block_tower(pp, vec2(ss.x * 0.5 - block_tower_width * 0.5, 100.), 64.) > 0.01) { tc = vec3(1., 1., 0.); }
-
-        // "CLICK TO START" (14 chars, size 32)
-        let click_to_start_width = 14.0 * adv(32.0);
-        if (word_click_to_start(pp, vec2(ss.x * 0.5 - click_to_start_width * 0.5, 200.), 32.) > 0.01) { tc = vec3(0.8, 0.1, 0.0); }
-
-        // "PERFECT MATCH =" (15 chars, size 24)
-        let perfect_match_width = 15.0 * adv(24.0);
-        if (word_perfect_match_equals(pp, vec2(ss.x * 0.5 - perfect_match_width * 0.5, 270.), 24.) > 0.01) { tc = vec3(0.1, 0.05, 0.0); }
-
-        // "MORE POINTS" (11 chars, size 24)
-        let more_points_width = 11.0 * adv(24.0);
-        if (word_more_points(pp, vec2(ss.x * 0.5 - more_points_width * 0.5, 300.), 24.) > 0.01) { tc = vec3(0.1, 0.05, 0.0); }
-        
+        if (centered(pp, cx, ss.y * .12, W_TITLE, 11u, 64. * u) > 0.01) { tc = vec3(1., 1., 0.); }
+        if (centered(pp, cx, ss.y * .25, W_START, 14u, 32. * u) > 0.01) { tc = vec3(0.8, 0.1, 0.0); }
+        if (centered(pp, cx, ss.y * .335, W_MATCH, 15u, 24. * u) > 0.01) { tc = vec3(0.1, 0.05, 0.0); }
+        if (centered(pp, cx, ss.y * .37, W_POINTS, 11u, 24. * u) > 0.01) { tc = vec3(0.1, 0.05, 0.0); }
     } else if (state == 1u) {
-        // playing
-        if (word_score(pp, vec2(50., 50.), 48.) > 0.01) { tc = vec3(1.); }
-        if (num(pp, vec2(50. + 7. * 40., 50.), gsc(), 48.) > 0.01) { tc = vec3(.01, .01, .01); }
-        
+        let size = 48. * u;
+        let m = 40. * u;
+        if (word(pp, vec2(m, m), W_SCORE, 6u, size) > 0.01) { tc = vec3(1.); }
+        if (num(pp, vec2(m + 6. * adv(size), m), gsc(), size) > 0.01) { tc = vec3(.01, .01, .01); }
     } else if (state == 2u) {
-        // game over
-        if (word_game_over(pp, vec2(ss.x * .5 - 240., ss.y * .5), 60.) > 0.01) { tc = vec3(1., .2, .2); }
-
-        if (word_click_to_restart(pp, vec2(ss.x * .5 - 220., ss.y * .5 + 100.), 32.) > 0.01) { tc = vec3(.1); }
+        if (centered(pp, cx, ss.y * .4, W_OVER, 9u, 60. * u) > 0.01) { tc = vec3(1., .2, .2); }
+        // final score, label and number centred together
+        let size = 40. * u;
+        let x0 = cx - (f32(5u + digits(gsc())) * adv(size) + size) * .5;
+        if (word(pp, vec2(x0, ss.y * .5), W_SCORE, 6u, size) > 0.01) { tc = vec3(1.); }
+        if (num(pp, vec2(x0 + 6. * adv(size), ss.y * .5), gsc(), size) > 0.01) { tc = vec3(1.); }
+        if (centered(pp, cx, ss.y * .6, W_RESTART, 16u, 32. * u) > 0.01) { tc = vec3(.1); }
     }
-    
+
     return tc;
 }
 
-fn piano(ta: f32, d: f32, f: f32, decay: f32) -> f32 {
-    let env = (1.0 - exp(-d * 300.0)) * exp(-d * decay);   // quick attack, ringing tail
-    return (sin(ta * TAU * f) + 0.5 * sin(ta * TAU * 2.0 * f) + 0.25 * sin(ta * TAU * 3.0 * f)) * env;
+// audio
+fn hsh(x: u32) -> u32 {
+    var v = x;
+    v ^= v >> 16u; v *= 0x7feb352du;
+    v ^= v >> 15u; v *= 0x846ca68bu;
+    v ^= v >> 16u;
+    return v;
+}
+fn wn(n: u32, sd: u32) -> f32 { return f32(hsh(n * 0x9e3779b9u ^ sd) >> 8u) / 8388608.0 - 1.0; }
+fn vnz(n: u32, m: u32, sd: u32) -> f32 {
+    let i = n / m;
+    var f = f32(n % m) / f32(m);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(wn(i, sd), wn(i + 1u, sd), f);
+}
+fn eage(k: u32, n: u32) -> f32 {
+    let e = bitcast<u32>(game_data[k]);
+    if (game_data[k] <= 0. || n + EV0 < e) { return -1.; }
+    return f32(n + EV0 - e) / u_game.sample_rate;
+}
+fn pan2(p: f32) -> vec2<f32> {
+    let a = (p + 1.) * .785398;
+    return vec2(cos(a), sin(a)) * 1.414;
+}
+fn lp12(f: f32, fc: f32, res: f32) -> f32 {
+    let w = f / fc;
+    let q = 0.5 + res * 2.0;
+    let d = 1.0 - w * w;
+    return inverseSqrt(d * d + w * w / (q * q));
 }
 
-fn game_sound(ta: f32) -> f32 {
+// band-limited saw at phase `ph` (cycles) through a 12 dB low-pass
+fn saw(ph: f32, f: f32, fc: f32) -> f32 {
+    let th = TAU * fract(ph);
+    let c2 = 2.0 * cos(th);
+    var s0 = 0.0;
+    var s1 = sin(th);
     var s = 0.0;
-    let tp = game_data[9];
-    let dp = ta - tp;
-    if (tp > 0. && dp >= 0. && dp < 0.9) {
-        let k = u32(max(game_data[12], 0.0));
-        var deg = array<f32, 5>(0.0, 2.0, 4.0, 7.0, 9.0);
-        let semis = deg[k % 5u] + 12.0 * f32(min(k / 5u, 4u));
-        let f = 261.63 * pow(2.0, semis / 12.0);
-        s += piano(ta, dp, f, 5.0) * 0.3;
+    for (var h = 1; h <= 24; h++) {
+        let hz = f * f32(h);
+        if (hz > 12000.0) { break; }
+        s += s1 / f32(h) * lp12(hz, fc, 0.4);
+        let s2 = c2 * s1 - s0;
+        s0 = s1;
+        s1 = s2;
+    }
+    return s;
+}
+
+// FM bell: a 1:1 body and a short 14:1 tine
+fn bell(a: f32, f: f32, dec: f32) -> f32 {
+    if (a < 0.) { return 0.; }
+    let w = TAU * fract(f * a);
+    let m = 1.2 * exp(-a / .3) * sin(w) + .5 * exp(-a / .025) * sin(TAU * fract(f * 14. * a));
+    return sin(w + m) * exp(-a * dec) * smoothstep(0., .002, a);
+}
+
+// sound effects `dl` seconds late, for the echo
+fn sfx(n: u32, dl: f32) -> vec2<f32> {
+    var s = vec2(0.);
+
+    // place: a wooden thock plus a bell climbing the pentatonic scale with the tower, panned where the block landed
+    let dp = eage(9u, n) - dl;
+    if (dp >= 0. && dp < 1.2) {
+        let k = u32(max(game_data[12], 0.));
+        var deg = array<f32, 5>(0., 2., 4., 7., 9.);
+        let f = 261.63 * exp2((deg[k % 5u] + 12. * f32(min(k / 5u, 2u))) / 12.);
+        let thock = sin(TAU * fract(90. * dp + 90. * .02 * (1. - exp(-dp / .02)))) * exp(-dp / .06) + wn(n, 3u) * exp(-dp / .004) * .3;
+        s += pan2(game_data[13] * .6) * (bell(dp, f, 3.5) * .22 + thock * .25 * smoothstep(0., .001, dp));
     }
 
-    // perfect match:
-    let tq = game_data[10];
-    let dq = ta - tq;
-    if (tq > 0. && dq >= 0. && dq < 0.8) {
-        var notes = array<f32, 3>(523.25, 659.25, 783.99);
-        for (var j = 0u; j < 3u; j++) {
-            let nt = dq - f32(j) * 0.06;
-            if (nt >= 0.) { s += piano(ta, nt, notes[j], 6.0) * 0.22; }
+    // perfect: a bright bell arpeggio bouncing left and right, with a shimmer on top
+    let dq = eage(10u, n) - dl;
+    if (dq >= 0. && dq < 1.4) {
+        var notes = array<f32, 4>(523.25, 659.25, 783.99, 1046.5);
+        for (var j = 0u; j < 4u; j++) {
+            let side = select(vec2(1., .55), vec2(.55, 1.), j % 2u == 1u);
+            s += side * bell(dq - f32(j) * .06, notes[j], 4.) * .16;
         }
+        s += vec2(wn(n, 5u) - wn(n - 1u, 5u), wn(n, 7u) - wn(n - 1u, 7u)) * .04 * exp(-dq / .25) * smoothstep(0., .01, dq);
     }
 
-    // game over
-    let tg = game_data[11];
-    let dg = ta - tg;
-    if (tg > 0. && dg >= 0. && dg < 1.4) {
-        var gn = array<f32, 3>(392.0, 311.13, 261.63);
+    // game over: a detuned saw falling in three notes, the last one sagging, over a low rumble
+    let dg = eage(11u, n) - dl;
+    if (dg >= 0. && dg < 1.8) {
+        var gn = array<f32, 3>(392., 311.13, 261.63);
         for (var j = 0u; j < 3u; j++) {
-            let nt = dg - f32(j) * 0.16;
-            if (nt >= 0.) { s += piano(ta, nt, gn[j], 3.0) * 0.28; }
+            let a = dg - f32(j) * .16;
+            if (a >= 0.) {
+                let f = gn[j];
+                let ph = select(f * a, f * (a - .1 * a * a), j == 2u);
+                let fc = f * (3. + 4. * exp(-a / .2));
+                s += vec2(saw(ph * .996, f, fc), saw(ph * 1.004 + .3, f, fc)) * exp(-a * select(5., 2.5, j == 2u)) * smoothstep(0., .004, a) * .14;
+            }
         }
+        s += vec2(vnz(n, 90u, 9u)) * exp(-dg / .5) * .25 * smoothstep(0., .02, dg);
     }
+    return s;
+}
 
-    return clamp(s, -1.0, 1.0);
+// dry effects plus a ping-pong echo
+fn game_sound(n: u32) -> vec2<f32> {
+    let s = sfx(n, 0.) + sfx(n, .18) * vec2(.25, .08) + sfx(n, .36) * vec2(.05, .12);
+    return tanh(s);
 }
 
 @compute @workgroup_size(8, 8, 1)
 fn sim(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (all(gid.xy == vec2(0u))) {
-        let ss = vec2<f32>(textureDimensions(output));
-        init(); upd(ss.y);
-        let n = u_game.samples_to_generate;
-        for (var i = 0u; i < n; i++) {
-            let ta = f32(u_game.sample_offset + i) / u_game.sample_rate;
-            let v = game_sound(ta) * u_game.volume;
-            audio_buffer[i * 2u] = v;
-            audio_buffer[i * 2u + 1u] = v;
-        }
+        init();
+        upd();
     }
 }
 
 @compute @workgroup_size(8, 8, 1)
-fn main_image(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn main_image(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    // audio: one thread per sample, after the sim pass has moved the game on
+    let ai = (wid.y * nw.x + wid.x) * 64u + li;
+    if (ai < u_game.samples_to_generate) {
+        let v = game_sound(u_game.sample_offset + ai) * u_game.volume;
+        audio_buffer[ai * 2u] = v.x;
+        audio_buffer[ai * 2u + 1u] = v.y;
+    }
+
     let ss = vec2<f32>(textureDimensions(output));
     let pp = vec2<f32>(gid.xy);
     

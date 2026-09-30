@@ -13,9 +13,37 @@ cuneus::uniform_params! {
         sample_offset: u32,
         samples_to_generate: u32,
         sample_rate: f32,
-        _pad1: f32,
-        _pad2: f32,
-        _pad3: f32,
+        mix_drums: f32,
+        mix_bass: f32,
+        mix_lead: f32,
+        mix_guitar: f32,
+        mix_pads: f32,
+        mix_echo: f32,
+        mix_space: f32,
+        lead_type: f32,
+        lead_tone: f32,
+        lead_detune: f32,
+        lead_glide: f32,
+        bass_type: f32,
+        bass_tone: f32,
+        bass_drive: f32,
+        pad_type: f32,
+        pad_tone: f32,
+        pad_width: f32,
+        guitar_tone: f32,
+        guitar_mute: f32,
+        kick_tune: f32,
+        kick_decay: f32,
+        hat_decay: f32,
+        drum_pattern: f32,
+        echo_time: f32,
+        echo_feedback: f32,
+        swing: f32,
+        play_sample: u32,
+        song_origin: u32,
+        _pad0: u32,
+        _pad1: u32,
+        _pad2: u32,
     }
 }
 
@@ -24,8 +52,14 @@ struct VeridisQuo {
     compute_shader: ComputeShader,
     current_params: SongParams,
     pcm_stream: Option<PcmStreamManager>,
-    audio_start: std::time::Instant,
     last_samples_generated: u32,
+}
+
+impl VeridisQuo {
+    /// Back to bar one without touching the stream: the next block the GPU writes starts the song
+    fn restart_song(&mut self) {
+        self.current_params.song_origin = self.current_params.sample_offset + self.last_samples_generated;
+    }
 }
 
 impl ShaderManager for VeridisQuo {
@@ -38,9 +72,37 @@ impl ShaderManager for VeridisQuo {
             sample_offset: 0,
             samples_to_generate: MAX_SAMPLES_PER_FRAME,
             sample_rate: SAMPLE_RATE as f32,
-            _pad1: 0.0,
-            _pad2: 0.0,
-            _pad3: 0.0,
+            mix_drums: 1.0,
+            mix_bass: 1.0,
+            mix_lead: 1.0,
+            mix_guitar: 1.0,
+            mix_pads: 1.0,
+            mix_echo: 1.0,
+            mix_space: 1.0,
+            lead_type: 0.0,
+            lead_tone: 1.0,
+            lead_detune: 6.0,
+            lead_glide: 0.0,
+            bass_type: 0.0,
+            bass_tone: 1.0,
+            bass_drive: 1.3,
+            pad_type: 0.0,
+            pad_tone: 1.0,
+            pad_width: 7.0,
+            guitar_tone: 1.0,
+            guitar_mute: 1.0,
+            kick_tune: 1.0,
+            kick_decay: 0.3,
+            hat_decay: 1.0,
+            drum_pattern: 0.0,
+            echo_time: 0.15,
+            echo_feedback: 1.0,
+            swing: 0.0,
+            play_sample: 0,
+            song_origin: 0,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
 
         // Audio buffer: interleaved stereo f32 → need 2x samples
@@ -80,7 +142,6 @@ impl ShaderManager for VeridisQuo {
             compute_shader,
             current_params: initial_params,
             pcm_stream,
-            audio_start: std::time::Instant::now(),
             last_samples_generated: 0,
         }
     }
@@ -107,10 +168,8 @@ impl ShaderManager for VeridisQuo {
             }
 
             // Calculate this frame's needs
-            let elapsed = self.audio_start.elapsed().as_secs_f64();
-            let target_samples = (elapsed * SAMPLE_RATE as f64) as u64;
-            let written = stream.samples_written();
-            let needed = (target_samples.saturating_sub(written) as u32).min(MAX_SAMPLES_PER_FRAME);
+            let (written, needed) = stream.next_block(MAX_SAMPLES_PER_FRAME);
+            self.current_params.play_sample = stream.playback_sample() as u32;
             self.current_params.sample_offset = written as u32;
             self.current_params.samples_to_generate = needed;
             self.last_samples_generated = needed;
@@ -152,18 +211,46 @@ impl ShaderManager for VeridisQuo {
                             )
                             .changed();
 
-                        if let Some(ref mut stream) = self.pcm_stream {
-                            let mut vol = params.volume as f64;
-                            if ui
-                                .add(
-                                    egui::Slider::new(&mut vol, 0.0..=1.0)
-                                        .text("Master Volume"),
-                                )
-                                .changed()
-                            {
-                                stream.set_master_volume(vol);
-                            }
-                        }
+                        egui::CollapsingHeader::new("Mix").default_open(true).show(ui, |ui| {
+                            changed |= ui.add(egui::Slider::new(&mut params.mix_drums, 0.0..=2.0).text("Drums")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.mix_bass, 0.0..=2.0).text("Bass")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.mix_lead, 0.0..=2.0).text("Lead")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.mix_guitar, 0.0..=2.0).text("Guitar")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.mix_pads, 0.0..=2.0).text("Pads")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.mix_echo, 0.0..=2.0).text("Echo")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.mix_space, 0.0..=2.0).text("Space")).changed();
+                        });
+                        egui::CollapsingHeader::new("Lead").show(ui, |ui| {
+                            changed |= kind(ui, &mut params.lead_type, &["Soft saw", "Organ", "Keys"]);
+                            changed |= ui.add(egui::Slider::new(&mut params.lead_tone, 0.2..=3.0).text("Brightness")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.lead_detune, 0.0..=30.0).text("Detune").suffix(" ct")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.lead_glide, 0.0..=0.1).text("Glide").suffix(" s")).changed();
+                        });
+                        egui::CollapsingHeader::new("Bass").show(ui, |ui| {
+                            changed |= kind(ui, &mut params.bass_type, &["Moog pluck", "Sub", "FM"]);
+                            changed |= ui.add(egui::Slider::new(&mut params.bass_tone, 0.0..=3.0).text("Bite")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.bass_drive, 0.5..=4.0).text("Drive")).changed();
+                        });
+                        egui::CollapsingHeader::new("Pads").show(ui, |ui| {
+                            changed |= kind(ui, &mut params.pad_type, &["Warm saw", "Organ", "Strings"]);
+                            changed |= ui.add(egui::Slider::new(&mut params.pad_tone, 0.3..=3.0).text("Brightness")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.pad_width, 0.0..=25.0).text("Width").suffix(" ct")).changed();
+                        });
+                        egui::CollapsingHeader::new("Guitar").show(ui, |ui| {
+                            changed |= ui.add(egui::Slider::new(&mut params.guitar_tone, 0.3..=3.0).text("Brightness")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.guitar_mute, 0.3..=4.0).text("Ring")).changed();
+                        });
+                        egui::CollapsingHeader::new("Drums").show(ui, |ui| {
+                            changed |= kind(ui, &mut params.drum_pattern, &["Full kit", "No clap", "Kick only"]);
+                            changed |= ui.add(egui::Slider::new(&mut params.kick_tune, 0.6..=1.6).text("Kick tune")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.kick_decay, 0.1..=0.8).text("Kick decay")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.hat_decay, 0.3..=3.0).text("Hat decay")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.swing, 0.0..=0.6).text("Swing")).changed();
+                        });
+                        egui::CollapsingHeader::new("Echo").show(ui, |ui| {
+                            changed |= ui.add(egui::Slider::new(&mut params.echo_time, 0.05..=0.6).text("Time").suffix(" s")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.echo_feedback, 0.0..=1.5).text("Feedback")).changed();
+                        });
 
                         ui.separator();
                         ShaderControls::render_controls_widget(ui, &mut controls_request);
@@ -174,9 +261,14 @@ impl ShaderManager for VeridisQuo {
         };
 
         if changed {
+            params.play_sample = self.current_params.play_sample;
+            params.song_origin = self.current_params.song_origin;
             self.current_params = params;
         }
 
+        if controls_request.should_reset {
+            self.restart_song();
+        }
         self.base.apply_control_request(controls_request);
 
         self.compute_shader.dispatch(&mut frame.encoder, core);
@@ -206,11 +298,7 @@ impl ShaderManager for VeridisQuo {
                 if let winit::keyboard::Key::Character(ref s) = event.logical_key {
                     if s.as_str() == "r" || s.as_str() == "R" {
                         self.base.start_time = std::time::Instant::now();
-                        // Reset audio stream
-                        if let Some(ref mut stream) = self.pcm_stream {
-                            let _ = stream.stop();
-                            let _ = stream.start();
-                        }
+                        self.restart_song();
                         return true;
                     }
                 }
@@ -223,6 +311,18 @@ impl ShaderManager for VeridisQuo {
 
         false
     }
+}
+
+// a stepped slider that names each position
+fn kind(ui: &mut egui::Ui, v: &mut f32, names: &'static [&'static str]) -> bool {
+    let last = names.len() - 1;
+    ui.add(
+        egui::Slider::new(v, 0.0..=last as f32)
+            .step_by(1.0)
+            .text("Type")
+            .custom_formatter(move |x, _| names[(x as usize).min(last)].to_string()),
+    )
+    .changed()
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

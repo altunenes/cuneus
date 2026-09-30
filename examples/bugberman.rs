@@ -45,7 +45,6 @@ struct Bugberman {
     game: GameUniform,
     held_keys: HashSet<KeyCode>,
     pcm_stream: Option<PcmStreamManager>,
-    audio_start: std::time::Instant,
     last_samples_generated: u32,
 }
 
@@ -103,7 +102,6 @@ impl ShaderManager for Bugberman {
             game,
             held_keys: HashSet::new(),
             pcm_stream,
-            audio_start: std::time::Instant::now(),
             last_samples_generated: 0,
         }
     }
@@ -129,10 +127,7 @@ impl ShaderManager for Bugberman {
                 }
             }
 
-            let elapsed = self.audio_start.elapsed().as_secs_f64();
-            let target = (elapsed * SAMPLE_RATE as f64) as u64;
-            let written = stream.samples_written();
-            let needed = (target.saturating_sub(written) as u32).min(MAX_SAMPLES_PER_FRAME);
+            let (written, needed) = stream.next_block(MAX_SAMPLES_PER_FRAME);
             self.game.sample_offset = written as u32;
             self.game.samples_to_generate = needed;
             self.last_samples_generated = needed;
