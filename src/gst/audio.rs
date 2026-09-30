@@ -1198,6 +1198,8 @@ pub struct PcmStreamManager {
     is_playing: bool,
     master_volume: f64,
     wall_start: Option<Instant>,
+    clock: Option<Instant>,
+    lead_samples: u64,
 }
 
 impl PcmStreamManager {
@@ -1325,6 +1327,8 @@ impl PcmStreamManager {
             is_playing: false,
             master_volume: 0.5,
             wall_start: None,
+            clock: None,
+            lead_samples: sample_rate as u64 / 20,
         })
     }
 
@@ -1343,6 +1347,7 @@ impl PcmStreamManager {
         }
 
         self.is_playing = true;
+        self.clock = Some(Instant::now());
         self.wall_start = if cfg!(target_os = "windows") {
             Some(Instant::now())
         } else {
@@ -1360,6 +1365,7 @@ impl PcmStreamManager {
         self.is_playing = false;
         self.samples_written = 0;
         self.wall_start = None;
+        self.clock = None;
         Ok(())
     }
 
@@ -1375,7 +1381,7 @@ impl PcmStreamManager {
             let elapsed_samples =
                 (start.elapsed().as_secs_f64() * self.sample_rate as f64) as u64;
             let lag_threshold = self.sample_rate as u64 / 100;
-            let ahead_threshold = self.sample_rate as u64 / 50;
+            let ahead_threshold = self.lead_samples + self.sample_rate as u64 / 50;
             if self.samples_written + lag_threshold < elapsed_samples {
                 self.samples_written = elapsed_samples;
             } else if self.samples_written > elapsed_samples + ahead_threshold {
@@ -1425,6 +1431,26 @@ impl PcmStreamManager {
 
     pub fn samples_written(&self) -> u64 {
         self.samples_written
+    }
+
+    /// Next block to synthesize as (first sample, count): the playback clock plus the lead, at most `max`
+    pub fn next_block(&self, max: u32) -> (u64, u32) {
+        let Some(clock) = self.clock else {
+            return (self.samples_written, 0);
+        };
+        let target = (clock.elapsed().as_secs_f64() * self.sample_rate as f64) as u64 + self.lead_samples;
+        let count = target.saturating_sub(self.samples_written).min(max as u64) as u32;
+        (self.samples_written, count)
+    }
+
+    /// The sample playing right now by the stream clock; drive visuals from it to stay in sync with the sound
+    pub fn playback_sample(&self) -> u64 {
+        self.clock.map_or(0, |c| (c.elapsed().as_secs_f64() * self.sample_rate as f64) as u64)
+    }
+
+    /// How far ahead of playback `next_block` generates (50 ms by default)
+    pub fn set_lead(&mut self, seconds: f64) {
+        self.lead_samples = (seconds.max(0.0) * self.sample_rate as f64) as u64;
     }
 
     pub fn sample_rate(&self) -> u32 {
