@@ -1,5 +1,5 @@
 // Tree, Enes Altun, 2026. CC BY-NC-SA 3.0
-// Light-walk rendering after wyatt; tree fractal after https://www.shadertoy.com/view/dsyczD
+// Light-walk rendering after wyatt; tree fractal after https://www.shadertoy.com/view/wfB3Dy
 
 struct TimeUniform { time: f32, delta: f32, frame: u32, _padding: u32 };
 @group(0) @binding(0) var<uniform> u_time: TimeUniform;
