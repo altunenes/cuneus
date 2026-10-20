@@ -276,7 +276,7 @@ let passes = vec![
 ];
 ```
 
-note that cuneus creates one buffer pair per unique name. Each dispatch flips the write side automatically, so iters ping/pong correctly: iter 1 writes `.0` → iter 2 reads `.0`, writes `.1` → iter 3 reads `.1`, writes `.0`, etc. Non-iterated passes stay fixed throughout. *Example: `fluid.rs` uses 12 Jacobi pressure iterations this way.*
+note that cuneus creates one buffer pair per unique name. Each dispatch flips the write side automatically, so iters ping/pong correctly: iter 1 writes `.0` → iter 2 reads `.0`, writes `.1` → iter 3 reads `.1`, writes `.0`, etc. Non-iterated passes stay fixed throughout. Repeated passes share one compiled pipeline. To change the count live, build the list for the maximum and call `set_pass_enabled(index, false)` on the unused ones; a skipped pass keeps its last written state (export included). *Example: `fluid.rs` (Pressure Iterations, Sim Steps).*
 
 ### `dispatch()` vs `dispatch_stage()`
 

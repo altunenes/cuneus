@@ -16,7 +16,13 @@ cuneus::uniform_params! {
         cal: f32, cyt: f32, tbe: f32, bgf: f32,
         tml: f32, imm: f32, swl: f32, aAB: f32,
         aBC: f32, aCA: f32, stn: f32, dvs: f32,
-        prp: f32, _i0: f32, _i1: f32, _i2: f32,
+        prp: f32, src: f32, srcn: f32, srcl: f32,
+        hhu: f32, gel: f32, sem: f32, arc: f32,
+        fan: f32, nod: f32, thr: f32, bud: f32,
+        bf: f32, bsd: f32, wal: f32, wth: f32,
+        foc: f32, fds: f32, hal: f32, grn: f32,
+        hai: f32, hln: f32, hwv: f32, shu: f32,
+        pls: f32, brw: f32, sst: f32, _m1: f32,
     }
 }
 
@@ -24,6 +30,16 @@ struct PhysarumShader {
     base: RenderKit,
     compute_shader: ComputeShader,
     current_params: PhysarumParams,
+    substeps: Vec<Vec<usize>>,
+}
+
+impl PhysarumShader {
+    fn apply_substeps(&mut self) {
+        let n = self.current_params.sst.round() as usize;
+        for (i, group) in self.substeps.iter().enumerate() {
+            for &idx in group { self.compute_shader.set_pass_enabled(idx, i + 1 < n); }
+        }
+    }
 }
 
 impl ShaderManager for PhysarumShader {
@@ -41,7 +57,13 @@ impl ShaderManager for PhysarumShader {
             cal: 0.0, cyt: 1.0, tbe: 0.0, bgf: 1.0,
             tml: 6.0, imm: 0.0, swl: 0.0, aAB: -1.0,
             aBC: -1.0, aCA: -1.0, stn: 0.0, dvs: 0.0,
-            prp: 0.0, _i0: 0.0, _i1: 0.0, _i2: 0.0,
+            prp: 0.0, src: 0.6, srcn: 5.0, srcl: 25.0,
+            hhu: 0.0, gel: 0.0, sem: 0.0, arc: 0.0,
+            fan: 0.0, nod: 0.0, thr: 0.0, bud: 0.0,
+            bf: 0.0, bsd: 1.0, wal: 1.0, wth: 0.5,
+            foc: 0.0, fds: 0.5, hal: 1.0, grn: 0.0,
+            hai: 0.0, hln: 0.5, hwv: 0.5, shu: 0.0,
+            pls: 0.0, brw: 0.0, sst: 1.0, _m1: 0.0,
         };
 
         let base = RenderKit::new(core);
@@ -58,6 +80,21 @@ impl ShaderManager for PhysarumShader {
             PassDescription::new("diffuse_v", &["diffuse_h"]),
             PassDescription::new("inhibitor_down", &["diffuse_v"]).with_resolution_scale(0.125),
             PassDescription::new("field", &["trail_adv", "diffuse_v", "inhibitor_down"]),
+        ]);
+        // extra simulation substeps for more quality when you increase the speed but ofc, slow..
+        let mut substeps = Vec::new();
+        for _ in 0..3 {
+            substeps.push((passes.len()..passes.len() + 6).collect::<Vec<_>>());
+            passes.extend([
+                PassDescription::new("agent_update", &["agent_update", "field", "flow"]).with_resolution(1024, 2048),
+                PassDescription::new("trail_adv", &["field", "flow"]),
+                PassDescription::new("diffuse_h", &["trail_adv"]),
+                PassDescription::new("diffuse_v", &["diffuse_h"]),
+                PassDescription::new("inhibitor_down", &["diffuse_v"]).with_resolution_scale(0.125),
+                PassDescription::new("field", &["trail_adv", "diffuse_v", "inhibitor_down"]),
+            ]);
+        }
+        passes.extend([
             PassDescription::new("organ", &["organ", "flow", "field"]).with_resolution(64, 192),
             PassDescription::new("organ_res", &["organ", "flow", "field"]),
             PassDescription::new("spark", &["spark", "organ", "field"]).with_resolution(128, 128),
@@ -108,7 +145,9 @@ impl ShaderManager for PhysarumShader {
         let compute_shader = cuneus::compute_shader!(core, "shaders/physarum.wgsl", config);
         compute_shader.set_custom_params(initial_params, &core.queue);
 
-        Self { base, compute_shader, current_params: initial_params }
+        let mut s = Self { base, compute_shader, current_params: initial_params, substeps };
+        s.apply_substeps();
+        s
     }
 
     fn update(&mut self, core: &Core) {
@@ -146,9 +185,9 @@ impl ShaderManager for PhysarumShader {
                         });
 
                         egui::CollapsingHeader::new("Agent Physics").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.spd, 0.1..=10.0).text("Speed")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.sst, 1.0..=4.0).step_by(1.0).text("Sim Steps")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.drg, 0.0..=0.99).text("Momentum")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.sd, 1.0..=80.0).text("Sensor Distance")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.sd, 4.0..=150.0).text("Sensor Distance")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.sa, 0.05..=1.5).text("Sensor Angle")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.jit, 0.0..=0.5).text("Random Jitter")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.aSc, 0.05..=1.0).text("Agent Density")).changed();
@@ -161,6 +200,9 @@ impl ShaderManager for PhysarumShader {
                             changed |= ui.add(egui::Slider::new(&mut params.dif, 0.0..=1.0).text("Diffusion")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.tur, 0.0..=1.0).text("Turing Inhibitor")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.fod, 0.0..=2.0).text("Foraging")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.srcn, 0.0..=8.0).step_by(1.0).text("Food Sources")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.src, 0.0..=2.0).text("Source Pull")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.srcl, 5.0..=90.0).suffix(" s").text("Source Lifetime")).changed();
                         });
 
                         egui::CollapsingHeader::new("Streaming").default_open(false).show(ui, |ui| {
@@ -195,17 +237,37 @@ impl ShaderManager for PhysarumShader {
                             changed |= ui.add(egui::Slider::new(&mut params.fcy, 0.0..=1.0).text("Focus Y")).changed();
                         });
 
-                        egui::CollapsingHeader::new("Species Interaction").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.sAt, -1.0..=1.0).text("Cross-Species (- repel, + attract)")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.rct, 0.0..=3.0).text("Cyclic Dominance")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.imm, 0.0..=3.0).text("Contact Strength (bubbles)")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.swl, 0.0..=3.0).text("Swirl")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.aAB, -1.0..=1.0).text("Affinity A-B")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.aBC, -1.0..=1.0).text("Affinity B-C")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.aCA, -1.0..=1.0).text("Affinity C-A")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.stn, -1.0..=1.0).text("Surface Tension")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.dvs, 0.0..=2.0).text("Droplet Division")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.prp, 0.0..=2.0).text("Droplet Propulsion")).changed();
+                        egui::CollapsingHeader::new("Gel & Contact").default_open(true).show(ui, |ui| {
+                            changed |= ui.add(egui::Slider::new(&mut params.gel, 0.0..=2.0).text("Gel Translucency")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.sem, 0.0..=2.0).text("Contact Seams")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.arc, 0.0..=3.0).text("Spark Arcs")).changed();
+                        });
+
+                        egui::CollapsingHeader::new("Shapes").default_open(true).show(ui, |ui| {
+                            changed |= ui.add(egui::Slider::new(&mut params.fan, 0.0..=2.0).text("Fan Fronts")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.nod, 0.0..=2.0).text("Junction Nodes")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.thr, 0.0..=2.0).text("Escaping Threads")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.bud, 0.0..=2.0).text("Budding Droplets")).changed();
+                        });
+
+                        egui::CollapsingHeader::new("Microscope").default_open(true).show(ui, |ui| {
+                            changed |= ui.add(egui::Slider::new(&mut params.bf, 0.0..=1.0).text("Brightfield")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.bsd, 0.2..=3.0).text("Stain Density")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.wal, 0.0..=1.0).text("Walls")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.wth, 0.0..=2.0).text("Wall Thickness")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.foc, -1.0..=1.0).text("Focus")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.fds, 0.0..=2.0).text("Focus Shallowness")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.hal, 0.0..=3.0).text("Defocus Halo")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.grn, 0.0..=2.0).text("Sensor Grain")).changed();
+                        });
+
+                        egui::CollapsingHeader::new("Living Motion").default_open(true).show(ui, |ui| {
+                            changed |= ui.add(egui::Slider::new(&mut params.shu, 0.0..=2.0).text("Shuttle Streaming")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.pls, 0.0..=2.0).text("Pulsing Walls")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.brw, 0.0..=2.0).text("Brownian Jitter")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.hai, 0.0..=2.0).text("Hairs")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.hln, 0.0..=2.0).text("Hair Length")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.hwv, 0.0..=2.0).text("Hair Beat")).changed();
                         });
 
                         egui::CollapsingHeader::new("Rendering").default_open(false).show(ui, |ui| {
@@ -220,9 +282,10 @@ impl ShaderManager for PhysarumShader {
                         });
 
                         egui::CollapsingHeader::new("Colors").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.pal, 0.0..=6.0).step_by(1.0).text("Palette")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.pal, 0.0..=12.0).step_by(1.0).text("Palette")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.cSh, -0.5..=0.5).text("Hue Shift")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.cSp, 0.0..=2.0).text("Species Contrast")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.hhu, 0.0..=1.0).text("Highlight Hue")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.sat, 0.0..=2.5).text("Saturation")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.bgl, 0.0..=3.0).text("Background")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.bgf, 0.0..=2.0).text("Background Life")).changed();
@@ -254,6 +317,7 @@ impl ShaderManager for PhysarumShader {
         if changed {
             self.current_params = params;
             self.compute_shader.set_custom_params(params, &core.queue);
+            self.apply_substeps();
         }
 
         self.base.end_frame(core, frame, full_output);
