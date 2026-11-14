@@ -26,7 +26,27 @@ cuneus::uniform_params! {
     phase_seed: u32,
     slope_on: i32,
     slope_target: f32,
-    run: u32}
+    run: u32,
+    gabor_part: i32,
+    v1_cpd: f32,
+    v1_deg: f32,
+    v1_bw: f32,
+    v1_ori: f32,
+    v1_ow: f32,
+    v1_chan: i32,
+    v1_pop: i32,
+    v1_c50: f32,
+    v1_norm: i32,
+    v1_gain: f32,
+    v1_rf: i32,
+    an_per: f32,
+    an_rot: f32,
+    an_sf: f32,
+    an_cut: f32,
+    an_ph: f32,
+    an_scr: f32,
+    an_slp: f32,
+    show_key: i32}
 }
 
 struct FFTShader {
@@ -69,7 +89,27 @@ impl ShaderManager for FFTShader {
             phase_seed: 1,
             slope_on: 0,
             slope_target: 1.0,
-            run: 1};
+            run: 1,
+            gabor_part: 2,
+            v1_cpd: 3.0,
+            v1_deg: 16.0,
+            v1_bw: 1.5,
+            v1_ori: 0.0,
+            v1_ow: 40.0,
+            v1_chan: 0,
+            v1_pop: 0,
+            v1_c50: 0.2,
+            v1_norm: 1,
+            v1_gain: 1.0,
+            v1_rf: 1,
+            an_per: 8.0,
+            an_rot: 0.0,
+            an_sf: 0.0,
+            an_cut: 0.0,
+            an_ph: 0.0,
+            an_scr: 0.0,
+            an_slp: 0.0,
+            show_key: 1};
         let base = RenderKit::new(core);
 
         // sized for the largest resolution: rows, columns and radii past the current one return early
@@ -186,7 +226,7 @@ impl ShaderManager for FFTShader {
                         let half = (params.resolution / 2) as f32;
                         egui::CollapsingHeader::new("Filter").default_open(true).show(ui, |ui| {
                             ui.horizontal_wrapped(|ui| {
-                                for (i, name) in ["None", "Low-pass", "High-pass", "Band-pass", "Orientation"].iter().enumerate() {
+                                for (i, name) in ["None", "Low-pass", "High-pass", "Band-pass", "Orientation", "Gabor (V1)"].iter().enumerate() {
                                     changed |= ui.selectable_value(&mut params.filter_type, i as i32, *name).changed();
                                 }
                             });
@@ -202,6 +242,43 @@ impl ShaderManager for FFTShader {
                                 4 => {
                                     changed |= ui.add(egui::Slider::new(&mut params.orientation, 0.0..=180.0).text("Orientation").suffix("°")).changed();
                                     changed |= ui.add(egui::Slider::new(&mut params.orient_width, 5.0..=90.0).text("Width").suffix("°")).changed();
+                                }
+                                5 => {
+                                    let nyq = half.min(512.0) / params.v1_deg.max(0.1);
+                                    changed |= ui.add(egui::Slider::new(&mut params.v1_deg, 2.0..=60.0).text("Image width").suffix("°")).changed();
+                                    changed |= ui.add(egui::Slider::new(&mut params.v1_cpd, 0.25..=nyq.max(0.5)).logarithmic(true).text("Preferred SF").suffix(" c/deg")).changed();
+                                    changed |= ui.add(egui::Slider::new(&mut params.v1_bw, 0.5..=3.0).text("SF bandwidth").suffix(" oct")).changed();
+                                    if params.v1_pop == 0 {
+                                        changed |= ui.add(egui::Slider::new(&mut params.v1_ori, 0.0..=180.0).text("Preferred orientation").suffix("°")).changed();
+                                    }
+                                    changed |= ui.add(egui::Slider::new(&mut params.v1_ow, 10.0..=180.0).text("Orientation bandwidth").suffix("°")).changed();
+                                    changed |= toggle(ui, &mut params.v1_pop, "Population: 8 orientations");
+                                    if params.v1_pop == 0 {
+                                        ui.horizontal(|ui| {
+                                            for (i, name) in ["Even cell", "Odd cell", "Complex cell"].iter().enumerate() {
+                                                changed |= ui.selectable_value(&mut params.gabor_part, i as i32, *name).changed();
+                                            }
+                                        });
+                                        ui.horizontal_wrapped(|ui| {
+                                            for (i, name) in ["Luminance", "L−M", "S−(L+M)", "All"].iter().enumerate() {
+                                                changed |= ui.selectable_value(&mut params.v1_chan, i as i32, *name).changed();
+                                            }
+                                        });
+                                    } else {
+                                        changed |= toggle(ui, &mut params.v1_norm, "Divisive normalisation");
+                                    }
+                                    changed |= ui.add(egui::Slider::new(&mut params.v1_c50, 0.02..=1.0).logarithmic(true).text("Semi-saturation c50")).changed();
+                                    changed |= ui.add(egui::Slider::new(&mut params.v1_gain, 0.25..=8.0).logarithmic(true).text("Display gain")).changed();
+                                    let b = 2f32.powf(params.v1_bw);
+                                    let sigma = 0.18739 * (b + 1.0) / ((b - 1.0) * params.v1_cpd) * 60.0;
+                                    ui.label(format!("{:.0} c/img · RF σ {:.1}′ · Nyquist {:.1} c/deg", params.v1_cpd * params.v1_deg, sigma, nyq));
+                                    if ui.button("Macaque fovea: 3 c/deg, 1.5 oct, 40°").clicked() {
+                                        params.v1_cpd = 3.0;
+                                        params.v1_bw = 1.5;
+                                        params.v1_ow = 40.0;
+                                        changed = true;
+                                    }
+                                    ui.small("Typical V1: 1–2 oct, 30–60° (De Valois et al. 1982)");
                                 }
                                 _ => {}
                             }
@@ -223,10 +300,39 @@ impl ShaderManager for FFTShader {
                             }
                         });
 
+                        egui::CollapsingHeader::new("Animation").show(ui, |ui| {
+                            match params.filter_type {
+                                1 | 2 | 3 => { changed |= slider(ui, &mut params.an_cut, 0.0..=3.0, "Frequency sweep (oct)"); }
+                                4 => { changed |= slider(ui, &mut params.an_rot, -90.0..=90.0, "Orientation spin (°/s)"); }
+                                5 => {
+                                    if params.v1_pop == 0 {
+                                        changed |= slider(ui, &mut params.an_rot, -90.0..=90.0, "Orientation spin (°/s)");
+                                        changed |= slider(ui, &mut params.an_ph, -360.0..=360.0, "Phase drift (°/s)");
+                                    }
+                                    changed |= slider(ui, &mut params.an_sf, 0.0..=3.0, "SF sweep (oct)");
+                                }
+                                _ => {}
+                            }
+                            changed |= slider(ui, &mut params.an_scr, 0.0..=1.0, "Phase scramble swing");
+                            if params.slope_on != 0 {
+                                changed |= slider(ui, &mut params.an_slp, 0.0..=1.5, "Slope swing");
+                            }
+                            changed |= ui.add(egui::Slider::new(&mut params.an_per, 1.0..=60.0).logarithmic(true).text("Sweep period").suffix(" s")).changed();
+                        });
+
+                        egui::CollapsingHeader::new("Overlays").show(ui, |ui| {
+                            changed |= toggle(ui, &mut params.show_radial, "Radial amplitude plot (α in / out)");
+                            if params.filter_type == 5 {
+                                changed |= toggle(ui, &mut params.v1_rf, "Receptive field inset");
+                                changed |= toggle(ui, &mut params.show_key, "Orientation colour key");
+                            }
+                        });
+
                         egui::CollapsingHeader::new("Analysis").show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("Resolution");
                                 for n in [256u32, 512, 1024, 2048] {
+                                    if n > 1024 && params.filter_type == 5 { continue; }
                                     changed |= ui.radio_value(&mut params.resolution, n, n.to_string()).changed();
                                 }
                             });
@@ -234,7 +340,6 @@ impl ShaderManager for FFTShader {
                             if params.window != 0 {
                                 changed |= slider(ui, &mut params.taper, 0.02..=0.5, "Taper");
                             }
-                            changed |= toggle(ui, &mut params.show_radial, "Radial amplitude plot");
                             changed |= slider(ui, &mut params.spec_decades, 2.0..=8.0, "Spectrum decades");
                             changed |= toggle(ui, &mut params.is_bw, "Black & White");
                         });
@@ -264,13 +369,23 @@ impl ShaderManager for FFTShader {
         if changed {
             params.cutoff = params.cutoff.min((params.resolution / 2) as f32);
             params.band_center = params.band_center.min((params.resolution / 2) as f32);
+            // V1 planes fit at N <= 1024
+            if params.filter_type == 5 { params.resolution = params.resolution.min(1024); }
+            params.v1_cpd = params.v1_cpd.min((params.resolution / 2) as f32 / params.v1_deg.max(0.1));
             self.current_params = params;
             self.compute_shader.set_custom_params(params, &core.queue);
             self.should_initialize = true;
         }
 
         // a still image runs the FFT once per change; video and webcam every frame
-        let run = (self.should_initialize || self.base.using_video_texture || self.base.using_webcam_texture)
+        let p = &self.current_params;
+        let animating = match p.filter_type {
+            1..=3 => p.an_cut != 0.0,
+            4 => p.an_rot != 0.0,
+            5 => p.an_sf != 0.0 || (p.v1_pop == 0 && (p.an_rot != 0.0 || p.an_ph != 0.0)),
+            _ => false,
+        } || p.an_scr != 0.0 || (p.slope_on != 0 && p.an_slp != 0.0);
+        let run = (self.should_initialize || animating || self.base.using_video_texture || self.base.using_webcam_texture)
             && self.base.get_current_texture_manager().is_some();
         if self.current_params.run != run as u32 {
             self.current_params.run = run as u32;

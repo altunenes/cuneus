@@ -1,5 +1,5 @@
 use log::{error, info, warn};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use wgpu;
@@ -50,6 +50,8 @@ pub struct ComputeShader {
     pub multipass_manager: Option<MultiPassManager>,
     pub pass_dependencies: Option<HashMap<String, Vec<String>>>,
     pub pass_descriptions: Option<Vec<crate::compute::PassDescription>>,
+    /// Pass indices skipped by `dispatch`
+    pub skipped_passes: HashSet<usize>,
 
     // Engine resources (Group 2)
     pub font_system: Option<FontSystem>,
@@ -310,18 +312,24 @@ impl ComputeShader {
                 source: wgpu::ShaderSource::Wgsl(shader_source.into()),
             });
 
+        // repeated passes share one pipeline
+        let mut compiled: HashMap<&str, wgpu::ComputePipeline> = HashMap::new();
         let mut pipelines = Vec::new();
         for entry_point in &config.entry_points {
-            let pipeline = core
-                .device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some(&format!("{} Pipeline - {}", config.label, entry_point)),
-                    layout: Some(&pipeline_layout),
-                    module: &shader_module,
-                    entry_point: Some(entry_point),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    cache: None,
-                });
+            let pipeline = compiled
+                .entry(entry_point.as_str())
+                .or_insert_with(|| {
+                    core.device
+                        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                            label: Some(&format!("{} Pipeline - {}", config.label, entry_point)),
+                            layout: Some(&pipeline_layout),
+                            module: &shader_module,
+                            entry_point: Some(entry_point),
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                            cache: None,
+                        })
+                })
+                .clone();
             pipelines.push(pipeline);
         }
 
@@ -352,6 +360,7 @@ impl ComputeShader {
             multipass_manager,
             pass_dependencies,
             pass_descriptions: config.passes.clone(),
+            skipped_passes: HashSet::new(),
             font_system,
             atomic_buffer_raw,
             atomic_buffer_channels: config.atomic_buffer_channels,
@@ -961,6 +970,15 @@ impl ComputeShader {
         ]
     }
 
+    /// Skip a pass at runtime; its buffer keeps the last written state
+    pub fn set_pass_enabled(&mut self, pass_index: usize, enabled: bool) {
+        if enabled {
+            self.skipped_passes.remove(&pass_index);
+        } else {
+            self.skipped_passes.insert(pass_index);
+        }
+    }
+
     /// Dispatch single stage of compute shader (for fine-grained control like old system)
     pub fn dispatch_stage(
         &mut self,
@@ -1216,6 +1234,9 @@ impl ComputeShader {
 
         // Execute each pass in order with proper dependencies
         for pass_idx in 0..num_passes {
+            if self.skipped_passes.contains(&pass_idx) {
+                continue;
+            }
             let pipeline = &self.pipelines[pass_idx];
             let entry_point = &self.entry_points[pass_idx];
 
@@ -1360,20 +1381,25 @@ impl ComputeShader {
         if let Some(hot_reload) = &mut self.hot_reload {
             if let Some(new_module) = hot_reload.reload_compute_shader() {
                 // Recreate pipelines with updated shader
+                let mut compiled: HashMap<&str, wgpu::ComputePipeline> = HashMap::new();
                 let mut new_pipelines = Vec::new();
                 for entry_point in &self.entry_points {
-                    let new_pipeline =
-                        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                            label: Some(&format!(
-                                "Updated {} Pipeline - {}",
-                                self.label, entry_point
-                            )),
-                            layout: Some(&self.pipeline_layout),
-                            module: new_module,
-                            entry_point: Some(entry_point),
-                            compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            cache: None,
-                        });
+                    let new_pipeline = compiled
+                        .entry(entry_point.as_str())
+                        .or_insert_with(|| {
+                            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                                label: Some(&format!(
+                                    "Updated {} Pipeline - {}",
+                                    self.label, entry_point
+                                )),
+                                layout: Some(&self.pipeline_layout),
+                                module: new_module,
+                                entry_point: Some(entry_point),
+                                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                                cache: None,
+                            })
+                        })
+                        .clone();
                     new_pipelines.push(new_pipeline);
                 }
 

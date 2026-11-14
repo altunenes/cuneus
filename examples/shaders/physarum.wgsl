@@ -17,7 +17,13 @@ struct Params {
     cal: f32, cyt: f32, tbe: f32, bgf: f32,
     tml: f32, imm: f32, swl: f32, aAB: f32,
     aBC: f32, aCA: f32, stn: f32, dvs: f32,
-    prp: f32, _i0: f32, _i1: f32, _i2: f32,
+    prp: f32, src: f32, srcn: f32, srcl: f32,
+    hhu: f32, gel: f32, sem: f32, arc: f32,
+    fan: f32, nod: f32, thr: f32, bud: f32,
+    bf: f32, bsd: f32, wal: f32, wth: f32,
+    foc: f32, fds: f32, hal: f32, grn: f32,
+    hai: f32, hln: f32, hwv: f32, shu: f32,
+    pls: f32, brw: f32, sst: f32, _m1: f32,
 };
 @group(1) @binding(0) var out: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(1) var<uniform> p: Params;
@@ -37,6 +43,14 @@ fn hv(s:u32)->v4{return v4(h1(s),h1(s+1u),h1(s+2u),h1(s+3u))*2.-1.;}
 // lengths are in reference pixels at 1080 height
 fn rk(h:f32)->f32{return h/1080.;}
 fn ld(t:texture_2d<f32>,c:i2,d:i2)->v4{return textureLoad(t,(c%d+d)%d,0);}
+fn vh(i:v2)->f32{return h1(pcg(u32(i32(i.x)+65536)*73856093u^u32(i32(i.y)+65536)*19349663u));}
+fn vn(q:v2)->f32{let i=floor(q);let f=fract(q);let u=f*f*(3.-2.*f);return mix(mix(vh(i),vh(i+v2(1.,0.)),u.x),mix(vh(i+v2(0.,1.)),vh(i+v2(1.,1.)),u.x),u.y);}
+// shuttle streaming, reverses every ~40 s
+fn shut(u:v2,q:v2,k:f32)->v2{
+    if(p.shu<=0.){return u;}
+    let s=length(u);let dr=u/max(s,1e-4)*smoothstep(.01,.08,s);
+    return u+dr*p.shu*k*sin(u_t.time*tau/40.+vn(q/(300.*k))*tau*1.5);
+}
 
 // Bivariate Tensor Product Chebyshev behavior map
 // per species: 5 terms x [w1, w2, coef, coef, (coef, coef, mc), out]
@@ -70,6 +84,19 @@ fn cheby(ir:v4,sp:u32)->v4{
 
 // own-species trail
 fn fsp(q:v2,cv:v2,sp:u32)->f32{let s=textureSampleLevel(t1,s1,fract(q/cv),0.);return select(select(s.z,s.y,sp==1u),s.x,sp==0u);}
+fn fot(q:v2,cv:v2,sp:u32)->f32{let s=textureSampleLevel(t1,s1,fract(q/cv),0.);return s.x+s.y+s.z-select(select(s.z,s.y,sp==1u),s.x,sp==0u);}
+
+// food sources fade in and out, staggered
+fn sources(pt:v2,cv:v2)->f32{
+    var a=0.;let n=u32(clamp(p.srcn,0.,8.));let L=max(p.srcl,2.);let r=.12*cv.y;
+    for(var i=0u;i<n;i++){
+        let ph=u_t.time/L+f32(i)/f32(n);let g=u32(floor(ph));let f=fract(ph);
+        let c=v2(h1(pcg(i*7919u+g*104729u)),h1(pcg(i*15485863u+g*32452843u)))*cv;
+        var dd=pt-c;dd-=cv*round(dd/cv);
+        a+=smoothstep(0.,.15,f)*smoothstep(1.,.7,f)*exp(-dot(dd,dd)/(r*r));
+    }
+    return a;
+}
 
 // Sensor Read
 fn sns(pt:v2,sp:u32,cv:v2)->v2{
@@ -81,7 +108,8 @@ fn sns(pt:v2,sp:u32,cv:v2)->v2{
         default: {o=s.z;t=s.x+s.y;}
     }
     // fresh food attracts
-    return v2(o+s.w*p.fod*.5,t*p.sAt);
+    var fs=0.;if(p.src>0.){fs=sources(pt,cv)*p.src;}
+    return v2(o+s.w*p.fod*.5+fs,t*p.sAt);
 }
 
 // bilinear deposit, texel centres at i+.5
@@ -103,8 +131,10 @@ fn agent_update(@builtin(global_invocation_id) id:u3,@builtin(local_invocation_i
     let cv=v2(textureDimensions(t1));let aid=id.y*d.x+id.x;let lc=vec2<u32>(id.x,id.y+d.y);
     if(aid>=u32(f32(d.x*d.y)*clamp(p.aSc,.05,1.))){return;}
 
-    let sp=aid%3u;let sd=aid*17u+u_t.frame*7919u;
+    let sp=aid%3u;var sd=aid*17u+u_t.frame*7919u;
     var pos:v2;var vel:v2;var np:v2;var own=v2(0.);
+    // thread agent: ignores trails for a while
+    var xp=0.;
 
     if(u_t.frame<2u){
         // Edge Spawn Logic
@@ -126,10 +156,18 @@ fn agent_update(@builtin(global_invocation_id) id:u3,@builtin(local_invocation_i
         np = pos;
     }else{
         let dt=textureLoad(t0,vec2<i32>(id.xy),0);pos=dt.xy+textureLoad(t0,vec2<i32>(lc),0).xy;vel=dt.zw;
+        // substeps share the frame: seed by position
+        if(p.sst>1.5){sd^=pcg(bitcast<u32>(pos.x)^(bitcast<u32>(pos.y)*7u));}
         let hd=select(h1(sd+10u)*tau,atan2(vel.y,vel.x),length(vel)>.01);
 
         let k=rk(cv.y);let spd=p.spd*k;
-        let sa=p.sa;let sdt=p.sd*k;
+        xp=step(h1(aid*31u+u32(u_t.time*.25)*7919u),.3*p.thr);
+        // budding: short sight, wide angle
+        let bu=step(h1(aid*53u+u32(u_t.time/12.)*104729u),.15*p.bud);
+        // fan: wider at growth fronts
+        var fr=0.;
+        if(p.fan>0.){fr=(1.-smoothstep(0.,.5,fsp(pos+v2(cos(hd),sin(hd))*p.sd*k,cv,sp)))*smoothstep(.05,.4,fsp(pos,cv,sp))*p.fan;}
+        let sa=p.sa*(1.+.8*fr)*mix(1.,1.6,bu);let sdt=max(p.sd,p.spd*1.5)*k*mix(1.,.3,bu);
         let F =sns(pos+v2(cos(hd),sin(hd))*sdt,sp,cv);
         let FL=sns(pos+v2(cos(hd+sa*.5),sin(hd+sa*.5))*sdt,sp,cv);
         let FR=sns(pos+v2(cos(hd-sa*.5),sin(hd-sa*.5))*sdt,sp,cv);
@@ -145,10 +183,12 @@ fn agent_update(@builtin(global_invocation_id) id:u3,@builtin(local_invocation_i
 
         let fw=v2(cos(hd),sin(hd));let lf=v2(-sin(hd),cos(hd));
 
-        let wF=fw*(bO.x+mO.x)*p.fSc+lf*(bO.y-mO.y)*p.fSc;
+        // high diversity: classic steering keeps species aggregating
+        let anc=smoothstep(.3,1.,p.mSc);
+        let wF=((fw*(bO.x+mO.x)*p.fSc+lf*(bO.y-mO.y)*p.fSc)*(1.-.4*anc)+(fw*.6+lf*clamp(own_lr*p.sGn*.2,-1.,1.))*anc)*(1.-xp);
         let wS=(fw*(bO.z+mO.z)*p.str+lf*(bO.w-mO.w)*p.str)*k;
-        let cross_steer = fw * F.y + lf * cross_lr;
-        let jit=(h1(sd+6u)*2.-1.)*p.jit;
+        let cross_steer = (fw * F.y + lf * cross_lr)*(1.-xp);
+        let jit=(h1(sd+6u)*2.-1.)*(p.jit+.3*fr);
 
         // phase separation: affinities (+ toward, - away) and swirl
         var ps=v2(0.);let e=2.*k;
@@ -183,7 +223,15 @@ fn agent_update(@builtin(global_invocation_id) id:u3,@builtin(local_invocation_i
         }
         let pl_=length(ps);if(pl_>spd*4.){ps*=spd*4./pl_;}
         let acc=(wF*spd+cross_steer*spd*.5+v2(cos(hd+jit),sin(hd+jit))*p.jit*.5*k+ps)*1.25;
-        vel=mix(acc,vel,clamp(p.drg,0.,.999));
+        vel=mix(acc,vel,clamp(mix(p.drg,.96,xp),0.,.999));
+        // collisions: bounce off other species
+        let clh=smoothstep(.3,.95,p.drg);
+        if(clh>0.){
+            let e3=4.*k;
+            let go=v2(fot(pos+v2(e3,0.),cv,sp)-fot(pos-v2(e3,0.),cv,sp),fot(pos+v2(0.,e3),cv,sp)-fot(pos-v2(0.,e3),cv,sp));
+            let gl=length(go);let nn=go/max(gl,1e-4);
+            vel-=nn*max(dot(vel,nn),0.)*clh*smoothstep(.05,.6,gl)*1.6;
+        }
         let mxS=spd*4.;let cS_=length(vel);
         if(cS_>mxS){vel*=mxS/cS_;}
 
@@ -200,7 +248,7 @@ fn agent_update(@builtin(global_invocation_id) id:u3,@builtin(local_invocation_i
     // same trail density per reference area at any resolution
     let k=rk(cv.y);
     let dp=p.dep*k*k*max(1.5-length(vel)/max(p.spd*4.*k,.01),.5)*asc;
-    let sg=np-pos;let n=clamp(u32(length(sg)/(4.*k))+1u,1u,3u);let a=dp/f32(n);
+    let sg=np-pos;let n=clamp(u32(length(sg)/(4.*k))+1u,1u,select(3u,12u,p.spd>10.));let a=dp*mix(1.,.35,xp)/f32(n);
     for(var k=1u;k<=n;k++){splat(pos+sg*(f32(k)/f32(n)),a,off,cw,ch);}
 
     // momentum into the flow grid
@@ -276,7 +324,8 @@ fn trail_adv(@builtin(global_invocation_id) id:u3){
     let pi=u32(c.y*d.x+c.x);let st=u32(d.x*d.y);
     let dp=v3(f32(atomicExchange(&atm[pi],0u)),f32(atomicExchange(&atm[pi+st],0u)),f32(atomicExchange(&atm[pi+2u*st],0u)))*aiv*.002;
     // well fed agents deposit more
-    let fe=mix(1.,.1+.9*fd,clamp(p.fod,0.,1.));
+    var fe=mix(1.,.1+.9*fd,clamp(p.fod,0.,1.));
+    if(p.src>0.){fe*=mix(1.,.6+.8*min(sources(v2(c)+.5,v2(d)),1.),clamp(p.src,0.,1.));}
     textureStore(out,id.xy,v4(s*p.dec+dp*fe*max(v3(0.),v3(1.)-s/3.),fd));
 }
 
@@ -369,7 +418,7 @@ fn oget(i:u32,pos:v2,cv:v2,sp:f32)->Org{
     }
     // dof: depth and blur radius
     let z=clamp((h1(hs+7u)*2.-1.)*.8+.2*sin(u_t.time*.25+h1(hs+8u)*tau),-1.,1.);
-    let cc=min(p.apr*max(0.,abs(z-p.fcs)-p.fdr)*14.+rblur(pos/cv,cv),24.)*rk(cv.y);
+    let cc=min(p.apr*max(0.,abs(z-p.fcs)-p.fdr)*14.+p.bf*p.fds*abs(z*.8-p.foc)*12.+rblur(pos/cv,cv),24.)*rk(cv.y);
     return Org(pos,dir,r0*env*m,asp,ty,hs,dv,ext,cc,vc);
 }
 
@@ -449,7 +498,7 @@ fn organ(@builtin(global_invocation_id) id:u3){
         }
         ex=v4(0.,0.,0.,g.x);mo=v4(h1(i*977u+u_t.frame)*tau,-h1(i*331u+u_t.frame),0.,0.);
     }else{
-        let u=textureSampleLevel(t1,s1,fract(pos/cv),0.).xy;
+        let u=shut(textureSampleLevel(t1,s1,fract(pos/cv),0.).xy,pos,k)*round(max(p.sst,1.));
         let e=3.*k;let gd=v2(dens(pos+v2(e,0.),cv)-dens(pos-v2(e,0.),cv),dens(pos+v2(0.,e),cv)-dens(pos-v2(0.,e),cv));
         let hs=pcg(i*31u+u_t.frame*7919u);let o0=oget(i,pos,cv,fract(ex.w)*2.);
         // brownian ~ 1/sqrt(r)
@@ -558,6 +607,12 @@ fn organ_res(@builtin(global_invocation_id) id:u3){
 fn sdir(a:f32)->v2{return v2(cos(a),sin(a));}
 fn soff(st:u32,cv:v2)->u32{let cz=gcell(cv.y);let gw=(i32(cv.x)+cz-1)/cz;let gh=(i32(cv.y)+cz-1)/cz;return 4u*st+2u*u32(gw*gh);}
 
+fn arc_splat(q:v2,w:f32,so:u32,cw:i32,ch:i32){
+    let g=q-.5;let fl=floor(g);let f=g-fl;let c=i2(fl);
+    let x0=(c.x%cw+cw)%cw;let y0=(c.y%ch+ch)%ch;let x1=(x0+1)%cw;let y1=(y0+1)%ch;
+    atomicAdd(&atm[so+u32(y0*cw+x0)],u32(w*(1.-f.x)*(1.-f.y)));atomicAdd(&atm[so+u32(y0*cw+x1)],u32(w*f.x*(1.-f.y)));
+    atomicAdd(&atm[so+u32(y1*cw+x0)],u32(w*(1.-f.x)*f.y));atomicAdd(&atm[so+u32(y1*cw+x1)],u32(w*f.x*f.y));
+}
 @compute @workgroup_size(16,16,1)
 fn spark(@builtin(global_invocation_id) id:u3){
     let dd=textureDimensions(out);let d=vec2<u32>(dd.x,dd.y/2u);if(id.x>=d.x||id.y>=d.y){return;}
@@ -584,6 +639,19 @@ fn spark(@builtin(global_invocation_id) id:u3){
         // no ridge (sheet): fade fast
         let pr=v2(-sin(a),cos(a))*5.*k;let rg=dc-.5*(dens(pos+pr,cv)+dens(pos-pr,cv));
         st.y-=(1.-smoothstep(.3,1.2,rg))*.08;
+        // arc across species contact
+        if(st.y>0.&&p.arc>0.){
+            let t3=textureSampleLevel(t2,s2,fract(pos/cv),0.).xyz;let s3=t3.x+t3.y+t3.z;
+            let it=(t3.x*t3.y+t3.y*t3.z+t3.z*t3.x)/(s3*s3+1e-4)*3.;
+            if(it>.45&&h1(hs+5u)<.06*p.arc){
+                let aa=h1(hs+6u)*tau;let ad=sdir(aa);let an=v2(-ad.y,ad.x);let so=soff(stt,cv);var pp=pos;
+                for(var q=1;q<=8;q++){
+                    let nx=pos+ad*f32(q)*3.*k+an*(h1(hs+10u+u32(q))-.5)*6.*k;
+                    for(var m=0;m<4;m++){arc_splat(mix(pp,nx,f32(m)/4.),st.y*600.,so,cw,ch);}
+                    pp=nx;
+                }
+            }
+        }
         if(st.y>0.){
             let tl=16.*k;let n=i32(tl*2.);let so=soff(stt,cv);
             for(var q=0;q<n;q++){
@@ -632,6 +700,24 @@ fn pm(k:u32)->mat3x3<f32>{
         case 18u: {return mat3x3<f32>(.2,.02,.05, 1.,.2,.3, 1.,.8,.8);}
         case 19u: {return mat3x3<f32>(.02,.15,.05, .2,1.,.4, .8,1.,.85);}
         case 20u: {return mat3x3<f32>(.02,.05,.2, .25,.4,1., .8,.85,1.);}
+        case 21u: {return mat3x3<f32>(.2,.04,0., 1.,.35,.05, 1.,.7,.35);}
+        case 22u: {return mat3x3<f32>(0.,.1,.12, .05,.75,.7, .5,1.,.9);}
+        case 23u: {return mat3x3<f32>(.1,.02,.18, .6,.2,.95, .85,.6,1.);}
+        case 24u: {return mat3x3<f32>(.2,.03,.05, 1.,.4,.4, 1.,.75,.7);}
+        case 25u: {return mat3x3<f32>(.12,.1,0., .95,.8,.15, 1.,.95,.55);}
+        case 26u: {return mat3x3<f32>(0.,.05,.15, .15,.45,1., .6,.8,1.);}
+        case 27u: {return mat3x3<f32>(0.,.12,.06, .2,1.,.5, .7,1.,.8);}
+        case 28u: {return mat3x3<f32>(.06,.02,.15, .55,.25,1., .85,.7,1.);}
+        case 29u: {return mat3x3<f32>(.15,.02,.08, 1.,.25,.55, 1.,.7,.8);}
+        case 30u: {return mat3x3<f32>(.12,.06,.02, .85,.55,.2, 1.,.85,.55);}
+        case 31u: {return mat3x3<f32>(.02,.08,.1, .3,.65,.75, .75,.95,1.);}
+        case 32u: {return mat3x3<f32>(.08,.1,.04, .55,.7,.3, .85,.95,.6);}
+        case 33u: {return mat3x3<f32>(.15,0.,.1, 1.,.1,.7, 1.,.6,.95);}
+        case 34u: {return mat3x3<f32>(0.,.1,.15, 0.,.9,1., .6,1.,1.);}
+        case 35u: {return mat3x3<f32>(.1,.12,0., .85,1.,.05, .95,1.,.6);}
+        case 36u: {return mat3x3<f32>(.02,.02,.04, .25,.3,.5, .65,.7,.85);}
+        case 37u: {return mat3x3<f32>(.15,.1,.02, 1.,.75,.2, 1.,.92,.6);}
+        case 38u: {return mat3x3<f32>(.12,.02,.02, .75,.12,.1, 1.,.55,.45);}
         default: {
             var e=mat3x3<f32>(.4,.02,.05, .3,.15,.02, .02,.08,.2);var e2=mat3x3<f32>(.02,.2,.3, .2,.02,.3, .3,.2,.02);
             var c=mat3x3<f32>(1.,.4,.1, .8,.9,.1, .1,.99,.4);var c2=mat3x3<f32>(.2,1.,.8, .9,.2,1., 1.,.9,.2);
@@ -648,6 +734,12 @@ fn bgc(k:u32)->v3{
         case 4u: {return v3(.04,.01,0.);}
         case 5u: {return v3(.02,.03,.012);}
         case 6u: {return v3(.02,.02,.03);}
+        case 7u: {return v3(.03,.025,.035);}
+        case 8u: {return v3(.035,.02,.025);}
+        case 9u: {return v3(.01,.02,.035);}
+        case 10u: {return v3(.035,.03,.02);}
+        case 11u: {return v3(.015,.01,.03);}
+        case 12u: {return v3(.03,.025,.015);}
         default: {return v3(.02,.02,.025);}
     }
 }
@@ -659,7 +751,7 @@ fn hgt(uv:v2)->f32{let s=textureSampleLevel(t0,s0,fract(uv),0.);let x=s.x+s.y+s.
 @compute @workgroup_size(16,16,1)
 fn cyto(@builtin(global_invocation_id) id:u3){
     let d=i2(textureDimensions(out));let c=i2(id.xy);if(c.x>=d.x||c.y>=d.y){return;}
-    let u=textureSampleLevel(t1,s1,(v2(id.xy)+.5)/v2(d),0.).xy;
+    let u=shut(textureSampleLevel(t1,s1,(v2(id.xy)+.5)/v2(d),0.).xy,v2(id.xy)+.5,rk(f32(d.y)))*round(max(p.sst,1.));
     let av=adv(c,u,d);var g=av.x;
     let tr=ld(t2,c,d).xyz;let tm=smoothstep(.4,1.5,tr.x+tr.y+tr.z);
     g*=mix(.85,.992,tm);
@@ -675,21 +767,22 @@ fn cyto(@builtin(global_invocation_id) id:u3){
     textureStore(out,id.xy,v4(clamp(g,0.,1.),mt));
 }
 
-// jump flood: offset from each tissue pixel to the nearest outside pixel (999 = none yet)
+// jfa: xy tissue->outside, zw outside->tissue (999 = none)
 @compute @workgroup_size(16,16,1)
 fn jinit(@builtin(global_invocation_id) id:u3){
     let d=i2(textureDimensions(out));let c=i2(id.xy);if(c.x>=d.x||c.y>=d.y){return;}
     let f=ld(t0,c,d);
-    textureStore(out,id.xy,select(v4(0.,0.,0.,1.),v4(999.,999.,0.,1.),f.x+f.y+f.z>.6));
+    textureStore(out,id.xy,select(v4(0.,0.,999.,999.),v4(999.,999.,0.,0.),f.x+f.y+f.z>.6));
 }
 fn jstep(id:u3,k:i32)->v4{
     let d=i2(textureDimensions(out));let c=i2(id.xy);
-    var b=ld(t0,c,d).xy;var bl=dot(b,b);
+    let b0=ld(t0,c,d);var b=b0.xy;var bl=dot(b,b);var e=b0.zw;var el=dot(e,e);
     for(var j=-1;j<=1;j++){for(var i=-1;i<=1;i++){
-        let o=i2(i,j)*k;let r=ld(t0,c+o,d).xy;
-        if(r.x<900.){let cd=v2(o)+r;let l=dot(cd,cd);if(l<bl){bl=l;b=cd;}}
+        let o=i2(i,j)*k;let r=ld(t0,c+o,d);
+        if(r.x<900.){let cd=v2(o)+r.xy;let l=dot(cd,cd);if(l<bl){bl=l;b=cd;}}
+        if(r.z<900.){let cd=v2(o)+r.zw;let l=dot(cd,cd);if(l<el){el=l;e=cd;}}
     }}
-    return v4(b,0.,1.);
+    return v4(b,e);
 }
 @compute @workgroup_size(16,16,1)
 fn j64(@builtin(global_invocation_id) id:u3){let d=textureDimensions(out);if(id.x>=d.x||id.y>=d.y){return;}textureStore(out,id.xy,jstep(id,64));}
@@ -710,11 +803,26 @@ fn j1(@builtin(global_invocation_id) id:u3){let d=textureDimensions(out);if(id.x
 @compute @workgroup_size(16,16,1)
 fn rfield(@builtin(global_invocation_id) id:u3){
     let d=i2(textureDimensions(out));let c=i2(id.xy);if(c.x>=d.x||c.y>=d.y){return;}
-    let f=ld(t0,c,d);let cy=ld(t1,c,d);let g=cy.x;var tr=f.xyz+max(cy.yzw-f.xyz,v3(0.))*min(p.bgf,1.);
-    let jr=ld(t2,c,d).xy;
+    let kr=rk(f32(d.y));let qc=v2(c)+.5;let J=ld(t2,c,d);let jr=J.xy;
+    var sd=-127.;if(dot(jr,jr)>.25){sd=select(127.,length(jr),jr.x<900.);}else if(J.z<900.){sd=-length(J.zw);}
+    var f=ld(t0,c,d);var pa=0.;
+    if(p.pls>0.){
+        // peristalsis
+        var inw=v2(0.);if(sd>0.&&jr.x<900.){inw=-jr/sd;}else if(sd<0.&&J.z<900.&&sd>-126.){inw=J.zw/(-sd);}
+        pa=p.pls*2.5*kr*sin(u_t.time*tau/7.-vn(qc/(250.*kr))*tau*2.)*(1.-smoothstep(4.*kr,12.*kr,abs(sd)));
+        f=textureSampleLevel(t0,s0,fract((qc+inw*pa)/v2(d)),0.);
+    }
+    let cy=ld(t1,c,d);var g=cy.x;
+    if(p.brw>0.){
+        // brownian
+        let bt=u_t.time*3.;let bq=qc/(2.5*kr);
+        let jv=(v2(vn(bq+bt*v2(1.7,-1.1)),vn(bq+v2(17.3,5.1)+bt*v2(-1.3,1.9)))-.5)*2.*p.brw*1.2*kr;
+        g=textureSampleLevel(t1,s1,fract((qc+jv)/v2(d)),0.).x;
+    }
+    var tr=f.xyz+max(cy.yzw-f.xyz,v3(0.))*min(p.bgf,1.);
     if(p.tbe>0.&&jr.x<900.&&dot(jr,jr)>.25){
         // local tube radius
-        let dd=length(jr);let dr=-jr/dd;let kr=rk(f32(d.y));var R=dd;
+        let dd=length(jr);let dr=-jr/dd;var R=dd;
         for(var s=1;s<=5;s++){
             let rq=ld(t2,c+i2(round(dr*f32(s)*8.*kr)),d).xy;
             if(rq.x<900.){R=max(R,length(rq));}
@@ -723,14 +831,49 @@ fn rfield(@builtin(global_invocation_id) id:u3){
         let hr=sqrt(max(0.,2.*R*dd-dd*dd))/max(R,.5);let sz=mix(.75,1.25,smoothstep(2.*kr,16.*kr,R));
         tr*=mix(1.,hr*sz,clamp(p.tbe,0.,1.));
     }
-    textureStore(out,id.xy,v4(tr*(1.+p.cyt*g*4.8),f.w));
+    // hairs: nearest edge point picks the root
+    if(p.hai>0.){
+        let jo=J.zw;let L=(6.+18.*p.hln)*kr;let d0=length(jo);
+        if(jo.x<900.&&d0>.5&&d0<L){
+            let nr=-jo/d0;let tg=v2(-nr.y,nr.x);let s0=v2(c)+jo;
+            let wv=sin(((s0.x*.7+s0.y)*.12-d0*.25)/kr-u_t.time*3.)*p.hwv*3.*kr*pow(d0/L,1.3);
+            let qp=v2(c)-tg*wv;let qi=i2(round(qp));let jq=ld(t2,qi,d).zw;
+            if(jq.x<900.){
+                let s1=v2(qi)+jq;let cw=4.*kr;let cl=floor(s1/cw);
+                let hs=pcg(u32(cl.x+4096.)*73856093u^u32(cl.y+4096.)*19349663u);
+                let hl=L*(.45+.55*h1(hs+1u));
+                if(h1(hs)<.25+.25*min(p.hai,1.)&&d0<hl){
+                    let wd=mix(.7,.2,d0/hl)*kr+.15;let hd=abs(dot(qp-(cl+.5)*cw,tg));
+                    let hi=(1.-smoothstep(wd,wd+1.,hd))*(1.-smoothstep(.7*hl,hl,d0));
+                    let sw=ld(t0,i2(round(s1)),d).xyz;tr+=sw/max(sw.x+sw.y+sw.z,1e-3)*hi*.9*p.hai;
+                }
+            }
+        }
+    }
+    // junction nodes: 3+ crossings on a ring
+    if(p.nod>0.&&f.x+f.y+f.z>.4){
+        var crs=0.;var pv=false;
+        for(var q=0;q<17;q++){
+            let a=f32(q%16)*tau/16.;let rs=ld(t0,c+i2(round(v2(cos(a),sin(a))*9.*kr)),d);let on=rs.x+rs.y+rs.z>.5;
+            if(q>0&&on!=pv){crs+=1.;}pv=on;
+        }
+        tr*=1.+p.nod*.9*smoothstep(4.5,6.5,crs);
+    }
+    // walls into alpha (inside tissue)
+    var wo=f.w;let sw2=sd+pa;
+    if(p.bf>0.&&p.wal>0.&&sw2>0.){
+        let W=(2.+6.*p.wth)*kr;let x=sw2/W;
+        let wp=.45*smoothstep(0.,.2,x)*(1.-smoothstep(.8,1.2,x))+exp(-pow((sw2-1.2*kr)/(.7*kr),2.))+.7*exp(-pow((sw2-W)/(.7*kr),2.));
+        wo=1.-min(wp,1.);
+    }
+    textureStore(out,id.xy,v4(tr*(1.+p.cyt*g*4.8),wo));
 }
 
 // shared colours
 struct Pal { m0:mat3x3<f32>, m1:mat3x3<f32>, m2:mat3x3<f32> };
 // species contrast around the mean colour, then hue shift
 fn palg()->Pal{
-    let pl=u32(clamp(p.pal,0.,6.));let sh=p.cSh*tau;let ro=select(0.,.3*pi,pl==0u);
+    let pl=u32(clamp(p.pal,0.,12.));let sh=p.cSh*tau;let ro=select(0.,.3*pi,pl==0u);
     var a=pm(pl*3u);var b=pm(pl*3u+1u);var c=pm(pl*3u+2u);
     for(var j=0;j<3;j++){
         let mn=(a[j]+b[j]+c[j])/3.;
@@ -738,6 +881,9 @@ fn palg()->Pal{
         b[j]=hRot(max(mn+(b[j]-mn)*p.cSp,v3(0.)),sh+ro);
         c[j]=hRot(max(mn+(c[j]-mn)*p.cSp,v3(0.)),sh-ro);
     }
+    a[2]=mix(a[2],a[1]*max(a[2].x,max(a[2].y,a[2].z))/max(max(a[1].x,max(a[1].y,a[1].z)),1e-3),p.hhu);
+    b[2]=mix(b[2],b[1]*max(b[2].x,max(b[2].y,b[2].z))/max(max(b[1].x,max(b[1].y,b[1].z)),1e-3),p.hhu);
+    c[2]=mix(c[2],c[1]*max(c[2].x,max(c[2].y,c[2].z))/max(max(c[1].x,max(c[1].y,c[1].z)),1e-3),p.hhu);
     return Pal(a,b,c);
 }
 fn ohb(w:v3,P:Pal)->v3{
@@ -745,6 +891,8 @@ fn ohb(w:v3,P:Pal)->v3{
     return select(v3(1.,.5,.2),v3(.55)+cs/max(length(cs),1e-4)*.55,length(cs)>.02);
 }
 fn ocol(hb:v3,ty:f32,vr:f32)->v3{let ob=hRot(hb,p.ohu*tau+(select(0.,2.1,ty==1.)-select(0.,2.1,ty==2.)+(vr-.5)*2.)*p.ovr);return ob/max(max(ob.x,max(ob.y,ob.z)),1e-3);}
+// calcium flash
+fn cac(ob:v3)->v3{let c=mix(ob,v3(.3,1.,.4),.35);return c/max(max(c.x,max(c.y,c.z)),1e-3);}
 fn ecol(w:v3,P:Pal)->v3{return mix(P.m0[2]*w.x+P.m1[2]*w.y+P.m2[2]*w.z,v3(.65,.88,1.),.3);}
 
 // emitted light only
@@ -754,7 +902,7 @@ fn emitpx(c:i2,d:i2,P:Pal,sk:f32)->v3{
     if(gr.x>0.&&p.org>0.){
         let ty=floor(gr.w);let fq=fract(gr.w)*8.;let vr=floor(fq)/7.;let ex=min(fract(fq)/.95,1.);
         let ob=ocol(ohb(w,P),ty,vr);let pu=.65+.35*sin(u_t.time*1.3+vr*tau*3.);
-        e+=(ob*(select(.3,.15,ty>0.)+gr.z*select(0.,3.,ty==2.))*pu*p.ogl+mix(mix(ob,v3(.75,.92,1.),.55)*ex*ex*4.,v3(.3,1.,.4)*ex*2.2,p.cal))*mix(smoothstep(0.,.3,gr.x),gr.x,max(-gr.y,0.));
+        e+=(ob*(select(.3,.15,ty>0.)+gr.z*select(0.,3.,ty==2.))*pu*p.ogl+mix(mix(ob,v3(.75,.92,1.),.55)*ex*ex*4.,cac(ob)*ex*ex*3.,p.cal))*mix(smoothstep(0.,.3,gr.x),gr.x,max(-gr.y,0.));
     }
     return e;
 }
@@ -791,6 +939,15 @@ fn eu1(@builtin(global_invocation_id) id:u3){
     textureStore(out,id.xy,v4(usmpw(id),bl.x+bl.y+bl.z));
 }
 
+// stain absorbance
+fn sab(c:v3)->v3{return (1.-mix(c/max(max(c.x,max(c.y,c.z)),1e-3),v3(1.),.15))*1.1+.08;}
+// brightfield: beer-lambert + defocus halo
+fn trans(bg:v3,od:v3,lp:f32,dz:f32,nr:v3,sh:f32)->v3{
+    let I=clamp(1.+p.hal*2.*(dz+v3(.08,0.,-.08))*lp,v3(.15),v3(1.6));
+    let dc=1.+.4*dot(nr.xy,v2(.7071,-.7071));
+    return bg*exp(-min(od,v3(2.5)))*I*clamp(dc,.3,1.7)*mix(1.,sh,.55);
+}
+
 // full linear hdr picture
 @compute @workgroup_size(16,16,1)
 fn compose(@builtin(global_invocation_id) id:u3){
@@ -802,17 +959,18 @@ fn compose(@builtin(global_invocation_id) id:u3){
     let gr=ld(t2,i2(id.xy),i2(d));let sm=smoothstep(.05,.5,tt);
 
     // relief
-    let kr=rk(f32(d.y));var gm=v2(0.);
+    let kr=rk(f32(d.y));var gm=v2(0.);var ra=0.;
     for(var k=0;k<8;k++){
         let a=f32(k)*tau/8.;let dr=v2(cos(a),sin(a));
-        gm+=dr*(hgt(uv+dr*px*2.5*kr)/10.+hgt(uv+dr*px*5.*kr)/20.);
+        let r1=hgt(uv+dr*px*2.5*kr);let r2=hgt(uv+dr*px*5.*kr);
+        gm+=dr*(r1/10.+r2/20.);ra+=(r1*.6+r2*.4)/8.;
     }
     let gf=.5*v2(hgt(uv+v2(px.x,0.))-hgt(uv-v2(px.x,0.)),hgt(uv+v2(0.,px.y))-hgt(uv-v2(0.,px.y)));
     // agar out of focus
-    var gw=v2(0.);
+    var gw=v2(0.);var ha=0.;
     for(var k=0;k<8;k++){
-        let a=f32(k)*tau/8.+.3927;let dr=v2(cos(a),sin(a));
-        gw+=dr*(hgt(uv+dr*px*10.*kr)/40.+hgt(uv+dr*px*16.*kr)/64.);
+        let a=f32(k)*tau/8.+.3927;let dr=v2(cos(a),sin(a));let ha1=hgt(uv+dr*px*10.*kr);let ha2=hgt(uv+dr*px*16.*kr);
+        gw+=dr*(ha1/40.+ha2/64.);ha+=(ha1+ha2)/16.;
     }
     // wandering trails
     let wt=smoothstep(.03,.4,tt)*(1.-sm)*p.bgf;
@@ -821,13 +979,24 @@ fn compose(@builtin(global_invocation_id) id:u3){
     let nor=normalize(v3(-g*kr*12.*p.rel*(1.+7.*wt),1.));
 
     // species colour ramps
-    let pl=u32(clamp(p.pal,0.,6.));let P=palg();
+    let pl=u32(clamp(p.pal,0.,12.));let P=palg();
     let m0=P.m0;let m1=P.m1;let m2=P.m2;
     let c0=ramp(m0,dT(tr.x));let c1=ramp(m1,dT(tr.y));let c2=ramp(m2,dT(tr.z));
 
     let rt=tr/(tt+3.0001);
     let bs=(c0*rt.x+c1*rt.y+c2*rt.z)*(1.+((rt.x*rt.y+rt.y*rt.z+rt.z*rt.x)*4.*.15));
     var col=bs*pow(smoothstep(0.,1.,tt),1.8);
+    let th=tt/(tt+1.5);let al=bs/max(max(bs.x,max(bs.y,bs.z)),1e-3);let hc=m0[2]*w3.x+m1[2]*w3.y+m2[2]*w3.z;
+    if(p.gel>0.){
+        col*=mix(v3(1.),exp(-(1.-al)*2.5*th)*(1.+.8*(1.-th*1.5)),p.gel);
+        col+=hc*smoothstep(.05,.3,tt)*(1.-smoothstep(.3,.9,tt))*.35*p.gel;
+    }
+    // contact seams
+    let ia=(tr.x*tr.y+tr.y*tr.z+tr.z*tr.x)/(tt*tt+1e-4)*3.;
+    if(p.sem>0.){
+        col*=1.-.45*smoothstep(.2,.7,ia)*sm*p.sem;
+        col+=mix(hc,v3(1.),.5)*smoothstep(.55,.75,ia)*sm*.35*p.sem;
+    }
 
     let base=col;
     // slime track left on the agar
@@ -842,15 +1011,28 @@ fn compose(@builtin(global_invocation_id) id:u3){
     let l1=normalize(v3(.35,.5,.8));let l2=normalize(v3(-.7,-.4,.8));let l3=normalize(v3(0.,.8,.2));
     let vd=v3(0.,0.,1.);
     let df=(max(0.,dot(nor,l1))+max(0.,dot(nor,l2))*.5+max(0.,dot(nor,l3))*.3)/(l1.z+l2.z*.5+l3.z*.3);
-    col*=mix(1.,df*.7+.3*ao,lm);
+    let shd=mix(1.,mix(df,(df+.5)/1.5,p.gel*sm)*.7+.3*ao,lm);col*=shd;
 
     // wet specular
     let ex=mix(12.,256.,p.shn)*mix(.15,1.,fo);let nm=(ex+8.)/72.;
     let hv1=normalize(l1+vd);let hv2=normalize(l2+vd);
     let fr=.04+.96*pow(1.-max(dot(nor,vd),0.),5.);
     let sp=(pow(max(dot(nor,hv1),0.),ex)*max(dot(nor,l1),0.)+pow(max(dot(nor,hv2),0.),ex)*max(dot(nor,l2),0.)*.5)*nm;
-    col+=v3(1.,.98,.95)*sp*(.5+12.*fr)*p.spc*lm*ao*mix(.35,1.,fo);
+    let spv=v3(1.,.98,.95)*sp*(.5+12.*fr)*p.spc*lm*ao*mix(.35,1.,fo);
     col+=base*fr*3.*ao;
+
+    // brightfield
+    let hl0=hgt(uv);let vg=uv-.5;
+    let bgB=v3(1.04,1.1,1.1)*(1.-dot(vg,vg)*.3);
+    let lpT=(ra-hl0)*4.+(ha-hl0)*1.5;
+    // focal depth per species
+    let zT=mix(-.85,dot(w3,v3(-.35,0.,.35)),sm);let dz=zT-p.foc;
+    // stain layers
+    let fct=mix(1.,.2+1.6*sl*sm,min(p.wal,1.))*mix(.2,1.,sm);
+    let odT=(sab(c0)*log(1.+tr.x)+sab(c1)*log(1.+tr.y)+sab(c2)*log(1.+tr.z))*.55*fct*p.bsd;
+    let nrT=normalize(mix(v3(0.,0.,1.),nor,mix(.25,1.,sm)));
+    if(p.bf>0.){col=mix(col,trans(bgB,odT,lpT,dz,nrT,mix(1.,shd,sm)),p.bf);}
+    col+=spv*(1.-.5*p.bf);
 
     // sparks
     if(p.spk>0.){
@@ -867,8 +1049,10 @@ fn compose(@builtin(global_invocation_id) id:u3){
         let L=normalize(v3(gE/(lum(Lc)+1e-3)*2.,1.));
         let alb=mix(v3(.45),base/max(max(base.x,max(base.y,base.z)),.1)*.6,sm);
         let nl=max(dot(nor,L),0.);let esp=pow(max(dot(nor,normalize(L+vd)),0.),40.);
-        col+=(alb*(nl*.8+.2)+v3(esp*1.5))*Lc*mix(1.,.35,smoothstep(1.,2.5,tt))*p.eml*1.5;
+        col+=(alb*(nl*.8+.2)+v3(esp*1.5))*Lc*mix(1.,.35,smoothstep(1.,2.5,tt))*p.eml*1.5*(1.-.7*p.bf);
     }
+
+    if(p.gel>0.){col+=lt.xyz*.25*mix(v3(1.),al,.5)*sm*(1.3-th)*p.gel*1.5*(1.-.7*p.bf);}
 
     // organelles
     let hb=ohb(w3,P);
@@ -889,7 +1073,15 @@ fn compose(@builtin(global_invocation_id) id:u3){
             // beer-lambert
             let ab=exp(-(1.-ob)*2.2*gr.x);
             var oc=ab*bm*select(1.4,.9,ty==2.)*(od*.75+.25);
+            let gT=mix(v3(1.),exp(-(1.-al)*2.5*th*vr)*exp(-1.5*th*vr),p.gel);oc*=gT;
             oc=mix(oc,ob*bm*.08,clamp(gr.y*.85,0.,1.));
+            if(p.bf>0.){
+                let gq=(ld(t2,ic+i2(2,0),di).x+ld(t2,ic-i2(2,0),di).x+ld(t2,ic+i2(0,2),di).x+ld(t2,ic-i2(0,2),di).x)*.25;
+                let rn=smoothstep(0.,.12,gr.x)*(1.-smoothstep(.2,.45,gr.x));
+                let odO=odT+sab(ob)*(gr.x*.3+max(gr.y,0.)*1.2+rn*.8+gr.z*.6)*p.bsd*1.5;
+                let oT=trans(bgB,odO,lpT+(gq-gr.x)*3.,dz,normalize(v3(on.xy*2.,on.z)),od*.75+.25);
+                oc=mix(oc,oT,p.bf);
+            }
             if(ty==1.){oc*=1.-gr.z*.35;}
             let bk=max(-gr.y,0.);let cov=mix(smoothstep(0.,.3,gr.x),gr.x,bk);ocv=cov;
             col=mix(col,oc,cov*select(.65,.92,ty>0.));
@@ -897,19 +1089,19 @@ fn compose(@builtin(global_invocation_id) id:u3){
             let oe=mix(100.,600.,p.shn);let gl=pow(max(dot(on,hv1),0.),oe)+pow(max(dot(on,hv2),0.),oe)*.5;
             let cau=pow(textureSampleLevel(t2,s2,fract(uv+l1.xy*S*.3*px),0.).x,6.)*smoothstep(.2,.8,1.-gr.x);
             let pu=.65+.35*sin(u_t.time*1.3+vr*tau*3.);
-            col+=(ob*rim*bm*1.2+v3(1.,.98,.95)*gl*3.*p.spc+ab*cau*bm*2.)*cov;
-            col+=ob*(select(.3,.15,ty>0.)+gr.z*select(0.,3.,ty==2.))*pu*cov*p.ogl;
+            col+=(ob*rim*bm*1.2+v3(1.,.98,.95)*gl*3.*p.spc+ab*cau*bm*2.)*cov*gT*(1.-.6*p.bf);
+            col+=ob*(select(.3,.15,ty>0.)+gr.z*select(0.,3.,ty==2.))*pu*cov*p.ogl*gT*(1.-.6*p.bf);
             // flash and glitter
             let sh=select(0.,1.,vi>=6.);
             let gc=vec2<u32>(v2(id.xy)/(2.*kr));let gs=pcg(gc.x*1973u^gc.y*9277u);
             let tw=pow(max(0.,sin(u_t.time*(5.+9.*h1(gs))+h1(gs+1u)*tau)),40.)*step(.7-.45*ex,h1(gs+2u))*smoothstep(.15,.5,gr.x)*(1.-bk);
             // calcium look
-            col+=(mix(mix(ob,v3(.75,.92,1.),.55)*ex*ex*4.,v3(.3,1.,.4)*ex*2.2,p.cal)+v3(1.,.97,.9)*tw*(sh*1.5+ex*8.*(1.-p.cal*.8))+v3(1.,.98,.95)*gl*sh*4.*p.spc)*cov;
+            col+=(mix(mix(ob,v3(.75,.92,1.),.55)*ex*ex*4.,cac(ob)*ex*ex*3.,p.cal)+v3(1.,.97,.9)*tw*(sh*1.5+ex*8.*(1.-p.cal*.8))+v3(1.,.98,.95)*gl*sh*4.*p.spc)*cov*gT;
         }
     }
     // scene depth: agar -1, vein tops +1
     let zs=clamp(hgt(uv)/.6*2.-1.,-1.,1.);
-    let csn=min(p.sdf*max(0.,abs(zs-p.fcs)-p.fdr)*14.+rblur(uv,v2(d)),30.)*kr*(1.-ocv);
+    let csn=min(p.sdf*max(0.,abs(zs-p.fcs)-p.fdr)*14.+p.bf*p.fds*abs(dz)*14.+rblur(uv,v2(d)),30.)*kr*(1.-ocv);
     // alpha: organelle coverage (integer part) + scene blur radius/64
     textureStore(out,id.xy,v4(max(col,v3(0.)),floor(ocv*7.+.5)+min(csn/64.,.99)));
 }
@@ -998,11 +1190,12 @@ fn main_image(@builtin(global_invocation_id) id:u3){
     // dof
     let base=mix(c4.xyz,textureSampleLevel(t2,s2,uv,0.).xyz,clamp(cn/2.,0.,1.));
     let E=textureSampleLevel(t1,s1,uv,0.).xyz*.2;
-    var col=base+E*p.glw;
+    var col=base+E*p.glw*mix(1.,.15,p.bf);
 
     let mx=max(max(col.x,col.y),col.z);col*=aces(mx)/max(mx,1e-5);
-    col=mix(v3(lum(col)),col,mix(p.sat,max(p.sat,1.),ocv));
+    col=mix(v3(lum(col)),col,mix(mix(p.sat,max(p.sat,1.),ocv),max(p.sat,1.15),p.bf));
     let vc=(uv-.5)*2.;col*=1.-dot(vc,vc)*.1;
+    col+=(h1(id.x*1973u^id.y*9277u^u_t.frame*26699u)-.5)*p.grn*.05*(.5+.5*sqrt(max(lum(col),0.)));
 
     textureStore(out,id.xy,v4(pow(max(col,v3(0.)),v3(p.gam)),1.));
 }

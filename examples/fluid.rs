@@ -23,8 +23,8 @@ cuneus::uniform_params! {
         force_count: f32,
         rolloff: f32,
         warp_amount: f32,
-        _unused1: f32,
-        _unused2: f32,
+        pressure_iters: f32,
+        sim_steps: f32,
         drift_decay: f32,
         dye_intensity: f32,
         dye_radius: f32,
@@ -36,12 +36,19 @@ cuneus::uniform_params! {
         stir: f32
     }
 }
+const MAX_ITERS: usize = 48;
+const MAX_STEPS: usize = 3;
+// substep s: advect, pressure x MAX_ITERS, project, position, colour
+fn step_start(s: usize) -> usize { s * (MAX_ITERS + 4) }
 fn build_shader(core: &Core) -> ComputeShader {
-    let mut passes = vec![PassDescription::new("advect_forces", &["project", "color_map"])];
-    for _ in 0..24 { passes.push(PassDescription::new("pressure", &["advect_forces", "pressure"])); }
-    passes.push(PassDescription::new("project", &["advect_forces", "pressure"]));
-    passes.push(PassDescription::new("position_field", &["project", "position_field", "color_map"]));
-    passes.push(PassDescription::new("color_map", &["position_field", "color_map"]));
+    let mut passes = Vec::new();
+    for _ in 0..MAX_STEPS {
+        passes.push(PassDescription::new("advect_forces", &["project", "color_map"]));
+        for _ in 0..MAX_ITERS { passes.push(PassDescription::new("pressure", &["advect_forces", "pressure"])); }
+        passes.push(PassDescription::new("project", &["advect_forces", "pressure"]));
+        passes.push(PassDescription::new("position_field", &["project", "position_field", "color_map"]));
+        passes.push(PassDescription::new("color_map", &["position_field", "color_map"]));
+    }
     passes.push(PassDescription::new("main_image", &["color_map", "project"]));
     let config = ComputeShader::builder()
         .with_entry_point("advect_forces")
@@ -58,6 +65,19 @@ struct FluidShader {
     base: RenderKit,
     compute_shader: ComputeShader,
     current_params: FluidParams
+}
+impl FluidShader {
+    fn apply_steps(&mut self) {
+        let steps = (self.current_params.sim_steps.round() as usize).clamp(1, MAX_STEPS);
+        let iters = (self.current_params.pressure_iters.round() as usize).clamp(1, MAX_ITERS);
+        for s in 0..MAX_STEPS {
+            let b = step_start(s);
+            for i in 0..MAX_ITERS + 4 {
+                let on = s < steps && (i == 0 || i > MAX_ITERS || i <= iters);
+                self.compute_shader.set_pass_enabled(b + i, on);
+            }
+        }
+    }
 }
 impl ShaderManager for FluidShader {
     fn init(core: &Core) -> Self {
@@ -83,8 +103,8 @@ impl ShaderManager for FluidShader {
             force_count: 6.0,
             rolloff: 0.5,
             warp_amount: 1.0,
-            _unused1: 0.0,
-            _unused2: 0.0,
+            pressure_iters: 24.0,
+            sim_steps: 1.0,
             drift_decay: 0.0,
             dye_intensity: 0.8,
             dye_radius: 1.5,
@@ -99,11 +119,13 @@ impl ShaderManager for FluidShader {
         let base = RenderKit::new(core);
         let compute_shader = build_shader(core);
         compute_shader.set_custom_params(initial_params, &core.queue);
-        Self {
+        let mut s = Self {
             base,
             compute_shader,
             current_params: initial_params
-        }
+        };
+        s.apply_steps();
+        s
     }
     fn update(&mut self, core: &Core) {
         self.base.update_current_texture(core, &core.queue);
@@ -180,6 +202,8 @@ impl ShaderManager for FluidShader {
                         
                         egui::CollapsingHeader::new("Physics").default_open(false).show(ui, |ui| {
                             changed |= ui.add(egui::Slider::new(&mut params.pressure_scale, 0.0..=1.0).text("Incompressibility (1 = physical)")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.pressure_iters, 4.0..=MAX_ITERS as f32).step_by(1.0).text("Pressure Iterations")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.sim_steps, 1.0..=MAX_STEPS as f32).step_by(1.0).text("Sim Steps")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.gravity, 0.0..=0.2).text("Gravity")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.texture_influence, 0.0..=2.0).text("Buoyancy")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.pos_diffusion, 0.0..=1.0).text("Smoothing")).changed();
@@ -226,6 +250,7 @@ impl ShaderManager for FluidShader {
         if changed {
             self.current_params = params;
             self.compute_shader.set_custom_params(params, &core.queue);
+            self.apply_steps();
         }
         self.base.end_frame(core, frame, full_output);
         Ok(())
