@@ -364,3 +364,5 @@ jobs:
         with:
           files: artifacts/**/*
           generate_release_notes: true
+          # v1.0.0-rc.1, v1.0.0-beta: a pre-release, never marked latest
+          prerelease: ${{ contains(github.ref_name, '-') }}
