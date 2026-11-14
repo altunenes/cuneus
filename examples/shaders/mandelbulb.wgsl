@@ -224,14 +224,16 @@ fn map_scene(p: v3, rotation: m3, power: f32) -> Model {
     return Model(d, p, orbit_trap, 1);
 }
 
-fn calc_normal(p: v3, rotation: m3, power: f32) -> v3 {
-    let eps = 0.0001;
-    let h = v2(eps, 0.0);
-    return normalize(v3(
-        map_scene(p + v3(h.x, h.y, h.y), rotation, power).d - map_scene(p - v3(h.x, h.y, h.y), rotation, power).d,
-        map_scene(p + v3(h.y, h.x, h.y), rotation, power).d - map_scene(p - v3(h.y, h.x, h.y), rotation, power).d,
-        map_scene(p + v3(h.y, h.y, h.x), rotation, power).d - map_scene(p - v3(h.y, h.y, h.x), rotation, power).d
-    ));
+// tetrahedral normal, step >= quarter pixel
+fn calc_normal(p: v3, rotation: m3, power: f32, foot: f32) -> v3 {
+    let e = max(0.0001, foot * 0.25);
+    let k = v2(1.0, -1.0);
+    return normalize(
+        k.xyy * map_scene(p + k.xyy * e, rotation, power).d +
+        k.yyx * map_scene(p + k.yyx * e, rotation, power).d +
+        k.yxy * map_scene(p + k.yxy * e, rotation, power).d +
+        k.xxx * map_scene(p + k.xxx * e, rotation, power).d
+    );
 }
 
 struct Hit {
@@ -240,17 +242,31 @@ struct Hit {
     ray_length: f32,
 }
 
-fn march(origin: v3, ray_direction: v3, max_dist: f32, understep: f32, rotation: m3, power: f32) -> Hit {
+// cone: pixel angle (0 for secondary rays); over-relaxed camera rays (Keinert et al. 2014)
+fn march(origin: v3, ray_direction: v3, max_dist: f32, understep: f32, rotation: m3, power: f32, cone: f32) -> Hit {
     var ray_position = origin;
     var ray_length = 0.0;
     var model: Model;
+    var relax = select(1.0, 1.6, cone > 0.0);
+    var prev_t = 0.0;
+    var prev_r = 0.0;
 
     for (var i = 0; i < 300; i++) {
         model = map_scene(ray_position, rotation, power);
-        ray_length += model.d * understep;
-        ray_position = origin + ray_direction * ray_length;
+        let r = model.d * understep;
+        if (relax > 1.0 && prev_r + r < ray_length - prev_t) {
+            ray_length = prev_t + prev_r;
+            relax = 1.0;
+            ray_position = origin + ray_direction * ray_length;
+            continue;
+        }
 
-        if (model.d < 0.00005) { break; }
+        if (model.d < max(0.00005, ray_length * cone * 0.25)) { break; }
+
+        prev_t = ray_length;
+        prev_r = r;
+        ray_length += r * relax;
+        ray_position = origin + ray_direction * ray_length;
 
         if (ray_length > max_dist) {
             model.id = 0;
@@ -313,7 +329,7 @@ fn sample_direct(hit: Hit, nor: v3, throughput: v3, rnd: v2, rotation: m3, power
     let shadow_origin = hit.pos + nor * (0.0002 / abs(dot(light_sample_dir, nor)));
 
     if (diffuse > 0.0) {
-        let sh = march(shadow_origin, light_sample_dir, 1.0, BOUNCE_UNDERSTEP, rotation, power);
+        let sh = march(shadow_origin, light_sample_dir, 1.0, BOUNCE_UNDERSTEP, rotation, power, 0.0);
         if (sh.model.id == 0) {
             col += throughput * sun_color / 8.0 * diffuse;
         }
@@ -354,13 +370,14 @@ fn draw(frag_coord: v2, frame: u32) -> v4 {
     let focal_point_dist = distance(cam_pos, focus_point);
     let focal_plane_dist = dot(cam_mat[2], ray_dir) * focal_point_dist;
 
-    var hit = march(origin, ray_direction, focal_plane_dist, UNDERSTEP, rotation, params.power);
+    let cone = 2.0 * FOCUS_SCALE / (R.y * max(params.focal_length, 0.01));
+    var hit = march(origin, ray_direction, focal_plane_dist, UNDERSTEP, rotation, params.power, cone);
     if (hit.model.id == 0) {
         let ray_focal_point = origin + ray_direction * focal_plane_dist;
         origin += cam_mat * v3(rnd_unit2(initial_seed), 0.0) * params.dof_strength;
         ray_direction = normalize(ray_focal_point - origin);
         origin = hit.pos;
-        hit = march(origin, ray_direction, 20.0, UNDERSTEP, rotation, params.power);
+        hit = march(origin, ray_direction, 20.0, UNDERSTEP, rotation, params.power, cone);
     }
 
     var throughput = v3(1.0);
@@ -369,7 +386,7 @@ fn draw(frag_coord: v2, frame: u32) -> v4 {
     // Path tracing loop
     for (var bounce = 0; bounce < i32(params.max_bounces); bounce++) {
         if (bounce > 0) {
-            hit = march(origin, ray_direction, 10.0, BOUNCE_UNDERSTEP, rotation, params.power);
+            hit = march(origin, ray_direction, 10.0, BOUNCE_UNDERSTEP, rotation, params.power, 0.0);
         }
         if (hit.model.id == 0) {
             if (bounce > 0) {
@@ -383,7 +400,7 @@ fn draw(frag_coord: v2, frame: u32) -> v4 {
 
         ray_length += hit.ray_length;
 
-        let nor = calc_normal(hit.pos, rotation, params.power);
+        let nor = calc_normal(hit.pos, rotation, params.power, ray_length * cone);
         let material = shade_model(hit.model);
 
         throughput *= material.albedo;
