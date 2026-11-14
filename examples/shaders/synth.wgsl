@@ -16,8 +16,14 @@ struct TimeUniform { time: f32, delta: f32, frame: u32, _padding: u32 };
 @group(0) @binding(0) var<uniform> u_time: TimeUniform;
 @group(1) @binding(0) var output: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(1) var<uniform> params: SynthParams;
-@group(2) @binding(0) var<storage, read_write> audio_buffer: array<f32>;
+// g2: fonts (0, 1), audio (2)
+struct Font { asz: vec2<f32>, csz: vec2<f32>, ssz: vec2<f32>, gsz: vec2<f32> };
+@group(2) @binding(0) var<uniform> fu: Font;
+@group(2) @binding(1) var ft: texture_2d<f32>;
+@group(2) @binding(2) var<storage, read_write> audio_buffer: array<f32>;
 @group(3) @binding(0) var<storage, read_write> dsp: array<f32>;
+// the tablet song, written by synth.rs: header [switch sample, old slot, new slot], then two slots
+@group(3) @binding(1) var<storage, read_write> tab: array<u32>;
 
 struct SynthParams {
     tempo: f32,
@@ -44,7 +50,7 @@ struct SynthParams {
     swing: f32,
     // the sample playing now, so the visuals follow the sound
     play_sample: u32,
-    _pad1: f32,
+    tab_on: f32,
     // note-on / note-off sample per key, 0 = none
     key_on: array<vec4<u32>, 4>,
     key_off: array<vec4<u32>, 4>,
@@ -77,6 +83,10 @@ const O_A1: u32 = O_A0 + A0;
 const SCOPE_LEN: u32 = 8192u;
 const SCOPE_W: u32 = 1024u;
 const O_SCOPE: u32 = O_A1 + A1;
+// tablet bus per sample of this block: dry L, dry R, echo send, room send
+const O_BUS: u32 = 65536u;
+// the tablet's own echo line, synced to a dotted eighth of its tempo
+const O_TDELAY: u32 = O_BUS + 4u * 4096u;
 
 // 16 semitones from C of the chosen octave
 fn get_note_frequency(idx: u32, octave: f32) -> f32 {
@@ -261,17 +271,19 @@ fn allpass(off: u32, len: u32, gs: u32, input: f32) -> f32 {
     return -input + bufout;
 }
 
-fn reverb_proc(input: f32, gs: u32, wet: f32) -> f32 {
-    if (wet < 0.01) { return input; }
+// `send` feeds the room only (reverb is linear)
+fn reverb_proc(input: f32, send: f32, gs: u32, wet: f32) -> f32 {
+    if (wet < 0.01 && abs(send) < 1e-7) { return input; }
+    let x = input * wet + send;
     let fb = 0.87;
-    var c = comb(O_C0, C0, gs, input, fb);
-    c += comb(O_C1, C1, gs, input, fb);
-    c += comb(O_C2, C2, gs, input, fb);
-    c += comb(O_C3, C3, gs, input, fb);
+    var c = comb(O_C0, C0, gs, x, fb);
+    c += comb(O_C1, C1, gs, x, fb);
+    c += comb(O_C2, C2, gs, x, fb);
+    c += comb(O_C3, C3, gs, x, fb);
     var rv = c * 0.25;
     rv = allpass(O_A0, A0, gs, rv);
     rv = allpass(O_A1, A1, gs, rv);
-    return mix(input, rv, wet);
+    return input * (1.0 - wet) + rv;
 }
 
 fn chorus_proc(input: f32, gs: u32, t: f32, rate: f32, depth: f32, sr: f32) -> vec2<f32> {
@@ -361,6 +373,236 @@ fn drum_machine(n: u32, sr: f32) -> vec2<f32> {
         out += hat(a, n, select(0.035, 0.25, open)) * hv * vel * choke * vec2<f32>(0.08, 0.11);
     }
     return out;
+}
+
+// ---------------- tablet ----------------
+// slot [origin, tempo, -, tracks], track headers at +16 (16 words), events [start, length (bars), note, velocity]
+const SLOT: u32 = 4096u;
+fn tf(i: u32) -> f32 { return bitcast<f32>(tab[i]); }
+fn tslot(n: u32) -> u32 { return 16u + select(tab[1], tab[2], n >= tab[0]) * SLOT; }
+
+fn clap(a: f32, n: u32) -> f32 {
+    if (a > 0.8) { return 0.0; }
+    var e = 0.0;
+    for (var i = 0; i < 3; i++) { let x = a - f32(i) * 0.0105; if (x >= 0.0) { e += exp(-x / 0.0035); } }
+    e += 0.6 * exp(-max(a - 0.021, 0.0) / 0.13) * step(0.021, a);
+    return (vn(n, 2u, 7u) - vn(n, 9u, 7u)) * e * 0.8 + sin(TAU * fract(185.0 * a + 1.2 * (1.0 - exp(-a / 0.02)))) * exp(-a / 0.05) * 0.35;
+}
+
+// stateless instruments: one thread per sample, low-pass per harmonic
+fn lpg(hz: f32, fc: f32) -> f32 { let w = hz / fc; let d = 1.0 - w * w; return min(inverseSqrt(d * d + w * w * 2.2), 1.3); }
+fn saw_lp(ph: f32, f: f32, fc: f32, odd: bool) -> f32 {
+    let th = TAU * fract(ph); let c2 = 2.0 * cos(th);
+    var s0 = 0.0; var s1 = sin(th); var s = 0.0;
+    for (var h = 1; h <= 28; h++) {
+        let hz = f * f32(h);
+        if (hz > 14000.0) { break; }
+        if (!odd || h % 2 == 1) { s += s1 / f32(h) * lpg(hz, fc); }
+        let s2 = c2 * s1 - s0; s0 = s1; s1 = s2;
+    }
+    return s * 0.65;
+}
+fn pluck_lp(a: f32, f: f32, fc: f32) -> f32 {
+    let th = TAU * fract(f * a); let c2 = 2.0 * cos(th);
+    var s0 = 0.0; var s1 = sin(th);
+    let q2 = 2.0 * cos(PI * 0.14); var q0 = 0.0; var q1 = sin(PI * 0.14);
+    var v = 0.0;
+    let nh = min(30, i32(10000.0 / f));
+    for (var h = 1; h <= nh; h++) {
+        let hf = f32(h);
+        v += q1 * s1 / hf * exp(-a * (0.9 + 0.12 * hf * hf)) * lpg(f * hf, fc);
+        let s2 = c2 * s1 - s0; s0 = s1; s1 = s2;
+        let q = q2 * q1 - q0; q0 = q1; q1 = q;
+    }
+    return (v + wn(u32(a * 44100.0), u32(f)) * 0.2 * exp(-a / 0.0015)) * smoothstep(0.0, 0.0006, a) * 1.1;
+}
+
+// attack and release per instrument: saw square pluck epiano strings bass bell sine
+fn inst_ar(k: u32) -> vec2<f32> {
+    var ar = array<vec2<f32>, 8>(vec2<f32>(0.005, 0.15), vec2<f32>(0.005, 0.12), vec2<f32>(0.001, 0.35), vec2<f32>(0.002, 0.45),
+                                 vec2<f32>(0.25, 0.9), vec2<f32>(0.003, 0.08), vec2<f32>(0.001, 1.4), vec2<f32>(0.01, 0.25));
+    return ar[min(k, 7u)];
+}
+
+// one note `a` seconds after it began, held for `d` seconds
+fn tvoice(k: u32, a: f32, d: f32, key: f32, fc: f32, n: u32) -> f32 {
+    if (k >= 100u) {
+        if (a > 1.2) { return 0.0; }
+        switch k - 100u {
+            case 0u: { return kickDrum(a) * 1.3; }
+            case 1u: { return snare(a, n) * 0.9; }
+            case 2u: { return hat(a, n, 0.035) * 0.55; }
+            case 3u: { return hat(a, n, 0.25) * 0.45; }
+            default: { return clap(a, n) * 0.7; }
+        }
+    }
+    let ar = inst_ar(k);
+    if (a > d + ar.y * 1.6) { return 0.0; }
+    let env = smoothstep(0.0, ar.x, a) * select(1.0, exp(-(a - d) * 4.0 / ar.y), a > d);
+    let f = 440.0 * exp2((key - 69.0) / 12.0);
+    var x = 0.0;
+    switch k {
+        case 0u: {
+            let fe = fc * (1.0 + 2.5 * exp(-a / 0.12));
+            x = (saw_lp(f * 0.996 * a, f, fe, false) + saw_lp(f * 1.004 * a + 0.31, f, fe, false)) * 0.5;
+        }
+        case 1u: { x = saw_lp(f * a, f, fc * (1.0 + 1.5 * exp(-a / 0.1)), true) * 1.2; }
+        case 2u: { x = pluck_lp(a, f, fc); }
+        case 3u: {
+            let br = clamp(fc / 5000.0, 0.25, 1.0);
+            let w = TAU * fract(f * a);
+            let m1 = 1.6 * br * exp(-a / 0.6) * sin(w);
+            let m2 = 0.9 * br * exp(-a / 0.03) * sin(TAU * fract(f * 14.0 * a));
+            x = (sin(w + m1 + m2) + 0.15 * sin(TAU * fract(f * 0.5 * a))) * 0.8 * exp(-a * 0.35);
+        }
+        case 4u: {
+            let vib = 0.004 * smoothstep(0.15, 0.6, a) * sin(TAU * 5.3 * a);
+            for (var j = 0u; j < 3u; j++) {
+                let fj = f * (1.0 + (f32(j) - 1.0) * 0.004);
+                x += saw_lp(fj * a * (1.0 + vib) + f32(j) * 0.21, fj, fc, false);
+            }
+            x *= 0.45;
+        }
+        case 5u: {
+            let fe = fc * (1.4 + 9.0 * exp(-a / 0.07));
+            x = tanh((saw_lp(f * a, f, fe, false) * 0.5 + sin(TAU * fract(f * 0.5 * a)) * 0.7) * 1.3) * (0.55 + 0.45 * exp(-a / 0.12));
+        }
+        case 6u: {
+            let w = TAU * fract(f * a);
+            x = sin(w + 1.2 * exp(-a / 0.3) * sin(w) + 0.5 * exp(-a / 0.025) * sin(TAU * fract(f * 3.5 * a))) * exp(-a * 1.6);
+        }
+        default: { x = sin(TAU * fract(f * a)); }
+    }
+    return x * env;
+}
+
+// every track of the slot heard at sample n: (dry L, dry R, echo send, room send)
+fn tablet_sample(n: u32, sr: f32) -> vec4<f32> {
+    let sb = tslot(n);
+    let origin = tab[sb];
+    if (n < origin) { return vec4<f32>(0.0); }
+    let bar = 240.0 / max(tf(sb + 1u), 1.0);
+    let bs = bar * sr;
+    let since = n - origin;
+    var out = vec4<f32>(0.0);
+    for (var t = 0u; t < min(tab[sb + 3u], 8u); t++) {
+        let th = sb + 16u + t * 16u;
+        let kind = tab[th]; let nb = max(tab[th + 1u], 1u); let ne = tab[th + 2u]; let eo = sb + tab[th + 3u];
+        let fc = tf(th + 4u);
+        let ls = max(u32(f32(nb) * bs), 1u);
+        let first = since < ls;
+        let loc = f32(since % ls) / bs;
+        var s = 0.0;
+        for (var e = 0u; e < ne; e++) {
+            let ev = eo + e * 4u;
+            var ab = loc - tf(ev);
+            if (ab < 0.0) { if (first) { continue; } ab += f32(nb); }
+            s += tvoice(kind, ab * bar, tf(ev + 1u) * bar, tf(ev + 2u), fc, n + e * 7919u) * tf(ev + 3u);
+        }
+        let dr = tf(th + 5u);
+        s = mix(s, tanh(s * (1.0 + 8.0 * dr)), dr) * tf(th + 8u);
+        let pa = (tf(th + 9u) + 1.0) * 0.785398;
+        out += vec4<f32>(s * cos(pa) * 1.414, s * sin(pa) * 1.414, s * tf(th + 7u), s * tf(th + 6u));
+    }
+    return out * 0.32;
+}
+
+@compute @workgroup_size(16, 16, 1)
+fn voices(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: vec3<u32>) {
+    let i = wid.x * 256u + li;
+    if (i >= params.samples_to_generate) { return; }
+    var o = vec4<f32>(0.0);
+    if (params.tab_on > 0.5) { o = tablet_sample(params.sample_offset + i, f32(params.sample_rate)); }
+    let b = O_BUS + i * 4u;
+    dsp[b] = o.x; dsp[b + 1u] = o.y; dsp[b + 2u] = o.z; dsp[b + 3u] = o.w;
+}
+
+// font atlas glyph of height sz, top-left at pos
+fn glyph(pp: vec2<f32>, pos: vec2<f32>, code: u32, sz: f32) -> f32 {
+    let r = (pp - pos) / sz;
+    if (any(r < vec2<f32>(0.0)) || any(r >= vec2<f32>(1.0))) { return 0.0; }
+    let uv = (vec2<f32>(f32(code % 16u), f32(code / 16u)) + 0.05 + r * 0.9) / 16.0;
+    return smoothstep(0.1, 0.9, textureLoad(ft, vec2<i32>(uv * fu.asz), 0).r * 0.8);
+}
+
+// clay with a faint grain
+fn clay(px: vec2<f32>) -> vec3<f32> {
+    let g = vn(u32(px.x * 0.5) + u32(px.y * 0.5) * 977u, 3u, 5u) * 0.5 + 0.5;
+    return mix(vec3<f32>(0.27, 0.2, 0.14), vec3<f32>(0.34, 0.26, 0.18), g) * (0.9 + 0.1 * wn(u32(px.x) * 31u + u32(px.y) * 7u, 9u));
+}
+
+// tablet: a row per track, wedges at note starts, playhead sweeps the bar
+fn tablet_view(q: vec2<f32>, size: vec2<f32>, sr: f32) -> vec3<f32> {
+    let px = q * size;
+    var col = clay(px);
+    // raised rim of the tablet
+    let e = min(min(q.x, 1.0 - q.x) * size.x, min(q.y, 1.0 - q.y) * size.y);
+    col *= 0.75 + 0.25 * smoothstep(0.0, 6.0, e);
+    let ps = params.play_sample;
+    let sb = tslot(ps);
+    let nt = min(tab[sb + 3u], 8u);
+    if (nt == 0u || ps < tab[sb]) { return col * 0.8; }
+    let bar = 240.0 / max(tf(sb + 1u), 1.0);
+    let bs = bar * sr;
+    let since = ps - tab[sb];
+    let rowf = (1.0 - q.y) * f32(nt);
+    let t = min(u32(rowf), nt - 1u);
+    let ry = fract(rowf);
+    let rh = size.y / f32(nt);
+    let th = sb + 16u + t * 16u;
+    let kind = tab[th]; let nb = max(tab[th + 1u], 1u); let ne = tab[th + 2u]; let eo = sb + tab[th + 3u];
+    let ls = max(u32(f32(nb) * bs), 1u);
+    let loc = f32(since % ls) / bs;
+    let cb = floor(loc);
+    let tint = hue(f32(t) / 8.0 + 0.05);
+    // incised row lines
+    col *= 1.0 - 0.35 * smoothstep(1.5, 0.0, abs(ry) * rh) * step(0.5, f32(t));
+
+    // the track name, pressed into the left margin
+    let lx = 0.13;
+    if (q.x < lx) {
+        let sz = min(rh * 0.42, size.x * lx / 5.5);
+        var a = 0.0;
+        for (var k = 0u; k < 8u; k++) {
+            let c = (tab[th + 11u + k / 4u] >> ((k % 4u) * 8u)) & 255u;
+            if (c == 0u) { break; }
+            a = max(a, glyph(vec2<f32>(px.x, (1.0 - q.y) * size.y), vec2<f32>(8.0 + f32(k) * sz * 0.5, f32(t) * rh + rh * 0.5 - sz * 0.5), c, sz));
+        }
+        return mix(col, col * 0.35 + tint * 0.15, a);
+    }
+    let u = (q.x - lx) / (1.0 - lx - 0.01);
+    let bw = size.x * (1.0 - lx - 0.01);
+    // beats
+    col *= 1.0 - 0.25 * smoothstep(1.2, 0.0, abs(fract(u * 4.0 + 0.5) - 0.5) * bw / 4.0);
+    // playhead
+    let ph = fract(loc);
+    col += vec3<f32>(1.0, 0.75, 0.4) * 0.5 * exp(-abs(u - ph) * bw * 0.25);
+
+    for (var k = 0u; k < ne; k++) {
+        let ev = eo + k * 4u;
+        let st = tf(ev);
+        if (floor(st) != cb) { continue; }
+        let x0 = fract(st);
+        let x1 = min(x0 + tf(ev + 1u), 1.0);
+        let key = tf(ev + 2u);
+        let yc = select(0.5 - clamp((key - 60.0) / 28.0, -0.38, 0.38), 0.5, kind >= 100u);
+        let vel = tf(ev + 3u);
+        let w = rh * (0.22 + 0.22 * vel);
+        let dx = (u - x0) * bw;
+        let dy = (ry - yc) * rh;
+        let age = loc - st;
+        let lit = select(0.0, exp(-max(age - tf(ev + 1u), 0.0) * 6.0), age >= 0.0) * select(0.0, 1.0, age < tf(ev + 1u) + 0.4);
+        // wedge: a triangular head pointing along the line, then its tail
+        let head = dx >= 0.0 && dx < w && abs(dy) < w * 0.55 * (1.0 - dx / w);
+        let tail = dx >= 0.0 && u < x1 && abs(dy) < max(1.2, w * 0.08);
+        if (head || tail) {
+            col = mix(col * 0.38, tint * 1.6, lit * 0.85);
+            // light catches the lower edge of the cut
+            col += vec3<f32>(0.08, 0.06, 0.04) * smoothstep(0.0, 2.0, dy) * (1.0 - lit);
+        }
+        col += tint * lit * 0.35 * exp(-length(vec2<f32>(dx - w * 0.3, dy)) / (w * 0.9));
+    }
+    return col;
 }
 
 // visuals: every panel reads the song at `play_sample`, the sample being heard
@@ -597,10 +839,22 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 
             s = distort(s, params.distortion_amount);
 
+            // the tablet's voices, made in parallel by the voices pass
+            let bb = O_BUS + i * 4u;
+            let bus = vec4<f32>(dsp[bb], dsp[bb + 1u], dsp[bb + 2u], dsp[bb + 3u]);
+
             s = delay_proc(s, gs, params.delay_time, params.delay_feedback, sr);
-            s = reverb_proc(s, gs, params.reverb_mix);
+            s = reverb_proc(s, bus.w, gs, params.reverb_mix);
 
             var st = chorus_proc(s, gs, t, params.chorus_rate, params.chorus_depth, sr);
+            if (params.tab_on > 0.5) {
+                let tsb = tslot(gs);
+                let td = clamp(u32(180.0 / max(tf(tsb + 1u), 1.0) / 4.0 * sr), 1u, 44099u);
+                let w = O_TDELAY + (gs % 44100u);
+                let echo = dsp[O_TDELAY + ((gs + 44100u - td) % 44100u)];
+                dsp[w] = bus.z + echo * 0.45;
+                st += bus.xy + echo * vec2<f32>(0.75, 0.55);
+            }
             // drums stay dry, after the effects
             if (params.beat_enabled > 0u) { st += drum_machine(gs, sr) * params.drum_level; }
             st *= params.volume;
@@ -636,15 +890,20 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
     let accent = hue(f32(params.waveform_type) / 12.0 + 0.55) * 1.1;
     var color = vec3<f32>(0.008, 0.01, 0.025) * (1.2 - p.y * 0.5);
 
-    // scope, envelope, filter, drum steps, keyboard: (left, top, right, bottom)
-    let panels = array<vec4<f32>, 5>(
+    // panels (left, top, right, bottom); the tablet takes panel 5 while playing
+    let tabv = params.tab_on > 0.5;
+    var panels = array<vec4<f32>, 6>(
         vec4<f32>(0.03, 0.04, 0.97, 0.38),
         vec4<f32>(0.03, 0.42, 0.485, 0.70),
         vec4<f32>(0.515, 0.42, 0.97, 0.70),
         vec4<f32>(0.03, 0.73, 0.97, 0.80),
         vec4<f32>(0.03, 0.83, 0.97, 0.97),
+        vec4<f32>(0.03, 0.25, 0.97, 0.80),
     );
-    for (var i = 0; i < 5; i++) {
+    if (tabv) { panels[0] = vec4<f32>(0.03, 0.04, 0.97, 0.22); }
+    for (var i = 0; i < 6; i++) {
+        if (tabv && (i == 1 || i == 2 || i == 3)) { continue; }
+        if (!tabv && i == 5) { continue; }
         let r = panels[i];
         let q = local(p, r.xy, r.zw);
         if (!inside(q)) { continue; }
@@ -655,6 +914,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
             case 1: { color += env_view(q, size, accent, sr); }
             case 2: { color += filter_view(q, size, accent, sr); }
             case 3: { color += drum_view(q, size, accent, sr); }
+            case 5: { color = tablet_view(q, size, sr); }
             default: { color = keys_view(q, size, sr); }
         }
     }

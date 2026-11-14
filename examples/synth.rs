@@ -5,7 +5,8 @@ use log::error;
 use std::ops::RangeInclusive;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
-const MAX_SAMPLES_PER_FRAME: u32 = 1024;
+// enough audio for a frame even at low frame rates
+const MAX_SAMPLES_PER_FRAME: u32 = 4096;
 const SAMPLE_RATE: u32 = 44100;
 
 cuneus::uniform_params! {
@@ -33,11 +34,244 @@ cuneus::uniform_params! {
         drum_level: f32,
         swing: f32,
         play_sample: u32,
-        _pad1: f32,
+        // tablet playing
+        tab_on: f32,
         key_on: [[u32; 4]; 4],
         key_off: [[u32; 4]; 4],
     }
 }
+
+// Tablet: songs written as rows of marks, like wedges pressed into clay (cuneus = wedge).
+// One line per track: `name [instrument:] steps... [.effect(v)]*`. Steps share the bar evenly; `|` starts the
+// next bar and a track loops its own bars. `.` rest, `-` hold, `x X o` hit / accent / ghost, `C4 Eb2 F#3` notes,
+// `[C4 E4 G4]` a chord. `let name = steps` reuses a phrase, `#[tempo(120), swing(0.1)]` sets the groove.
+
+// GPU layout (u32 words): header [switch sample, old slot, new slot], then two slots of SLOT words:
+// slot [origin sample, tempo, -, tracks], per track 16 words at 16 + t * 16
+// [kind, bars, events, event offset, lpf, drive, room, echo, gain, pan, -, name (4 words of 4 chars)],
+// events from 16 + MAX_TRACKS * 16, 4 words each [start (bars), length (bars), note or 0, velocity]
+const SLOT: usize = 4096;
+const MAX_TRACKS: usize = 8;
+const EV0: usize = 16 + MAX_TRACKS * 16;
+const TABLET_WORDS: usize = 16 + 2 * SLOT;
+
+// instruments 0..7, drums from 100
+const INSTRUMENTS: [&str; 8] = ["saw", "square", "pluck", "epiano", "strings", "bass", "bell", "sine"];
+const DRUMS: [&str; 5] = ["kick", "snare", "hat", "open", "clap"];
+// default low-pass per instrument, Hz
+const INST_LPF: [f32; 8] = [3200.0, 2200.0, 20000.0, 20000.0, 6000.0, 900.0, 20000.0, 20000.0];
+
+struct Ev { start: f32, dur: f32, key: f32, vel: f32 }
+struct Track { name: String, kind: u32, bars: u32, fx: [f32; 6], evs: Vec<Ev> }
+struct Song { tempo: f32, tracks: Vec<Track> }
+
+fn tokenize(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let (mut sq, mut par) = (0, 0);
+    for c in s.chars() {
+        match c {
+            '[' => { sq += 1; cur.push(c); }
+            ']' => { sq -= 1; cur.push(c); }
+            '(' => { par += 1; cur.push(c); }
+            ')' => { par -= 1; cur.push(c); }
+            '|' if sq == 0 && par == 0 => {
+                if !cur.is_empty() { out.push(std::mem::take(&mut cur)); }
+                out.push("|".into());
+            }
+            c if c.is_whitespace() && sq == 0 && par == 0 => {
+                if !cur.is_empty() { out.push(std::mem::take(&mut cur)); }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() { out.push(cur); }
+    out
+}
+
+fn note(t: &str) -> Option<f32> {
+    let mut ch = t.chars();
+    let base = match ch.next()? { 'C' => 0, 'D' => 2, 'E' => 4, 'F' => 5, 'G' => 7, 'A' => 9, 'B' => 11, _ => return None };
+    let rest: String = ch.collect();
+    let (acc, oct) = if let Some(r) = rest.strip_prefix('#') { (1, r) } else if let Some(r) = rest.strip_prefix('b') { (-1, r) } else { (0, rest.as_str()) };
+    let o: i32 = if oct.is_empty() { 4 } else { oct.parse().ok()? };
+    Some(((o + 1) * 12 + base + acc) as f32)
+}
+
+// `name(value)` pairs, from `#[a(1), b(2)]` or `.a(1).b(2)`
+fn calls(s: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let b = s.as_bytes();
+    let mut i = 0;
+    while let Some(o) = s[i..].find('(') {
+        let o = i + o;
+        let c = s[o..].find(')').map_or(s.len(), |c| o + c);
+        let mut k = o;
+        while k > 0 && (b[k - 1].is_ascii_alphanumeric() || b[k - 1] == b'_') { k -= 1; }
+        out.push((s[k..o].to_string(), s[o + 1..c].trim().to_string()));
+        i = (c + 1).min(s.len());
+    }
+    out
+}
+
+fn parse_tablet(src: &str) -> Result<Song, String> {
+    let mut song = Song { tempo: 120.0, tracks: Vec::new() };
+    let mut swing = 0.0f32;
+    let mut lets: std::collections::HashMap<String, Vec<String>> = Default::default();
+    for (ln, raw) in src.lines().enumerate() {
+        let line = raw.split("//").next().unwrap_or("").trim();
+        if line.is_empty() { continue; }
+        let err = |m: String| format!("line {}: {m}", ln + 1);
+        if let Some(a) = line.strip_prefix("#[") {
+            for (k, v) in calls(a.trim_end_matches(']')) {
+                let x: f32 = v.parse().map_err(|_| err(format!("'{v}' is not a number")))?;
+                match k.as_str() {
+                    "tempo" => song.tempo = x.clamp(30.0, 300.0),
+                    "swing" => swing = x.clamp(0.0, 0.6),
+                    _ => return Err(err(format!("unknown attribute '{k}' (tempo, swing)"))),
+                }
+            }
+            continue;
+        }
+        if let Some(r) = line.strip_prefix("let ") {
+            let (name, body) = r.split_once('=').ok_or_else(|| err("expected `let name = steps`".into()))?;
+            lets.insert(name.trim().to_string(), tokenize(body));
+            continue;
+        }
+        if song.tracks.len() >= MAX_TRACKS { return Err(err(format!("at most {MAX_TRACKS} tracks"))); }
+        let toks = tokenize(line);
+        let name = toks[0].trim_end_matches(':').to_string();
+        let mut i = 1;
+        let mut kind = DRUMS.iter().position(|d| *d == name).map(|d| 100 + d as u32);
+        if toks.get(1).is_some_and(|t| t.ends_with(':')) {
+            let inst = toks[1].trim_end_matches(':');
+            let k = INSTRUMENTS.iter().position(|n| *n == inst)
+                .ok_or_else(|| err(format!("unknown instrument '{inst}' ({})", INSTRUMENTS.join(" "))))?;
+            kind = Some(k as u32);
+            i = 2;
+        }
+        let kind = kind.ok_or_else(|| err(format!("'{name}' needs an instrument, e.g. `{name} saw: C4 ...`, or use a drum name ({})", DRUMS.join(" "))))?;
+        let drum = kind >= 100;
+        let mut fx = [if drum { 20000.0 } else { INST_LPF[kind as usize] }, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let mut octave = 0.0;
+        // expand phrases, split off the effects
+        let mut steps = Vec::new();
+        for t in &toks[i..] {
+            if t.len() > 1 && t.starts_with('.') && t.as_bytes()[1].is_ascii_alphabetic() {
+                for (k, v) in calls(t) {
+                    let x: f32 = v.parse().map_err(|_| err(format!("'{v}' is not a number")))?;
+                    match k.as_str() {
+                        "lpf" => fx[0] = x.clamp(40.0, 20000.0),
+                        "drive" => fx[1] = x.clamp(0.0, 1.0),
+                        "room" => fx[2] = x.clamp(0.0, 1.0),
+                        "echo" => fx[3] = x.clamp(0.0, 1.0),
+                        "gain" => fx[4] = x.clamp(0.0, 2.0),
+                        "pan" => fx[5] = x.clamp(-1.0, 1.0),
+                        "octave" => octave = x.round().clamp(-3.0, 3.0),
+                        _ => return Err(err(format!("unknown effect '.{k}' (lpf drive room echo gain pan octave)"))),
+                    }
+                }
+            } else if let Some(p) = lets.get(t) {
+                steps.extend(p.iter().cloned());
+            } else {
+                steps.push(t.clone());
+            }
+        }
+        let bars: Vec<&[String]> = steps.split(|t| t == "|").collect();
+        let mut evs: Vec<Ev> = Vec::new();
+        let mut last: Vec<usize> = Vec::new();
+        for (b, bar) in bars.iter().enumerate() {
+            if bar.is_empty() { return Err(err(format!("bar {} of '{name}' is empty", b + 1))); }
+            let n = bar.len() as f32;
+            for (s, t) in bar.iter().enumerate() {
+                let len = 1.0 / n;
+                let mut start = b as f32 + s as f32 * len;
+                if (bar.len() == 8 || bar.len() == 16) && s % 2 == 1 { start += swing * 0.5 * len; }
+                match t.as_str() {
+                    "." => last.clear(),
+                    "-" => { for &e in &last { evs[e].dur += len; } }
+                    "x" | "X" | "o" => {
+                        if !drum { return Err(err(format!("'{t}' is a drum hit; '{name}' plays notes"))); }
+                        let vel = match t.as_str() { "X" => 1.0, "o" => 0.35, _ => 0.75 };
+                        evs.push(Ev { start, dur: len, key: 0.0, vel });
+                        last.clear();
+                    }
+                    _ => {
+                        if drum { return Err(err(format!("'{t}': drum tracks use . x X o"))); }
+                        let inner = t.strip_prefix('[').and_then(|r| r.strip_suffix(']'));
+                        let notes: Vec<&str> = match inner { Some(r) => r.split_whitespace().collect(), None => vec![t.as_str()] };
+                        last.clear();
+                        for nt in notes {
+                            let k = note(nt).ok_or_else(|| err(format!("'{nt}' is not a note (like C4, Eb2, F#3)")))?;
+                            last.push(evs.len());
+                            evs.push(Ev { start, dur: len, key: k + octave * 12.0, vel: 0.8 });
+                        }
+                    }
+                }
+            }
+        }
+        song.tracks.push(Track { name, kind, bars: bars.len() as u32, fx, evs });
+    }
+    let total: usize = song.tracks.iter().map(|t| t.evs.len()).sum();
+    if EV0 + total * 4 > SLOT { return Err(format!("too many notes ({total}); the tablet holds {}", (SLOT - EV0) / 4)); }
+    Ok(song)
+}
+
+fn song_words(song: &Song, origin: u32) -> Vec<u32> {
+    let mut w = vec![0u32; SLOT];
+    w[0] = origin;
+    w[1] = song.tempo.to_bits();
+    w[3] = song.tracks.len() as u32;
+    let mut eo = EV0;
+    for (t, tr) in song.tracks.iter().enumerate() {
+        let h = 16 + t * 16;
+        w[h] = tr.kind;
+        w[h + 1] = tr.bars;
+        w[h + 2] = tr.evs.len() as u32;
+        w[h + 3] = eo as u32;
+        for (k, v) in tr.fx.iter().enumerate() { w[h + 4 + k] = v.to_bits(); }
+        let nb: Vec<u8> = tr.name.bytes().take(16).collect();
+        for (k, c) in nb.iter().enumerate() { w[h + 11 + k / 4] |= (*c as u32) << ((k % 4) * 8); }
+        for e in &tr.evs {
+            w[eo] = e.start.to_bits(); w[eo + 1] = e.dur.to_bits(); w[eo + 2] = e.key.to_bits(); w[eo + 3] = e.vel.to_bits();
+            eo += 4;
+        }
+    }
+    w
+}
+
+const PRESETS: [(&str, &str); 3] = [
+    ("House", "// one line per track: steps share the bar, | starts the next bar
+#[tempo(122), swing(0.08)]
+
+kick   X . . . x . . . X . . . x . . .
+snare  . . . . X . . . . . . . X . . o
+hat    . x . x . x . x . x . x . x . x
+clap   . . . . . . . . . . . . x . . . | . . . . x . . . . . . . x . x .
+
+let riff = C2 . C2 . Eb2 . C2 G1
+bass   bass:   riff | riff | Ab1 . Ab1 . Bb1 . Bb1 C2   .drive(0.2)
+keys   epiano: [C4 Eb4 G4] - - - . . [Bb3 D4 F4] - | [Ab3 C4 Eb4] - - - . . [G3 Bb3 D4] -   .room(0.35).echo(0.2)
+lead   pluck:  . . G4 . Bb4 . C5 . | . Eb5 . D5 . C5 . .   .echo(0.4).pan(0.3)
+"),
+    ("Ambient", "#[tempo(76)]
+
+pad    strings: [C3 G3 E4] - - - - - - - | [A2 E3 C4] - - - - - - - | [F2 C3 A3] - - - - - - - | [G2 D3 B3] - - - - - - -   .room(0.7)
+bell   bell:    . . . G5 . . . . | . . E5 . . . D5 . | . . . C5 . . . . | . . B4 . . . . .   .echo(0.5).room(0.5).pan(-0.3)
+low    sine:    C2 - - - - - - - | A1 - - - - - - - | F1 - - - - - - - | G1 - - - - - - -   .gain(0.8)
+hat    . . o . . . x .
+kick   X . . . . . . . . . . . . . . .
+"),
+    ("Disco", "#[tempo(112), swing(0.05)]
+
+kick   X . . . X . . . X . . . X . . .
+hat    . . X . . . X . . . X . . . X .
+snare  . . . . x . . . . . . . x . . .
+bass   bass:    A1 A2 A1 A2 A1 A2 A1 A2 | F1 F2 F1 F2 F1 F2 F1 F2 | G1 G2 G1 G2 G1 G2 G1 G2 | E1 E2 E1 E2 E1 E2 E1 E2   .lpf(900)
+arp    saw:     A4 C5 E5 C5 A4 C5 E5 C5 | F4 A4 C5 A4 F4 A4 C5 A4 | G4 B4 D5 B4 G4 B4 D5 B4 | E4 G#4 B4 G#4 E4 G#4 B4 G#4   .lpf(2400).echo(0.3).gain(0.6)
+pad    strings: [A3 C4 E4] - - - - - - - | [F3 A3 C4] - - - - - - - | [G3 B3 D4] - - - - - - - | [E3 G#3 B3] - - - - - - -   .room(0.5).gain(0.7)
+"),
+];
 
 // piano layout on the top letter row by physical position: white keys Q W E R T Y U I O, black keys 2 3 5 6 7 9 0
 const KEYS: [KeyCode; 16] = [
@@ -97,6 +331,13 @@ struct SynthManager {
     pcm_stream: Option<PcmStreamManager>,
     keys_held: [bool; 16],
     last_samples_generated: u32,
+    tablet_src: String,
+    tablet_err: Option<String>,
+    // slot playing, where its bar 0 began, its tempo
+    tab_slot: usize,
+    tab_origin: u32,
+    tab_tempo: f32,
+    tab_loaded: bool,
 }
 
 impl SynthManager {
@@ -104,6 +345,34 @@ impl SynthManager {
     fn next_sample(&self) -> u32 {
         let written = self.pcm_stream.as_ref().map_or(0, |s| s.samples_written());
         ((written + self.last_samples_generated as u64) as u32).max(1)
+    }
+
+    // parse into the other slot, switched at the next bar
+    fn apply_tablet(&mut self, core: &Core, now_: bool) {
+        let song = match parse_tablet(&self.tablet_src) {
+            Ok(s) => s,
+            Err(e) => { self.tablet_err = Some(e); return; }
+        };
+        self.tablet_err = None;
+        let now = self.next_sample() + 512;
+        let (slot, at) = if now_ && self.tab_loaded && self.current_params.tab_on > 0.5 {
+            (1 - self.tab_slot, now)
+        } else if self.tab_loaded && self.current_params.tab_on > 0.5 {
+            let bar = (240.0 / self.tab_tempo * SAMPLE_RATE as f32) as u64;
+            let since = now.saturating_sub(self.tab_origin) as u64;
+            (1 - self.tab_slot, self.tab_origin + (since.div_ceil(bar) * bar) as u32)
+        } else {
+            (self.tab_slot, now)
+        };
+        let buf = &self.compute_shader.storage_buffers[1];
+        core.queue.write_buffer(buf, ((16 + slot * SLOT) * 4) as u64, cuneus::bytemuck::cast_slice(&song_words(&song, at)));
+        let old = if self.tab_loaded { self.tab_slot } else { slot };
+        core.queue.write_buffer(buf, 0, cuneus::bytemuck::cast_slice(&[at, old as u32, slot as u32]));
+        self.tab_slot = slot;
+        self.tab_origin = at;
+        self.tab_tempo = song.tempo;
+        self.tab_loaded = true;
+        self.current_params.tab_on = 1.0;
     }
 }
 
@@ -135,21 +404,28 @@ impl ShaderManager for SynthManager {
             drum_level: 1.0,
             swing: 0.0,
             play_sample: 0,
-            _pad1: 0.0,
+            tab_on: 0.0,
             key_on: [[0; 4]; 4],
             key_off: [[0; 4]; 4],
         };
 
         let audio_buffer_size = (MAX_SAMPLES_PER_FRAME * 2) as usize;
-        // lets add a new buffer called dsp. Persistent DSP state: filter integrators, delay/chorus/reverb lines and the
-        // scope ring. Must be >= the shader's layout (~62,110 floats); 65,536 leaves headroom.
-        let dsp_buffer_size = (65536 * std::mem::size_of::<f32>()) as u64;
+        // dsp: DSP state (~62,110 floats), from 65,536 the tablet bus, then its echo line (1 s)
+        let dsp_buffer_size = ((65536 + 4 * MAX_SAMPLES_PER_FRAME as usize + 44100) * std::mem::size_of::<f32>()) as u64;
+        let passes = vec![
+            // one thread per sample for the tablet voices, then the sequential effects and the picture
+            PassDescription::new("voices", &[]).with_workgroup_size([MAX_SAMPLES_PER_FRAME / 256, 1, 1]),
+            PassDescription::new("main", &[]),
+        ];
 
         let config = ComputeShader::builder()
-            .with_entry_point("main")
+            .with_entry_point("voices")
+            .with_multi_pass(&passes)
             .with_custom_uniforms::<SynthParams>()
+            .with_fonts()
             .with_audio(audio_buffer_size)
             .with_storage_buffer(StorageBufferSpec::new("dsp", dsp_buffer_size))
+            .with_storage_buffer(StorageBufferSpec::new("tablet", (TABLET_WORDS * 4) as u64))
             .with_workgroup_size([16, 16, 1])
             .with_texture_format(COMPUTE_TEXTURE_FORMAT_RGBA16)
             .with_label("Synth")
@@ -180,6 +456,12 @@ impl ShaderManager for SynthManager {
             pcm_stream,
             keys_held: [false; 16],
             last_samples_generated: 0,
+            tablet_src: PRESETS[0].1.to_string(),
+            tablet_err: None,
+            tab_slot: 0,
+            tab_origin: 0,
+            tab_tempo: 120.0,
+            tab_loaded: false,
         }
     }
 
@@ -230,9 +512,40 @@ impl ShaderManager for SynthManager {
             .controls
             .get_ui_request(&self.base.start_time, &core.size, self.base.fps_tracker.fps());
 
+        let mut src = std::mem::take(&mut self.tablet_src);
+        let tab_err = self.tablet_err.clone();
+        let mut apply = false;
+        let mut at_once = false;
+        let mut stop = false;
+        let playing = self.current_params.tab_on > 0.5;
         let full_output = if self.base.key_handler.show_ui {
             self.base.render_ui(core, |ctx| {
                 RenderKit::apply_default_style(ctx);
+
+                egui::Window::new("Tablet")
+                    .collapsible(true)
+                    .resizable(true)
+                    .default_width(460.0)
+                    .default_pos([330.0, 10.0])
+                    .show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            if ui.button(if playing { "Apply" } else { "Play" }).clicked() { apply = true; }
+                            if playing && ui.button("Stop").clicked() { stop = true; }
+                            ui.separator();
+                            for (name, text) in &PRESETS {
+                                if ui.button(*name).clicked() { src = text.to_string(); apply = true; at_once = true; }
+                            }
+                        });
+                        // Ctrl/Cmd+Enter applies (consumed before the editor)
+                        if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Enter)) { apply = true; at_once = true; }
+                        if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)) { apply = true; }
+                        egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                            ui.add(egui::TextEdit::multiline(&mut src).code_editor().desired_rows(12).desired_width(f32::INFINITY));
+                        });
+                        if let Some(e) = &tab_err { ui.colored_label(egui::Color32::from_rgb(255, 120, 100), e); }
+                        ui.small("Ctrl+Enter applies at the next bar, Shift+Ctrl+Enter at once.  . rest  - hold  x X o hit  C4 Eb2 F#3 notes  [C4 E4 G4] chord  | next bar");
+                        ui.small(format!("instruments: {}   drums: {}   effects: .lpf .drive .room .echo .gain .pan .octave", INSTRUMENTS.join(" "), DRUMS.join(" ")));
+                    });
 
                 egui::Window::new("GPU Synth")
                     .collapsible(true)
@@ -298,6 +611,9 @@ impl ShaderManager for SynthManager {
             self.base.render_ui(core, |_ctx| {})
         };
 
+        self.tablet_src = src;
+        if apply { self.apply_tablet(core, at_once); }
+        if stop { self.current_params.tab_on = 0.0; }
         if changed {
             // Preserve audio fields that are managed by update()
             params.sample_offset = self.current_params.sample_offset;
@@ -306,6 +622,7 @@ impl ShaderManager for SynthManager {
             params.play_sample = self.current_params.play_sample;
             params.key_on = self.current_params.key_on;
             params.key_off = self.current_params.key_off;
+            params.tab_on = self.current_params.tab_on;
             self.current_params = params;
         }
 

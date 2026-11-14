@@ -7,7 +7,7 @@ cuneus::uniform_params! {
         sa: f32, sd: f32, drg: f32, spd: f32, dec: f32, dif: f32, dep: f32, jit: f32,
         rSd: f32, mSc: f32, fSc: f32, sGn: f32, sAt: f32, _s0: f32, str: f32, aSc: f32,
         glw: f32, cSh: f32, spc: f32, gam: f32, cSp: f32, sat: f32, pal: f32, rel: f32,
-        tur: f32, rct: f32, stm: f32, vis: f32, org: f32, osz: f32, shn: f32, ohu: f32,
+        _tu: f32, rct: f32, stm: f32, vis: f32, org: f32, osz: f32, shn: f32, ohu: f32,
         bgl: f32, fod: f32, ogl: f32, ovr: f32,
         act: f32, bth: f32, spk: f32, eml: f32,
         mit: f32, fcs: f32, apr: f32, fdr: f32,
@@ -22,7 +22,13 @@ cuneus::uniform_params! {
         bf: f32, bsd: f32, wal: f32, wth: f32,
         foc: f32, fds: f32, hal: f32, grn: f32,
         hai: f32, hln: f32, hwv: f32, shu: f32,
-        pls: f32, brw: f32, sst: f32, _m1: f32,
+        pls: f32, brw: f32, sst: f32, flx: f32,
+        fib: f32, sil: f32, mar: f32, lgt: f32,
+        fdm: f32, crg: f32, mox: f32, moy: f32,
+        mon: f32, wet: f32, saa: f32, exc: f32,
+        bal: f32, iri: f32, ifl: f32, gtn: f32,
+        ghu: f32, men: f32, mhu: f32, mwh: f32,
+        fdp: [[f32; 4]; 8],
     }
 }
 
@@ -31,13 +37,26 @@ struct PhysarumShader {
     compute_shader: ComputeShader,
     current_params: PhysarumParams,
     substeps: Vec<Vec<usize>>,
+    optional: [Vec<usize>; 3],
+    prev_buttons: u32,
+    next_food: usize,
 }
 
 impl PhysarumShader {
+    // substeps, and passes whose output is unused at the current settings
     fn apply_substeps(&mut self) {
-        let n = self.current_params.sst.round() as usize;
+        let p = self.current_params;
+        let n = p.sst.round() as usize;
         for (i, group) in self.substeps.iter().enumerate() {
             for &idx in group { self.compute_shader.set_pass_enabled(idx, i + 1 < n); }
+        }
+        let on = [
+            p.mar > 0.0,
+            p.tbe > 0.0 || p.hai > 0.0 || p.pls > 0.0 || (p.bf > 0.0 && p.wal > 0.0),
+            p.sdf > 0.0 || p.edb > 0.0 || (p.bf > 0.0 && p.fds > 0.0),
+        ];
+        for (group, on) in self.optional.iter().zip(on) {
+            for &idx in group { self.compute_shader.set_pass_enabled(idx, on); }
         }
     }
 }
@@ -48,7 +67,7 @@ impl ShaderManager for PhysarumShader {
             sa: 1.50, sd: 40.0, drg: 0.20, spd: 4.95, dec: 0.995, dif: 0.40, dep: 30.0, jit: 0.500,
             rSd: 1.0, mSc: 0.30, fSc: 0.80, sGn: 5.0, sAt: 0.08, _s0: 0.0, str: 0.15, aSc: 1.00,
             glw: 1.0, cSh: 0.05, spc: 0.25, gam: 2.0, cSp: 1.0, sat: 0.5, pal: 3.0, rel: 3.0,
-            tur: 0.0, rct: 1.0, stm: 0.6, vis: 0.2, org: 0.5, osz: 0.4, shn: 0.4, ohu: 0.5,
+            _tu: 0.0, rct: 1.0, stm: 0.6, vis: 0.2, org: 0.5, osz: 0.4, shn: 0.4, ohu: 0.5,
             bgl: 0.45, fod: 0.6, ogl: 1.0, ovr: 0.7,
             act: 1.0, bth: 0.8, spk: 1.0, eml: 2.0,
             mit: 0.5, fcs: 0.0, apr: 0.0, fdr: 0.15,
@@ -63,7 +82,13 @@ impl ShaderManager for PhysarumShader {
             bf: 0.0, bsd: 1.0, wal: 1.0, wth: 0.5,
             foc: 0.0, fds: 0.5, hal: 1.0, grn: 0.0,
             hai: 0.0, hln: 0.5, hwv: 0.5, shu: 0.0,
-            pls: 0.0, brw: 0.0, sst: 1.0, _m1: 0.0,
+            pls: 0.0, brw: 0.0, sst: 1.0, flx: 0.0,
+            fib: 0.0, sil: 0.0, mar: 0.0, lgt: 0.0,
+            fdm: 0.0, crg: 1.0, mox: 0.0, moy: 0.0,
+            mon: 0.0, wet: 0.0, saa: 0.0, exc: 1.0,
+            bal: 0.0, iri: 0.0, ifl: 1.0, gtn: 0.0,
+            ghu: 0.0, men: 0.0, mhu: 0.0, mwh: 0.6,
+            fdp: [[0.0; 4]; 8],
         };
 
         let base = RenderKit::new(core);
@@ -84,15 +109,19 @@ impl ShaderManager for PhysarumShader {
         // extra simulation substeps for more quality when you increase the speed but ofc, slow..
         let mut substeps = Vec::new();
         for _ in 0..3 {
-            substeps.push((passes.len()..passes.len() + 6).collect::<Vec<_>>());
+            let start = passes.len();
+            passes.push(PassDescription::new("agent_update", &["agent_update", "field", "flow"]).with_resolution(1024, 2048));
+            passes.push(PassDescription::new("force", &["flow"]).with_resolution_scale(0.5));
+            for _ in 0..16 { passes.push(PassDescription::new("pressure", &["force", "pressure"]).with_resolution_scale(0.5)); }
             passes.extend([
-                PassDescription::new("agent_update", &["agent_update", "field", "flow"]).with_resolution(1024, 2048),
+                PassDescription::new("flow", &["force", "pressure"]).with_resolution_scale(0.5),
                 PassDescription::new("trail_adv", &["field", "flow"]),
                 PassDescription::new("diffuse_h", &["trail_adv"]),
                 PassDescription::new("diffuse_v", &["diffuse_h"]),
                 PassDescription::new("inhibitor_down", &["diffuse_v"]).with_resolution_scale(0.125),
                 PassDescription::new("field", &["trail_adv", "diffuse_v", "inhibitor_down"]),
             ]);
+            substeps.push((start..passes.len()).collect::<Vec<_>>());
         }
         passes.extend([
             PassDescription::new("organ", &["organ", "flow", "field"]).with_resolution(64, 192),
@@ -106,6 +135,7 @@ impl ShaderManager for PhysarumShader {
             PassDescription::new("eu2", &["eb2", "eu3"]).with_resolution_scale(0.25),
             PassDescription::new("eu1", &["emit", "eu2", "inhibitor_down"]).with_resolution_scale(0.5),
             PassDescription::new("cyto", &["cyto", "flow", "field"]),
+            PassDescription::new("marb", &["marb", "flow", "field"]).with_resolution_scale(0.5),
             PassDescription::new("jinit", &["field"]),
             PassDescription::new("j64", &["jinit"]),
             PassDescription::new("j32", &["j64"]),
@@ -115,7 +145,8 @@ impl ShaderManager for PhysarumShader {
             PassDescription::new("j2", &["j4"]),
             PassDescription::new("j1", &["j2"]),
             PassDescription::new("rfield", &["field", "cyto", "j1"]),
-            PassDescription::new("compose", &["rfield", "eu1", "organ_res"]),
+            PassDescription::new("rfm", &["rfield", "marb"]),
+            PassDescription::new("compose", &["rfm", "eu1", "organ_res"]),
             PassDescription::new("bd1", &["compose"]).with_resolution_scale(0.5),
             PassDescription::new("bd2", &["bd1"]).with_resolution_scale(0.25),
             PassDescription::new("bd3", &["bd2"]).with_resolution_scale(0.125),
@@ -145,7 +176,13 @@ impl ShaderManager for PhysarumShader {
         let compute_shader = cuneus::compute_shader!(core, "shaders/physarum.wgsl", config);
         compute_shader.set_custom_params(initial_params, &core.queue);
 
-        let mut s = Self { base, compute_shader, current_params: initial_params, substeps };
+        let idx = |names: &[&str]| -> Vec<usize> { names.iter().map(|n| passes.iter().position(|p| p.name == *n).unwrap()).collect() };
+        let optional = [
+            idx(&["marb"]),
+            idx(&["jinit", "j64", "j32", "j16", "j8", "j4", "j2", "j1"]),
+            idx(&["db1", "db2", "db3", "db4", "du3", "du2", "du1"]),
+        ];
+        let mut s = Self { base, compute_shader, current_params: initial_params, substeps, optional, prev_buttons: 0, next_food: 0 };
         s.apply_substeps();
         s
     }
@@ -179,6 +216,7 @@ impl ShaderManager for PhysarumShader {
                         egui::CollapsingHeader::new("Behavior Rule").default_open(false).show(ui, |ui| {
                             changed |= ui.add(egui::Slider::new(&mut params.rSd, 0.0..=100.0).step_by(1.0).text("Rule Seed")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.mSc, 0.0..=1.0).text("Species Diversity")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.bal, 0.0..=2.0).text("Species Balance")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.fSc, 0.0..=3.0).text("Force Scale")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.sGn, 0.5..=30.0).text("Sensor Gain")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.str, 0.0..=2.0).text("Strafe Power")).changed();
@@ -186,7 +224,7 @@ impl ShaderManager for PhysarumShader {
 
                         egui::CollapsingHeader::new("Agent Physics").default_open(false).show(ui, |ui| {
                             changed |= ui.add(egui::Slider::new(&mut params.sst, 1.0..=4.0).step_by(1.0).text("Sim Steps")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.drg, 0.0..=0.99).text("Momentum")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.drg, 0.0..=0.95).text("Momentum")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.sd, 4.0..=150.0).text("Sensor Distance")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.sa, 0.05..=1.5).text("Sensor Angle")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.jit, 0.0..=0.5).text("Random Jitter")).changed();
@@ -198,7 +236,6 @@ impl ShaderManager for PhysarumShader {
                             let mut hl = 0.5f32.ln() / (params.dec.ln() * 60.0);
                             if ui.add(egui::Slider::new(&mut hl, 0.1..=30.0).logarithmic(true).suffix(" s").text("Trail Half-life")).changed() { params.dec = 0.5f32.powf(1.0 / (hl * 60.0)); changed = true; }
                             changed |= ui.add(egui::Slider::new(&mut params.dif, 0.0..=1.0).text("Diffusion")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut params.tur, 0.0..=1.0).text("Turing Inhibitor")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.fod, 0.0..=2.0).text("Foraging")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.srcn, 0.0..=8.0).step_by(1.0).text("Food Sources")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.src, 0.0..=2.0).text("Source Pull")).changed();
@@ -219,6 +256,8 @@ impl ShaderManager for PhysarumShader {
                             changed |= ui.add(egui::Slider::new(&mut params.ovr, 0.0..=1.0).text("Variety")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.act, 0.0..=3.0).text("Activity")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.spk, 0.0..=3.0).text("Sparks")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.exc, 0.2..=4.0).logarithmic(true).text("Excitability")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.crg, 0.3..=4.0).logarithmic(true).text("Conduction Range")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.mit, 0.0..=1.0).text("Mitosis")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.mtr, 0.0..=1.0).text("Transport")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.vac, 0.0..=1.0).text("Vacuoles")).changed();
@@ -241,6 +280,14 @@ impl ShaderManager for PhysarumShader {
                             changed |= ui.add(egui::Slider::new(&mut params.gel, 0.0..=2.0).text("Gel Translucency")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.sem, 0.0..=2.0).text("Contact Seams")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.arc, 0.0..=3.0).text("Spark Arcs")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.wet, 0.0..=2.0).text("Wet Coat")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.gtn, 0.0..=1.0).text("Gel Tint")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.ghu, 0.0..=1.0).text("Gel Tint Hue")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.iri, 0.0..=2.0).text("Iridescence")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.ifl, 0.2..=2.0).logarithmic(true).text("Film Thickness")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.men, 0.0..=2.0).text("Meniscus")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.mwh, 0.0..=1.0).text("Meniscus Whiteness")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.mhu, 0.0..=1.0).text("Meniscus Hue Shift")).changed();
                         });
 
                         egui::CollapsingHeader::new("Shapes").default_open(true).show(ui, |ui| {
@@ -261,6 +308,16 @@ impl ShaderManager for PhysarumShader {
                             changed |= ui.add(egui::Slider::new(&mut params.grn, 0.0..=2.0).text("Sensor Grain")).changed();
                         });
 
+                        egui::CollapsingHeader::new("Living Network").default_open(true).show(ui, |ui| {
+                            changed |= ui.add(egui::Slider::new(&mut params.flx, 0.0..=2.0).text("Flux Adaptation")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.fib, 0.0..=2.0).text("Fibres")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.sil, 0.0..=2.0).text("Silk Sheen")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.mar, 0.0..=2.0).text("Marbling")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.fdm, 0.0..=2.0).text("Mouse Food (left click)")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.lgt, 0.0..=2.0).text("Light Avoidance (right hold)")).changed();
+                            if ui.button("Clear food").clicked() { params.fdp = [[0.0; 4]; 8]; changed = true; }
+                        });
+
                         egui::CollapsingHeader::new("Living Motion").default_open(true).show(ui, |ui| {
                             changed |= ui.add(egui::Slider::new(&mut params.shu, 0.0..=2.0).text("Shuttle Streaming")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.pls, 0.0..=2.0).text("Pulsing Walls")).changed();
@@ -278,11 +335,12 @@ impl ShaderManager for PhysarumShader {
                             changed |= ui.add(egui::Slider::new(&mut params.eml, 0.0..=5.0).text("Emitter Light")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.spc, 0.0..=1.5).text("Specular")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.shn, 0.0..=1.0).text("Gloss")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.saa, 0.0..=2.0).text("Specular Antialias")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.gam, 0.5..=3.0).text("Gamma")).changed();
                         });
 
                         egui::CollapsingHeader::new("Colors").default_open(false).show(ui, |ui| {
-                            changed |= ui.add(egui::Slider::new(&mut params.pal, 0.0..=12.0).step_by(1.0).text("Palette")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut params.pal, 0.0..=20.0).step_by(1.0).text("Palette")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.cSh, -0.5..=0.5).text("Hue Shift")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.cSp, 0.0..=2.0).text("Species Contrast")).changed();
                             changed |= ui.add(egui::Slider::new(&mut params.hhu, 0.0..=1.0).text("Highlight Hue")).changed();
@@ -314,6 +372,20 @@ impl ShaderManager for PhysarumShader {
         self.base.export_manager.apply_ui_request(export_request);
 
         if should_start_export { self.base.export_manager.start_export(); }
+        // mouse: left click drops food, right hold shines light
+        let m = self.base.mouse_tracker.uniform;
+        let b = m.buttons[0];
+        let (mx, my) = (m.position[0] * core.size.width as f32, m.position[1] * core.size.height as f32);
+        let lit = if b & 2 != 0 && params.lgt > 0.0 { 1.0 } else { 0.0 };
+        if lit != params.mon || lit > 0.0 { params.mon = lit; params.mox = mx; params.moy = my; changed = true; }
+        if b & 1 != 0 && self.prev_buttons & 1 == 0 && params.fdm > 0.0 {
+            let t = self.base.controls.get_time(&self.base.start_time);
+            params.fdp[self.next_food] = [mx, my, t, 1.0];
+            self.next_food = (self.next_food + 1) % 8;
+            changed = true;
+        }
+        self.prev_buttons = b;
+
         if changed {
             self.current_params = params;
             self.compute_shader.set_custom_params(params, &core.queue);
@@ -325,7 +397,9 @@ impl ShaderManager for PhysarumShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        self.base.default_handle_input(core, event)
+        let ui = self.base.default_handle_input(core, event);
+        self.base.handle_mouse_input(core, event, ui);
+        ui
     }
 }
 
