@@ -309,6 +309,33 @@ let passes = vec![
 - Shaders query `textureDimensions()` at runtime, so they're already dimension-agnostic
 - When reading from a different-sized buffer, use `textureDimensions(input_texture0)` to scale coordinates
 
+### Volumes (3D Textures)
+
+A pass can write a fixed-size 3D texture instead of a 2D buffer: bake something expensive once, or step a 3D simulation.
+
+```rust
+PassDescription::new("bake", &[]).with_volume(256, 128, 64).run_once(),
+// a baked parameter changed
+compute_shader.rerun_pass("bake");
+```
+
+```wgsl
+@group(3) @binding(16) var vol0: texture_3d<f32>;
+@group(3) @binding(17) var vol0_sampler: sampler;
+@group(3) @binding(18) var vol0_out: texture_storage_3d<rgba16float, write>;
+
+@compute @workgroup_size(4, 4, 4)
+fn bake(@builtin(global_invocation_id) id: vec3<u32>) { ... }
+```
+
+- Volume `j` binds at `16 + 3j` in pass order; up to 3 volumes
+- Ping-pongs like 2D buffers; resizes and exports never touch it
+- The sampler repeats: clamp non-wrapping axes half a texel inside
+- `.run_once()` reruns after a clear, hot reload, resize (2D only) or `rerun_pass`
+- `.with_volume_format(wgpu::TextureFormat::R16Float)` for single-channel fields
+
+Examples: `blackhole.rs`, `galaxy.rs`.
+
 ### Workgroup Sizes
 
 - **WGSL is the Source of Truth:** A workgroup size defined in your shader with `@workgroup_size(x, y, z)` will always be used to compile the pipeline.

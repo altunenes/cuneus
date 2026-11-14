@@ -29,6 +29,10 @@ pub struct MultiPassManager {
     buffer_scale: HashMap<String, Option<f32>>,
     texture_format: wgpu::TextureFormat,
     max_input_deps: usize,
+    /// 3D volumes in binding order
+    volumes: Vec<(String, [u32; 3], wgpu::TextureFormat)>,
+    volume_textures: HashMap<String, (wgpu::Texture, wgpu::Texture)>,
+    volume_side: HashMap<String, bool>,
 }
 
 /// Note: storage layout currently un-used. I try to create our own storage-only layout
@@ -61,8 +65,22 @@ impl MultiPassManager {
                     }],
                 });
 
+        let volumes: Vec<(String, [u32; 3], wgpu::TextureFormat)> = passes
+            .iter()
+            .filter_map(|p| p.volume.map(|v| (p.name.clone(), v, p.volume_format.unwrap_or(texture_format))))
+            .collect();
+        for (name, _, format) in &volumes {
+            Self::check_volume_format(core, name, *format);
+        }
+        let volume_formats: Vec<wgpu::TextureFormat> = volumes.iter().map(|v| v.2).collect();
+        assert!(
+            2 * max_input_deps as u32 <= crate::compute::VOLUME_BINDING_BASE || volumes.is_empty(),
+            "volumes start at Group 3 binding {}: use at most 8 inputs per pass with volumes",
+            crate::compute::VOLUME_BINDING_BASE
+        );
+
         // Create input texture layout for multi-buffer reading
-        let input_layout = Self::create_input_layout(&core.device, max_input_deps);
+        let input_layout = Self::create_input_layout(&core.device, max_input_deps, &volume_formats);
 
         // Build per-buffer resolution config from pass descriptions
         let mut buffer_resolution: HashMap<String, Option<[u32; 2]>> = HashMap::new();
@@ -138,6 +156,13 @@ impl MultiPassManager {
             write_side.insert(name.clone(), false);
         }
 
+        let mut volume_textures = HashMap::new();
+        let mut volume_side = HashMap::new();
+        for (name, dims, format) in &volumes {
+            volume_textures.insert(name.clone(), Self::create_volume_pair(&core.device, *dims, *format, name));
+            volume_side.insert(name.clone(), false);
+        }
+
         Self {
             buffers,
             bind_groups,
@@ -153,6 +178,78 @@ impl MultiPassManager {
             buffer_scale,
             texture_format,
             max_input_deps,
+            volumes,
+            volume_textures,
+            volume_side,
+        }
+    }
+
+    fn create_volume_pair(
+        device: &wgpu::Device,
+        [w, h, d]: [u32; 3],
+        format: wgpu::TextureFormat,
+        name: &str,
+    ) -> (wgpu::Texture, wgpu::Texture) {
+        let make = |side: u32| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(&format!("{name}_volume_{side}")),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: d },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D3,
+                format,
+                usage: wgpu::TextureUsages::STORAGE_BINDING
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+        (make(0), make(1))
+    }
+
+    fn check_volume_format(core: &Core, name: &str, format: wgpu::TextureFormat) {
+        let feats = if core.device.features().contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES) {
+            core.adapter.get_texture_format_features(format)
+        } else {
+            format.guaranteed_format_features(core.device.features())
+        };
+        let usable = feats.allowed_usages.contains(wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING)
+            && feats.flags.contains(wgpu::TextureFormatFeatureFlags::FILTERABLE);
+        assert!(
+            usable,
+            "volume '{name}': {format:?} can't be both written as storage and filtered on this GPU; \
+             use Rgba16Float (the default) or another format it supports"
+        );
+    }
+
+    pub fn volumes(&self) -> &[(String, [u32; 3], wgpu::TextureFormat)] {
+        &self.volumes
+    }
+
+    pub fn volume_dims(&self, name: &str) -> Option<[u32; 3]> {
+        self.volumes.iter().find(|v| v.0 == name).map(|v| v.1)
+    }
+
+    pub fn get_volume_pair(&self, name: &str) -> Option<&(wgpu::Texture, wgpu::Texture)> {
+        self.volume_textures.get(name)
+    }
+
+    pub fn get_volume_side(&self, name: &str) -> bool {
+        self.volume_side.get(name).copied().unwrap_or(false)
+    }
+
+    pub fn mark_volume_written(&mut self, name: &str) {
+        if let Some(side) = self.volume_side.get_mut(name) {
+            *side = !*side;
+        }
+    }
+
+    /// Recreate every volume, zeroed
+    pub fn clear_volumes(&mut self, core: &Core) {
+        for (name, dims, format) in &self.volumes {
+            self.volume_textures.insert(name.clone(), Self::create_volume_pair(&core.device, *dims, *format, name));
+            self.volume_side.insert(name.clone(), false);
         }
     }
 
@@ -219,8 +316,12 @@ impl MultiPassManager {
         })
     }
 
-    fn create_input_layout(device: &wgpu::Device, max_input_deps: usize) -> wgpu::BindGroupLayout {
-        let mut entries = Vec::with_capacity(max_input_deps * 2);
+    fn create_input_layout(
+        device: &wgpu::Device,
+        max_input_deps: usize,
+        volume_formats: &[wgpu::TextureFormat],
+    ) -> wgpu::BindGroupLayout {
+        let mut entries = Vec::with_capacity(max_input_deps * 2 + volume_formats.len() * 3);
         for i in 0..max_input_deps {
             entries.push(wgpu::BindGroupLayoutEntry {
                 binding: (i * 2) as u32,
@@ -236,6 +337,37 @@ impl MultiPassManager {
                 binding: (i * 2 + 1) as u32,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            });
+        }
+        // volumes: texture, sampler, storage
+        for (j, &format) in volume_formats.iter().enumerate() {
+            let b = crate::compute::VOLUME_BINDING_BASE + 3 * j as u32;
+            let vis = wgpu::ShaderStages::COMPUTE;
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: b,
+                visibility: vis,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                },
+                count: None,
+            });
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: b + 1,
+                visibility: vis,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            });
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: b + 2,
+                visibility: vis,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format,
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                },
                 count: None,
             });
         }

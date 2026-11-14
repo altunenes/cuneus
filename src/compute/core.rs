@@ -52,6 +52,8 @@ pub struct ComputeShader {
     pub pass_descriptions: Option<Vec<crate::compute::PassDescription>>,
     /// Pass indices skipped by `dispatch`
     pub skipped_passes: HashSet<usize>,
+    /// `run_once` passes whose output is current (skipped until it goes stale)
+    once_done: HashSet<usize>,
 
     // Engine resources (Group 2)
     pub font_system: Option<FontSystem>,
@@ -141,6 +143,10 @@ impl ComputeShader {
         } else if config.passes.is_some() {
             // Fallback: Multi-pass input textures only if no storage buffers requested
             resource_layout.add_multipass_input_textures(config.max_input_deps);
+            let volume_formats: Vec<wgpu::TextureFormat> = config.passes.as_ref().map_or(Vec::new(), |ps| {
+                ps.iter().filter(|p| p.volume.is_some()).map(|p| p.volume_format.unwrap_or(config.texture_format)).collect()
+            });
+            resource_layout.add_volume_textures(&volume_formats);
         }
 
         // Step 2: Create bind group layouts
@@ -361,6 +367,7 @@ impl ComputeShader {
             pass_dependencies,
             pass_descriptions: config.passes.clone(),
             skipped_passes: HashSet::new(),
+            once_done: HashSet::new(),
             font_system,
             atomic_buffer_raw,
             atomic_buffer_channels: config.atomic_buffer_channels,
@@ -970,6 +977,12 @@ impl ComputeShader {
         ]
     }
 
+    /// Run a `run_once` pass again on the next dispatch
+    pub fn rerun_pass(&mut self, name: &str) {
+        let names = &self.entry_points;
+        self.once_done.retain(|&i| names[i] != name);
+    }
+
     /// Skip a pass at runtime; its buffer keeps the last written state
     pub fn set_pass_enabled(&mut self, pass_index: usize, enabled: bool) {
         if enabled {
@@ -1234,11 +1247,13 @@ impl ComputeShader {
 
         // Execute each pass in order with proper dependencies
         for pass_idx in 0..num_passes {
-            if self.skipped_passes.contains(&pass_idx) {
+            if self.skipped_passes.contains(&pass_idx) || self.once_done.contains(&pass_idx) {
                 continue;
             }
             let pipeline = &self.pipelines[pass_idx];
             let entry_point = &self.entry_points[pass_idx];
+            let volume_dims = self.multipass_manager.as_ref().and_then(|m| m.volume_dims(entry_point));
+            let run_once = self.pass_descriptions.as_ref().and_then(|d| d.get(pass_idx)).is_some_and(|d| d.run_once);
 
             // Get workgroup count for this specific pass
             // Priority: explicit workgroup_size > buffer resolution > screen-based default
@@ -1246,6 +1261,8 @@ impl ComputeShader {
                 if let Some(pass_desc) = pass_descriptions.get(pass_idx) {
                     if let Some(custom_size) = pass_desc.workgroup_size {
                         custom_size // Explicit dispatch count override
+                    } else if let Some([w, h, d]) = volume_dims {
+                        [w.div_ceil(4), h.div_ceil(4), d.div_ceil(4)]
                     } else if pass_desc.resolution.is_some() || pass_desc.resolution_scale.is_some() {
                         // Compute from buffer's actual dimensions
                         if let Some(ref multipass) = self.multipass_manager {
@@ -1283,6 +1300,11 @@ impl ComputeShader {
                     };
                     if multipass.get_write_side(buf_name) {
                         key |= 1 << i;
+                    }
+                }
+                for (j, (name, _, _)) in multipass.volumes().iter().enumerate() {
+                    if multipass.get_volume_side(name) {
+                        key |= 1 << (self.max_input_deps + j);
                     }
                 }
                 key
@@ -1352,7 +1374,13 @@ impl ComputeShader {
             if pass_idx < num_passes - 1 {
                 if let Some(ref mut multipass_mut) = self.multipass_manager {
                     multipass_mut.mark_written(entry_point);
+                    if volume_dims.is_some() {
+                        multipass_mut.mark_volume_written(entry_point);
+                    }
                 }
+            }
+            if run_once {
+                self.once_done.insert(pass_idx);
             }
         }
     }
@@ -1404,6 +1432,7 @@ impl ComputeShader {
                 }
 
                 self.pipelines = new_pipelines;
+                self.once_done.clear();
                 info!(
                     "{} shader hot-reloaded at frame: {}",
                     self.label, self.current_frame
@@ -1541,7 +1570,8 @@ impl ComputeShader {
                 .collect();
 
             let input_layout = multipass.get_input_layout();
-            let num_combinations = 1usize << n;
+            let volumes = multipass.volumes();
+            let num_combinations = 1usize << (n + volumes.len());
             let mut cached = Vec::with_capacity(num_combinations);
 
             for key in 0..num_combinations {
@@ -1559,7 +1589,24 @@ impl ComputeShader {
                     })
                     .collect();
 
-                let mut entries = Vec::with_capacity(n * 2);
+                // volume j: bit n+j = last write went to .0
+                let volume_views: Vec<(wgpu::TextureView, wgpu::TextureView)> = volumes
+                    .iter()
+                    .enumerate()
+                    .map(|(j, (name, _, _))| {
+                        let pair = multipass.get_volume_pair(name).unwrap();
+                        let (r, w) = if (key >> (n + j)) & 1 == 1 { (&pair.0, &pair.1) } else { (&pair.1, &pair.0) };
+                        (r.create_view(&wgpu::TextureViewDescriptor::default()), w.create_view(&wgpu::TextureViewDescriptor::default()))
+                    })
+                    .collect();
+
+                let mut entries = Vec::with_capacity(n * 2 + volumes.len() * 3);
+                for (j, (rv, wv)) in volume_views.iter().enumerate() {
+                    let b = crate::compute::VOLUME_BINDING_BASE + 3 * j as u32;
+                    entries.push(wgpu::BindGroupEntry { binding: b, resource: wgpu::BindingResource::TextureView(rv) });
+                    entries.push(wgpu::BindGroupEntry { binding: b + 1, resource: wgpu::BindingResource::Sampler(&self.multipass_sampler) });
+                    entries.push(wgpu::BindGroupEntry { binding: b + 2, resource: wgpu::BindingResource::TextureView(wv) });
+                }
                 for i in 0..n {
                     entries.push(wgpu::BindGroupEntry {
                         binding: (i * 2) as u32,
@@ -1607,9 +1654,11 @@ impl ComputeShader {
             self.input_texture.as_ref().map(|t| &t.1).or(self.placeholder_input_texture.as_ref().map(|t| &t.sampler)),
         );
 
-        // Resize multi-pass buffers if present
+        // Resize multi-pass buffers if present (volumes keep their size)
         if let Some(multipass) = &mut self.multipass_manager {
             multipass.resize(core, width, height);
+            let names = &self.entry_points;
+            self.once_done.retain(|&i| multipass.volume_dims(&names[i]).is_some());
         }
         self.rebuild_multipass_caches(&core.device);
 
@@ -1647,10 +1696,12 @@ impl ComputeShader {
 
     /// Clear all buffers (atomic or multipass)
     pub fn clear_all_buffers(&mut self, core: &Core) {
-        // Clear multipass buffers if present
+        // Clear multipass buffers and volumes if present
         if let Some(multipass) = &mut self.multipass_manager {
             multipass.clear_all(core);
+            multipass.clear_volumes(core);
         }
+        self.once_done.clear();
         self.rebuild_multipass_caches(&core.device);
 
         // Clear atomic buffer if present

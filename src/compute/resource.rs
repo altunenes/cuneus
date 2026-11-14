@@ -17,6 +17,10 @@ pub enum ResourceType {
     InputTexture,
     ChannelTexture, // External texture channels (channel0, channel1, etc.)
     Sampler,
+    VolumeTexture,
+    VolumeStorage {
+        format: wgpu::TextureFormat,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -124,6 +128,16 @@ impl ResourceLayout {
                 ResourceType::Sampler => {
                     wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)
                 }
+                ResourceType::VolumeTexture => wgpu::BindingType::Texture {
+                    multisampled: false,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                },
+                ResourceType::VolumeStorage { format } => wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format: *format,
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                },
             },
             count: None,
         }
@@ -192,6 +206,16 @@ impl ResourceLayout {
         for i in 0..count {
             self.add_resource(3, &format!("input_texture{i}"), ResourceType::InputTexture);
             self.add_resource(3, &format!("input_sampler{i}"), ResourceType::Sampler);
+        }
+    }
+
+    /// Volume bindings in Group 3 (texture, sampler, storage each)
+    pub fn add_volume_textures(&mut self, formats: &[wgpu::TextureFormat]) {
+        for (j, &format) in formats.iter().enumerate() {
+            let b = super::VOLUME_BINDING_BASE + 3 * j as u32;
+            for (k, ty) in [ResourceType::VolumeTexture, ResourceType::Sampler, ResourceType::VolumeStorage { format }].into_iter().enumerate() {
+                self.bindings.push(ResourceBinding { group: 3, binding: b + k as u32, name: format!("vol{j}_{k}"), resource_type: ty });
+            }
         }
     }
 
