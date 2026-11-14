@@ -9,7 +9,8 @@ use winit::event::ElementState;
 use winit::keyboard::KeyCode;
 
 const SAMPLE_RATE: u32 = 44100;
-const MAX_SAMPLES_PER_FRAME: u32 = 1024;
+// enough audio for a frame even at low frame rates
+const MAX_SAMPLES_PER_FRAME: u32 = 4096;
 
 cuneus::uniform_params! {
     struct GameUniform {
@@ -19,8 +20,8 @@ cuneus::uniform_params! {
         sample_offset: u32,
         samples_to_generate: u32,
         sample_rate: f32,
-        _pad0: f32,
-        _pad1: f32,
+        tilt_shift: f32,
+        bloom: f32,
     }
 }
 
@@ -33,8 +34,8 @@ impl Default for GameUniform {
             sample_offset: 0,
             samples_to_generate: 0,
             sample_rate: SAMPLE_RATE as f32,
-            _pad0: 0.0,
-            _pad1: 0.0,
+            tilt_shift: 1.0,
+            bloom: 1.0,
         }
     }
 }
@@ -63,12 +64,23 @@ impl ShaderManager for Bugberman {
     fn init(core: &Core) -> Self {
         let base = RenderKit::new(core);
 
-        // Game state: header + 13x11 grid (tiles + flames) + bomb list. 2048 floats is plenty...
-        let state_buffer_size = (2048 * std::mem::size_of::<f32>()) as u64;
+        // game state (header, 13x11 tiles and flames, bombs, bugs), fixed size so a resize keeps it
+        let state_bytes = (2048 * std::mem::size_of::<u32>()) as u64;
         let audio_buffer_size = (MAX_SAMPLES_PER_FRAME * 2) as usize;
         let passes = vec![
-            PassDescription::new("sim", &[]),
-            PassDescription::new("main_image", &[]),
+            PassDescription::new("sim", &[]).with_resolution(1, 1).with_workgroup_size([1, 1, 1]),
+            PassDescription::new("scene", &[]),
+            PassDescription::new("bd1", &["scene"]).with_resolution_scale(0.5),
+            PassDescription::new("bd2", &["bd1"]).with_resolution_scale(0.25),
+            PassDescription::new("bd3", &["bd2"]).with_resolution_scale(0.125),
+            PassDescription::new("bd4", &["bd3"]).with_resolution_scale(0.0625),
+            PassDescription::new("bu3", &["bd3", "bd4"]).with_resolution_scale(0.125),
+            PassDescription::new("bu2", &["bd2", "bu3"]).with_resolution_scale(0.25),
+            PassDescription::new("bu1", &["bd1", "bu2"]).with_resolution_scale(0.5),
+            PassDescription::new("db1", &["scene"]).with_resolution_scale(0.5),
+            PassDescription::new("db2", &["db1"]).with_resolution_scale(0.25),
+            PassDescription::new("du1", &["db1", "db2"]).with_resolution_scale(0.5),
+            PassDescription::new("main_image", &["scene", "bu1", "du1"]),
         ];
 
         let config = ComputeShader::builder()
@@ -77,8 +89,8 @@ impl ShaderManager for Bugberman {
             .with_custom_uniforms::<GameUniform>()
             .with_fonts()
             .with_audio(audio_buffer_size)
-            .with_storage_buffer(StorageBufferSpec::new("game_state", state_buffer_size))
-            .with_workgroup_size([8, 8, 1])
+            .with_atomic_buffer_bytes(state_bytes)
+            .with_workgroup_size([16, 16, 1])
             .with_texture_format(COMPUTE_TEXTURE_FORMAT_RGBA16)
             .with_label("Bugberman")
             .build();
@@ -147,31 +159,9 @@ impl ShaderManager for Bugberman {
             .controls
             .get_ui_request(&self.base.start_time, &core.size, self.base.fps_tracker.fps());
 
-        let full_output = if self.base.key_handler.show_ui {
-            self.base.render_ui(core, |ctx| {
-                RenderKit::apply_default_style(ctx);
-                egui::Window::new("About")
-                    .collapsible(true)
-                    .default_open(false)
-                    .resizable(true)
-                    .default_width(220.0)
-                    .show(ctx, |ui| {
-                        ui.label("Kill the bugs with Ferris🦀");
-                        ui.separator();
-                        ui.label("Controls:");
-                        ui.label("Arrows / WASD: move");
-                        ui.label("Space: drop bomb / start / restart");
-                        ui.separator();
-                        ui.add(egui::Slider::new(&mut self.game.volume, 0.0..=1.0).text("Volume"));
-                    });
-            })
-        } else {
-            self.base.render_ui(core, |_ctx| {})
-        };
+        let full_output = self.base.render_ui(core, |_ctx| {});
 
-        self.compute_shader.dispatch_stage_with_workgroups(&mut frame.encoder, 0, [1, 1, 1]);
-        self.compute_shader.dispatch_stage(&mut frame.encoder, core, 1);
-        self.compute_shader.current_frame += 1;
+        self.compute_shader.dispatch(&mut frame.encoder, core);
 
         self.base.renderer.render_to_view(&mut frame.encoder, &frame.view, &self.compute_shader.get_output_texture().bind_group);
 
