@@ -1,11 +1,14 @@
 name: Shader Binary Release
 
+# a v* tag builds and publishes a release; a manual run only builds (artifacts to test)
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
-permissions: write-all
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -14,30 +17,24 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         shader_config:
-          # Shaders that REQUIRE GStreamer (media features)
           - group: "media"
             features: ""
             gstreamer_required: true
-            shaders: "bugberman,audiovis,fft,pathtracing,pinscreen,fluid,cnn,synth,blockgame,kuwahara,gaussian,tameimp,"
-          
-          # Shaders that DON'T need GStreamer
-          - group: "no-media" 
+            shaders: "bugberman,audiovis,fft,pathtracing,pinscreen,fluid,cnn,synth,blockgame,kuwahara,gaussian,tameimp"
+          - group: "no-media"
             features: "--no-default-features"
             gstreamer_required: false
             shaders: "blackhole,buddhabrot,lich,mandelbulb,orbits,nebula,rorschach,volumepassage,jfa,gaussian3d,physarum,galaxy,meshlab,tree"
-        
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            ext: ""
             archive_ext: ".tar.gz"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            ext: ".exe"
             archive_ext: ".zip"
+          # macos-latest is Apple Silicon
           - os: macos-latest
-            target: x86_64-apple-darwin
-            ext: ""
+            target: aarch64-apple-darwin
             archive_ext: ".tar.gz"
 
     steps:
@@ -48,160 +45,74 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # Install GStreamer for macOS (only for media shaders)
       - name: Install macOS dependencies
         if: runner.os == 'macOS' && matrix.shader_config.gstreamer_required
         run: |
-          # Download and install official GStreamer packages
           GSTREAMER_VERSION="1.28.6"
           curl -L "https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION/gstreamer-1.0-$GSTREAMER_VERSION-universal.pkg" -o gstreamer.pkg
           curl -L "https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION/gstreamer-1.0-devel-$GSTREAMER_VERSION-universal.pkg" -o gstreamer-devel.pkg
-          
           sudo installer -pkg gstreamer.pkg -target /
           sudo installer -pkg gstreamer-devel.pkg -target /
-          
-          # Set environment variables for build and runtime
           echo "PKG_CONFIG_PATH=/Library/Frameworks/GStreamer.framework/Versions/1.0/lib/pkgconfig" >> $GITHUB_ENV
           echo "GST_PLUGIN_PATH=/Library/Frameworks/GStreamer.framework/Versions/1.0/lib/gstreamer-1.0" >> $GITHUB_ENV
           echo "DYLD_FALLBACK_LIBRARY_PATH=/Library/Frameworks/GStreamer.framework/Versions/1.0/lib" >> $GITHUB_ENV
 
-      # Install GStreamer for Linux (only for media shaders)
       - name: Install Linux dependencies
         if: runner.os == 'Linux' && matrix.shader_config.gstreamer_required
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libgtk-3-dev \
-            libudev-dev \
-            pkg-config \
-            build-essential \
-            libglib2.0-dev \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-ugly \
+            libgtk-3-dev libudev-dev pkg-config build-essential libglib2.0-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
             patchelf
 
-# Install GStreamer for Windows (only for media shaders)
       - name: Install Windows dependencies
         if: runner.os == 'Windows' && matrix.shader_config.gstreamer_required
         shell: pwsh
         run: |
-          Write-Host "Starting GStreamer installation process..."
           $gstVer = "1.28.6"
           $tempDir = "C:\gst-temp"
           $installDir = "C:\gstreamer"
-
           New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+          # 1.28+ ships one Inno Setup installer (no separate devel package)
+          Invoke-WebRequest -Uri "https://github.com/altunenes/cuneus/releases/download/dependencies/gstreamer-1.0-msvc-x86_64-$gstVer.exe" -OutFile "$tempDir\gstreamer.exe"
+          $proc = Start-Process -FilePath "$tempDir\gstreamer.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$installDir" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { Write-Host "GStreamer install failed: $($proc.ExitCode)"; exit 1 }
 
-          # GStreamer 1.28+ uses Inno Setup installer (single exe, no separate devel package)
-          $installerUrl = "https://github.com/altunenes/cuneus/releases/download/dependencies/gstreamer-1.0-msvc-x86_64-$gstVer.exe"
-          Write-Host "Downloading GStreamer $gstVer installer..."
-          Invoke-WebRequest -Uri $installerUrl -OutFile "$tempDir\gstreamer.exe"
+          $root = @("$installDir\1.0\msvc_x86_64", "$installDir\msvc_x86_64", $installDir,
+                    "C:\Program Files\GStreamer\1.0\msvc_x86_64") | Where-Object { Test-Path "$_\bin\gstreamer-1.0-0.dll" } | Select-Object -First 1
+          if ($null -eq $root) { Write-Host "GStreamer not found"; exit 1 }
+          Write-Host "GStreamer at $root"
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "GST_PLUGIN_PATH=$root\lib\gstreamer-1.0" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PKG_CONFIG_PATH=$root\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PATH=$root\bin;$env:Path" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-          # Inno Setup silent flags
-          Write-Host "Installing GStreamer..."
-          $proc = Start-Process -FilePath "$tempDir\gstreamer.exe" `
-            -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$installDir" `
-            -Wait -PassThru
-          if ($proc.ExitCode -ne 0) {
-            Write-Host "Installation failed with exit code: $($proc.ExitCode)"; exit 1
-          }
-
-          Write-Host "Searching for GStreamer installation..."
-          # Dump directory tree to find where Inno Setup actually installed
-          Write-Host "=== Contents of C:\ ==="
-          Get-ChildItem "C:\" | Select-Object Name | Format-Table
-          if (Test-Path $installDir) {
-            Write-Host "=== Contents of $installDir (3 levels) ==="
-            Get-ChildItem $installDir -Recurse -Depth 3 | Select-Object FullName | Format-Table
-          }
-          Write-Host "=== Checking Program Files ==="
-          Get-ChildItem "C:\Program Files" | Where-Object { $_.Name -like "*gstreamer*" -or $_.Name -like "*GStreamer*" } | Format-Table
-
-          # Try known possible paths
-          $possiblePaths = @(
-            "$installDir\1.0\msvc_x86_64",
-            "$installDir\msvc_x86_64",
-            $installDir,
-            "C:\Program Files\GStreamer\1.0\msvc_x86_64",
-            "C:\Program Files (x86)\GStreamer\1.0\msvc_x86_64"
-          )
-          $expectedPath = $null
-          foreach ($p in $possiblePaths) {
-            if (Test-Path "$p\bin") {
-              Write-Host "Found GStreamer at: $p"
-              $expectedPath = $p
-              break
-            }
-          }
-          if ($null -eq $expectedPath) {
-            Write-Host "ERROR: Could not find GStreamer installation"
-            exit 1
-          }
-
-          # Verify core GStreamer DLL is present
-          $dllToCheck = "bin\gstreamer-1.0-0.dll"
-          $fullDllPath = Join-Path $expectedPath $dllToCheck
-          if (Test-Path $fullDllPath) {
-            Write-Host "Found: $dllToCheck"
-          } else {
-            Write-Host "Missing critical file: $dllToCheck in $expectedPath"
-            Get-ChildItem -Path $expectedPath -Recurse | Format-List
-            exit 1
-          }
-
-          Write-Host "Setting environment variables..."
-          $env:GSTREAMER_1_0_ROOT_MSVC_X86_64 = $expectedPath
-          $env:GST_PLUGIN_PATH = "$expectedPath\lib\gstreamer-1.0"
-          $env:PKG_CONFIG_PATH = "$expectedPath\lib\pkgconfig"
-          $env:Path = "$expectedPath\bin;" + $env:Path
-          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$expectedPath" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "GST_PLUGIN_PATH=$expectedPath\lib\gstreamer-1.0" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "PKG_CONFIG_PATH=$expectedPath\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "PATH=$expectedPath\bin;$env:Path" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-          Write-Host "GStreamer installation completed successfully."
-
-      # Build all binaries for this shader group
       - name: Build binaries
         shell: bash
         run: |
-          echo "Building ${{ matrix.shader_config.group }} shaders with features: ${{ matrix.shader_config.features }}"
-          
-          # CRITICAL: Set linker flags for macOS to allow install_name_tool modifications
-          # Without this flag, install_name_tool silently fails due to insufficient header padding
-          # This enables fixing @rpath entries to point to bundled GStreamer libraries
+          # room in the Mach-O headers for install_name_tool
           if [[ "${{ runner.os }}" == "macOS" ]]; then
             export RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,-headerpad_max_install_names"
           fi
-          
           IFS=',' read -ra SHADERS <<< "${{ matrix.shader_config.shaders }}"
           for shader in "${SHADERS[@]}"; do
-            echo "Building shader: $shader"
             cargo build --release --example "$shader" ${{ matrix.shader_config.features }}
           done
 
-      # Bundle GStreamer files for media shaders
-      - name: Bundle GStreamer for media shaders
+      # one GStreamer bundle: lib/ (core libs), lib/gstreamer-1.0/ (plugins), libexec/ (plugin scanner), etc/ (certs)
+      - name: Bundle GStreamer
         if: matrix.shader_config.gstreamer_required
         shell: bash
         run: |
-          echo "🔧 Creating GStreamer bundle for media shaders on ${{ runner.os }}..."
-          
-          BUNDLE_DIR="gstreamer_bundle"
-          mkdir -p "$BUNDLE_DIR/lib"
-          mkdir -p "$BUNDLE_DIR/lib/gstreamer-1.0"
-          mkdir -p "$BUNDLE_DIR/etc/ssl/certs"
-          
+          B="gstreamer_bundle"
+          mkdir -p "$B/lib/gstreamer-1.0" "$B/libexec/gstreamer-1.0" "$B/etc/ssl/certs"
+
           if [[ "${{ runner.os }}" == "macOS" ]]; then
-            echo " Bundling GStreamer for macOS..."
-            GSTREAMER_ROOT="/Library/Frameworks/GStreamer.framework/Versions/1.0"
-            LIB_EXT="dylib"
-            
-            # Core libraries (macOS)
+            ROOT="/Library/Frameworks/GStreamer.framework/Versions/1.0"
+            SCANNER="gst-plugin-scanner"
             CORE_LIBS=(
               "libgstreamer-1.0.0.dylib" "libgstbase-1.0.0.dylib" "libgstapp-1.0.0.dylib"
               "libgstvideo-1.0.0.dylib" "libgstaudio-1.0.0.dylib" "libgstpbutils-1.0.0.dylib"
@@ -214,8 +125,6 @@ jobs:
               "libavfilter.10.dylib" "libswresample.5.dylib" "libswscale.8.dylib"
               "libSoundTouch.2.dylib" "libMoltenVK.dylib"
             )
-            
-            # Plugins (macOS)
             PLUGINS=(
               "libgstcoreelements.dylib" "libgstapp.dylib" "libgstplayback.dylib"
               "libgsttypefindfunctions.dylib" "libgstvideoconvertscale.dylib" "libgstvideorate.dylib"
@@ -226,96 +135,54 @@ jobs:
               "libgstlibav.dylib" "libgstisomp4.dylib"
               "libgstapplemedia.dylib" "libgstvideoparsersbad.dylib"
             )
-            
           elif [[ "${{ runner.os }}" == "Windows" ]]; then
-            echo "Bundling GStreamer for Windows..."
-            GSTREAMER_ROOT="${GSTREAMER_1_0_ROOT_MSVC_X86_64:-C:/gstreamer/1.0/msvc_x86_64}"
-            LIB_EXT="dll"
-            
-            # Core libraries (Windows) - these come from both lib/ and bin/ directories
+            ROOT="${GSTREAMER_1_0_ROOT_MSVC_X86_64}"
+            SCANNER="gst-plugin-scanner.exe"
             CORE_LIBS=(
-              # GStreamer core (from lib/)
               "gstreamer-1.0-0.dll" "gstbase-1.0-0.dll" "gstapp-1.0-0.dll"
               "gstvideo-1.0-0.dll" "gstaudio-1.0-0.dll" "gstpbutils-1.0-0.dll"
               "gsttag-1.0-0.dll" "gstfft-1.0-0.dll" "gstgl-1.0-0.dll"
               "gstvulkan-1.0-0.dll" "gstcodecparsers-1.0-0.dll" "gstriff-1.0-0.dll"
               "gstrtp-1.0-0.dll" "gstrtsp-1.0-0.dll" "gstsdp-1.0-0.dll"
               "gstnet-1.0-0.dll" "gstcontroller-1.0-0.dll"
-              
-              # GLib and dependencies (from lib/)
-              "glib-2.0-0.dll" "gobject-2.0-0.dll" "gio-2.0-0.dll" 
+              "glib-2.0-0.dll" "gobject-2.0-0.dll" "gio-2.0-0.dll"
               "gmodule-2.0-0.dll" "gthread-2.0-0.dll"
-              "intl-8.dll" "ffi-7.dll" "pcre2-8-0.dll" 
-              
-              # Core dependencies (from lib/)
+              "intl-8.dll" "ffi-7.dll" "pcre2-8-0.dll"
               "orc-0.4-0.dll" "z.dll" "z-1.dll" "bz2.dll"
-              
-              # Additional dependencies (from lib/)
               "libwinpthread-1.dll" "libgcc_s_seh-1.dll" "libstdc++-6.dll"
               "libiconv-2.dll" "libcharset-1.dll"
-            )
-            
-            # CRITICAL: Additional codec libraries from bin/ directory
-            # These are essential for video processing and were missing!
-            BIN_CODEC_LIBS=(
               "avformat-61.dll" "avcodec-61.dll" "avutil-59.dll"
               "avfilter-10.dll" "swresample-5.dll" "swscale-8.dll"
-              "opus-0.dll" "vorbis-0.dll" "ogg-0.dll" 
+              "opus-0.dll" "vorbis-0.dll" "ogg-0.dll"
               "mp3lame-0.dll" "libmpg123-1.dll"
             )
-            
-            # Plugins (Windows)
             PLUGINS=(
-              # Core elements
               "gstcoreelements.dll" "gstapp.dll" "gstplayback.dll"
               "gsttypefindfunctions.dll" "gstvideoconvertscale.dll" "gstvideorate.dll"
               "gstaudioconvert.dll" "gstaudioresample.dll" "gstvolume.dll"
-              "gstvideofilter.dll" "gstgio.dll"
-              
-              # VIDEO DECODERS
-              "gstlibav.dll"
-              
-              # Windows audio
+              "gstvideofilter.dll" "gstgio.dll" "gstlibav.dll"
               "gstwasapi.dll" "gstwasapi2.dll" "gstdirectsound.dll"
               "gstautodetect.dll" "gstaudiotestsrc.dll"
-
-              # Audio processing
               "gstaudiomixer.dll" "gstspectrum.dll" "gstlevel.dll" "gstsoundtouch.dll"
               "gstaudioparsers.dll"
-
-              # Container formats
               "gstisomp4.dll" "gstvideoparsersbad.dll" "gstmatroska.dll"
               "gstavi.dll" "gstflv.dll" "gstmpegtsdemux.dll" "gstasf.dll"
               "gstwavparse.dll" "gstid3demux.dll"
-
-              # Codec plugins
               "gstvpx.dll" "gsttheora.dll" "gstmpg123.dll" "gstlame.dll"
               "gstvorbis.dll" "gstogg.dll"
-              
-              # Windows-specific video - for DirectShow support
               "gstdirectshow.dll" "gstwinks.dll"
             )
-            
-            # Windows: Also create directories for helper executables
-            mkdir -p "$BUNDLE_DIR/bin"
-            mkdir -p "$BUNDLE_DIR/libexec/gstreamer-1.0"
-            
-          elif [[ "${{ runner.os }}" == "Linux" ]]; then
-            echo " Bundling GStreamer for Linux..."
-            GSTREAMER_ROOT="/usr"
-            LIB_EXT="so"
-            
-            # Core libraries (Linux)
+          else
+            ROOT="/usr"
+            SCANNER="gst-plugin-scanner"
             CORE_LIBS=(
               "libgstreamer-1.0.so.0" "libgstbase-1.0.so.0" "libgstapp-1.0.so.0"
-              "libgstvideo-1.0.so.0" "libgstaudio-1.0.so.0" "libgstpbutils-1.0.so.0" 
+              "libgstvideo-1.0.so.0" "libgstaudio-1.0.so.0" "libgstpbutils-1.0.so.0"
               "libgsttag-1.0.so.0" "libgstfft-1.0.so.0" "libgstgl-1.0.so.0"
               "libgstvulkan-1.0.so.0" "libgstcodecparsers-1.0.so.0" "libgstriff-1.0.so.0"
               "libgstrtp-1.0.so.0" "libglib-2.0.so.0" "libgobject-2.0.so.0"
               "libgio-2.0.so.0" "libgmodule-2.0.so.0" "liborc-0.4.so.0"
             )
-            
-            # Plugins (Linux)
             PLUGINS=(
               "libgstcoreelements.so" "libgstapp.so" "libgstplayback.so"
               "libgsttypefindfunctions.so" "libgstvideoconvert.so" "libgstvideorate.so"
@@ -326,472 +193,152 @@ jobs:
               "libgstlibav.so" "libgstisomp4.so"
               "libgstvideoparsersbad.so" "libgstv4l2.so"
             )
+            # Debian/Ubuntu keep them under the multiarch dir
+            if [[ -d "/usr/lib/x86_64-linux-gnu/gstreamer-1.0" ]]; then ROOT_LIB="/usr/lib/x86_64-linux-gnu"; fi
           fi
-          
-          # Copy libraries
-          for lib in "${CORE_LIBS[@]}"; do
-            if [[ -f "$GSTREAMER_ROOT/lib/$lib" ]]; then
-              cp "$GSTREAMER_ROOT/lib/$lib" "$BUNDLE_DIR/lib/" 2>/dev/null || true
-            elif [[ -f "$GSTREAMER_ROOT/bin/$lib" ]]; then
-              cp "$GSTREAMER_ROOT/bin/$lib" "$BUNDLE_DIR/lib/" 2>/dev/null || true
-            fi
-          done
-          
-          # Copy additional codec libraries from bin/ directory (Windows only)
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            echo " Copying critical codec libraries from bin directory..."
-            echo " Checking GStreamer installation at: $GSTREAMER_ROOT"
-            echo " Expected bin directory: $GSTREAMER_ROOT/bin"
-            
-            # Debug: List what's actually in the bin directory
-            if [[ -d "$GSTREAMER_ROOT/bin" ]]; then
-              echo " Bin directory exists. Contents:"
-              ls -la "$GSTREAMER_ROOT/bin" | head -20
-              echo " Total files in bin: $(ls -1 "$GSTREAMER_ROOT/bin" | wc -l)"
-            else
-              echo " Bin directory does not exist at: $GSTREAMER_ROOT/bin"
-              echo " Available directories in $GSTREAMER_ROOT:"
-              ls -la "$GSTREAMER_ROOT/" 2>/dev/null || echo "GSTREAMER_ROOT path invalid"
-            fi
-            
-            for lib in "${BIN_CODEC_LIBS[@]}"; do
-              if [[ -f "$GSTREAMER_ROOT/bin/$lib" ]]; then
-                # Copy to bin directory so Windows restructuring can find them
-                cp "$GSTREAMER_ROOT/bin/$lib" "$BUNDLE_DIR/bin/" 2>/dev/null || true
-                echo "   Copied codec to bin/: $lib"
-              else
-                echo "   Missing codec: $lib (checked: $GSTREAMER_ROOT/bin/$lib)"
-              fi
-            done
-          fi
-          
-          # Copy plugins with detailed logging
-          echo " Copying GStreamer plugins..."
-          echo " Plugin directory: $GSTREAMER_ROOT/lib/gstreamer-1.0"
-          
-          # Debug: Check plugin directory
-          if [[ -d "$GSTREAMER_ROOT/lib/gstreamer-1.0" ]]; then
-            echo " Plugin directory exists"
-            echo " Total plugins available: $(ls -1 "$GSTREAMER_ROOT/lib/gstreamer-1.0"/*.dll 2>/dev/null | wc -l)"
-            
-            # Check for critical plugins specifically
-            for critical in "gstlibav.dll" "gstmpegtsdemux.dll" "gstasf.dll"; do
-              if [[ -f "$GSTREAMER_ROOT/lib/gstreamer-1.0/$critical" ]]; then
-                echo " Found critical plugin: $critical"
-              else
-                echo " Critical plugin missing: $critical"
-              fi
-            done
-          else
-            echo " Plugin directory does not exist"
-          fi
-          
-          for plugin in "${PLUGINS[@]}"; do
-            if [[ -f "$GSTREAMER_ROOT/lib/gstreamer-1.0/$plugin" ]]; then
-              cp "$GSTREAMER_ROOT/lib/gstreamer-1.0/$plugin" "$BUNDLE_DIR/lib/gstreamer-1.0/" 2>/dev/null || true
-              echo "   Copied plugin: $plugin"
-              
-              # Special check for critical macOS camera plugin
-              if [[ "$plugin" == "libgstapplemedia.dylib" ]]; then
-                echo "   CRITICAL: macOS camera plugin copied successfully"
-              fi
-            else
-              echo "   MISSING plugin: $plugin (checked: $GSTREAMER_ROOT/lib/gstreamer-1.0/$plugin)"
-              
-              # Special warning for critical macOS camera plugin
-              if [[ "$plugin" == "libgstapplemedia.dylib" ]]; then
-                echo "   CRITICAL ERROR: macOS camera plugin NOT FOUND - webcam will not work!"
-              fi
-            fi
-          done
-          
-          # Verify critical plugins are present
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            echo " Verifying critical plugins in bundle..."
-            critical_plugins=("gstlibav.dll" "gstmpegtsdemux.dll" "gstasf.dll")
-            for critical in "${critical_plugins[@]}"; do
-              if [[ -f "$BUNDLE_DIR/lib/gstreamer-1.0/$critical" ]]; then
-                echo "   Critical plugin verified: $critical"
-              else
-                echo "   CRITICAL PLUGIN MISSING: $critical"
-              fi
-            done
-          fi
-          
-          # Copy SSL certificates
-          if [[ -f "$GSTREAMER_ROOT/etc/ssl/certs/ca-certificates.crt" ]]; then
-            cp "$GSTREAMER_ROOT/etc/ssl/certs/ca-certificates.crt" "$BUNDLE_DIR/etc/ssl/certs/"
-          elif [[ -f "/etc/ssl/certs/ca-certificates.crt" ]]; then
-            cp "/etc/ssl/certs/ca-certificates.crt" "$BUNDLE_DIR/etc/ssl/certs/"
-          fi
-          
-          # Copy GStreamer helper binaries
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            # For Windows, copy important executables and helpers
-            for exe in "gst-plugin-scanner.exe" "gst-inspect-1.0.exe" "gst-launch-1.0.exe"; do
-              if [[ -f "$GSTREAMER_ROOT/bin/$exe" ]]; then
-                cp "$GSTREAMER_ROOT/bin/$exe" "$BUNDLE_DIR/bin/" 2>/dev/null || true
-              fi
-            done
-            
-            # Copy plugin scanner to libexec
-            if [[ -f "$GSTREAMER_ROOT/libexec/gstreamer-1.0/gst-plugin-scanner.exe" ]]; then
-              cp "$GSTREAMER_ROOT/libexec/gstreamer-1.0/gst-plugin-scanner.exe" "$BUNDLE_DIR/libexec/gstreamer-1.0/" 2>/dev/null || true
-            elif [[ -f "$GSTREAMER_ROOT/bin/gst-plugin-scanner.exe" ]]; then
-              cp "$GSTREAMER_ROOT/bin/gst-plugin-scanner.exe" "$BUNDLE_DIR/libexec/gstreamer-1.0/" 2>/dev/null || true
-            fi
-          else
-            # macOS and Linux
-            mkdir -p "$BUNDLE_DIR/libexec/gstreamer-1.0"
-            mkdir -p "$BUNDLE_DIR/bin"
-            
-            # Copy plugin scanner
-            if [[ -f "$GSTREAMER_ROOT/libexec/gstreamer-1.0/gst-plugin-scanner" ]]; then
-              cp "$GSTREAMER_ROOT/libexec/gstreamer-1.0/gst-plugin-scanner" "$BUNDLE_DIR/libexec/gstreamer-1.0/"
-              chmod +x "$BUNDLE_DIR/libexec/gstreamer-1.0/gst-plugin-scanner"
-            fi
-            
-            # Copy essential tools
-            for tool in "gst-inspect-1.0" "gst-typefind-1.0" "gst-launch-1.0"; do
-              if [[ -f "$GSTREAMER_ROOT/bin/$tool" ]]; then
-                cp "$GSTREAMER_ROOT/bin/$tool" "$BUNDLE_DIR/bin/"
-                chmod +x "$BUNDLE_DIR/bin/$tool"
-              fi
-            done
-          fi
-          
-          echo " GStreamer bundle created: $(du -sh $BUNDLE_DIR | cut -f1)"
+          ROOT_LIB="${ROOT_LIB:-$ROOT/lib}"
 
-      # Create release packages for each shader in the group
-      - name: Prepare release packages
+          for lib in "${CORE_LIBS[@]}"; do
+            for d in "$ROOT_LIB" "$ROOT/lib" "$ROOT/bin"; do
+              if [[ -f "$d/$lib" ]]; then cp "$d/$lib" "$B/lib/"; break; fi
+            done
+            [[ -f "$B/lib/$lib" ]] || echo "missing lib: $lib"
+          done
+          for plugin in "${PLUGINS[@]}"; do
+            if [[ -f "$ROOT_LIB/gstreamer-1.0/$plugin" ]]; then
+              cp "$ROOT_LIB/gstreamer-1.0/$plugin" "$B/lib/gstreamer-1.0/"
+            else
+              echo "missing plugin: $plugin"
+            fi
+          done
+          for d in "$ROOT/libexec/gstreamer-1.0" "$ROOT_LIB/gstreamer1.0/gstreamer-1.0" "$ROOT/bin"; do
+            if [[ -f "$d/$SCANNER" ]]; then cp "$d/$SCANNER" "$B/libexec/gstreamer-1.0/"; chmod +x "$B/libexec/gstreamer-1.0/$SCANNER"; break; fi
+          done
+          for c in "$ROOT/etc/ssl/certs/ca-certificates.crt" "/etc/ssl/certs/ca-certificates.crt"; do
+            if [[ -f "$c" ]]; then cp "$c" "$B/etc/ssl/certs/"; break; fi
+          done
+          # framework copies are read-only: install_name_tool and codesign need to write them
+          chmod -R u+w "$B"
+          echo "GStreamer bundle: $(du -sh $B | cut -f1)"
+
+      - name: Install rcedit
+        if: runner.os == 'Windows'
+        shell: bash
+        run: curl -sL -o rcedit.exe https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe
+
+      # one folder per app: the app, README.txt and the shader's source
+      #   Windows: name.exe (+ GStreamer DLLs, lib/, libexec/, etc/)
+      #   Linux:   name (+ gstreamer/)
+      #   macOS:   name.app (GStreamer inside Contents/Resources/gstreamer)
+      - name: Package apps
         shell: bash
         run: |
+          MEDIA="${{ matrix.shader_config.gstreamer_required }}"
+          VERSION="${GITHUB_REF_NAME#v}"
+          [[ "$GITHUB_REF_TYPE" == "tag" ]] || VERSION="0.0.0"
           IFS=',' read -ra SHADERS <<< "${{ matrix.shader_config.shaders }}"
           for shader in "${SHADERS[@]}"; do
-            echo "Packaging shader: $shader"
-            
-            # Create directory structure
-            mkdir -p "release/$shader/shaders"
-            
-            # Copy the binary
-            cp "target/release/examples/$shader${{ matrix.ext }}" "release/$shader/"
-            
-            # Copy shader files
-            cp "examples/shaders/$shader.wgsl" "release/$shader/shaders/"
-            
-            # Embed GStreamer for media shaders (cross-platform)
-            if [[ "${{ matrix.shader_config.gstreamer_required }}" == "true" ]]; then
-              echo " Embedding GStreamer for $shader..."
-              
-              # Copy GStreamer bundle
-              cp -r "gstreamer_bundle" "release/$shader/gstreamer"
-              
-              # Fix library paths (platform-specific)
-              echo " Fixing library paths for ${{ runner.os }}..."
-              BINARY="release/$shader/$shader${{ matrix.ext }}"
-              BUNDLE_LIB_DIR="release/$shader/gstreamer/lib"
-              BUNDLE_PLUGIN_DIR="$BUNDLE_LIB_DIR/gstreamer-1.0"
-              
-              echo "Debug: Binary path: $BINARY"
-              echo "Debug: Bundle lib dir: $BUNDLE_LIB_DIR"
-              echo "Debug: Bundle exists: $(test -d release/$shader/gstreamer && echo yes || echo no)"
-              
-              if [[ "${{ runner.os }}" == "macOS" ]]; then
-                echo " Processing macOS library paths..."
-                
-                # Fix main binary
-                echo "Fixing main binary: $BINARY"
-                if [[ -f "$BINARY" ]]; then
-                  echo "Before fixing:"
-                  otool -L "$BINARY" | grep -E "(@rpath|/Library/Frameworks/GStreamer.framework)" || echo "No problematic paths found"
-                  
-                  # Create a temporary file with the dependencies to fix
-                  TEMP_DEPS="/tmp/deps_to_fix_$$"
-                  otool -L "$BINARY" 2>/dev/null | grep -E "(@rpath|/Library/Frameworks/GStreamer.framework)" | awk '{print $1}' > "$TEMP_DEPS"
-                  
-                  while read -r dep; do
-                    if [[ -n "$dep" ]]; then
-                      lib_name=$(basename "$dep")
-                      new_path="@executable_path/gstreamer/lib/$lib_name"
-                      echo "  Changing: $dep -> $new_path"
-                      install_name_tool -change "$dep" "$new_path" "$BINARY" 2>/dev/null || echo "  Failed to change $dep"
-                    fi
-                  done < "$TEMP_DEPS"
-                  
-                  rm -f "$TEMP_DEPS"
-                  
-                  echo "After fixing:"
-                  otool -L "$BINARY" | grep -E "(@rpath|/Library/Frameworks/GStreamer.framework)" || echo "All paths fixed!"
-                else
-                  echo " Binary not found: $BINARY"
-                fi
-                
-                # Fix all libraries
-                echo "Fixing libraries in: $BUNDLE_LIB_DIR"
-                if [[ -d "$BUNDLE_LIB_DIR" ]]; then
-                  for lib in "$BUNDLE_LIB_DIR"/*.dylib; do
-                    if [[ -f "$lib" ]]; then
-                      lib_name=$(basename "$lib")
-                      echo "  Processing library: $lib_name"
-                      
-                      # Use a subshell to prevent script exit on errors
-                      (
-                        # Check if library is writable before attempting to modify
-                        if [[ ! -w "$lib" ]]; then
-                          echo "    Skipping $lib_name (read-only)"
-                          exit 0
-                        fi
-                        
-                        # Test if we can modify this library at all
-                        if ! install_name_tool -id "@loader_path/$lib_name" "$lib" 2>/dev/null; then
-                          echo "    Skipping $lib_name (cannot modify - likely system/protected library)"
-                          exit 0
-                        fi
-                        
-                        echo "    Successfully modified ID for $lib_name"
-                        
-                        # Fix dependencies
-                        otool -L "$lib" 2>/dev/null | grep -E "(@rpath|/Library/Frameworks/GStreamer.framework)" | awk '{print $1}' | while read dep; do
-                          if [[ -n "$dep" ]]; then
-                            dep_lib_name=$(basename "$dep")
-                            new_dep_path="@loader_path/$dep_lib_name"
-                            if install_name_tool -change "$dep" "$new_dep_path" "$lib" 2>/dev/null; then
-                              echo "      Fixed dependency: $dep"
-                            else
-                              echo "      Warning: Could not change dependency $dep in $lib_name"
-                            fi
-                          fi
-                        done
-                      ) || echo "    Error processing $lib_name, continuing..."
-                    fi
-                  done
-                else
-                  echo " Library directory not found: $BUNDLE_LIB_DIR"
-                fi
-                
-                # Fix all plugins
-                echo "Fixing plugins in: $BUNDLE_PLUGIN_DIR"
-                if [[ -d "$BUNDLE_PLUGIN_DIR" ]]; then
-                  for plugin in "$BUNDLE_PLUGIN_DIR"/*.dylib; do
-                    if [[ -f "$plugin" ]]; then
-                      plugin_name=$(basename "$plugin")
-                      echo "  Processing plugin: $plugin_name"
-                      
-                      # Use a subshell to prevent script exit on errors
-                      (
-                        # Try to set the plugin ID, skip if it fails
-                        if ! install_name_tool -id "@loader_path/../$plugin_name" "$plugin" 2>/dev/null; then
-                          echo "    Skipping $plugin_name (cannot modify)"
-                          exit 0
-                        fi
-                        
-                        echo "    Successfully modified ID for $plugin_name"
-                        
-                        # Fix dependencies
-                        otool -L "$plugin" 2>/dev/null | grep -E "(@rpath|/Library/Frameworks/GStreamer.framework)" | awk '{print $1}' | while read dep; do
-                          if [[ -n "$dep" ]]; then
-                            dep_lib_name=$(basename "$dep")
-                            new_dep_path="@loader_path/../$dep_lib_name"
-                            if install_name_tool -change "$dep" "$new_dep_path" "$plugin" 2>/dev/null; then
-                              echo "      Fixed dependency: $dep"
-                            else
-                              echo "      Warning: Could not change dependency $dep in $plugin_name"
-                            fi
-                          fi
-                        done
-                      ) || echo "    Error processing $plugin_name, continuing..."
-                    fi
-                  done
-                else
-                  echo " Plugin directory not found: $BUNDLE_PLUGIN_DIR"
-                fi
-                
-              elif [[ "${{ runner.os }}" == "Linux" ]]; then
-                # Linux: Use patchelf and $ORIGIN rpath
-                echo "Setting rpath for Linux binary..."
-                if command -v patchelf >/dev/null 2>&1; then
-                  patchelf --set-rpath '$ORIGIN/gstreamer/lib' "$BINARY" 2>/dev/null || true
-                  
-                  # Fix all libraries
-                  for lib in "$BUNDLE_LIB_DIR"/*.so*; do
-                    if [[ -f "$lib" ]]; then
-                      patchelf --set-rpath '$ORIGIN' "$lib" 2>/dev/null || true
-                    fi
-                  done
-                  
-                  # Fix all plugins
-                  for plugin in "$BUNDLE_PLUGIN_DIR"/*.so; do
-                    if [[ -f "$plugin" ]]; then
-                      patchelf --set-rpath '$ORIGIN/..' "$plugin" 2>/dev/null || true
-                    fi
-                  done
-                else
-                  echo " patchelf not available, library paths may not work correctly"
-                fi
-                
-              elif [[ "${{ runner.os }}" == "Windows" ]]; then
-                # Windows: DLLs use current directory by default, so restructure
-                echo "Windows DLL bundling and structure optimization..."
-                
-                # Copy DLLs to release directory root (alongside exe)
-                echo " Restructuring Windows GStreamer layout..."
-                
-                # Copy all DLLs directly to exe directory (includes both core libs and codec libs)
-                echo " Copying all DLLs from lib/ to exe directory..."
-                cp "release/$shader/gstreamer/lib"/*.dll "release/$shader/" 2>/dev/null || true
-                
-                # Copy codec DLLs from bin directory to exe directory
-                if [[ -d "release/$shader/gstreamer/bin" ]]; then
-                  echo " Copying critical codec DLLs from bin directory to exe directory..."
-                  
-                  # Explicitly copy the 12 required codec DLLs
-                  for codec_dll in "avformat-61.dll" "avcodec-61.dll" "avutil-59.dll" \
-                                   "avfilter-10.dll" "swresample-5.dll" "swscale-8.dll" \
-                                   "libvpx-1.dll" "libopus-0.dll" "libvorbis-0.dll" \
-                                   "libogg-0.dll" "libmp3lame-0.dll" "libmpg123-0.dll"; do
-                    if [[ -f "release/$shader/gstreamer/bin/$codec_dll" ]]; then
-                      cp "release/$shader/gstreamer/bin/$codec_dll" "release/$shader/" 2>/dev/null || true
-                      echo "   Copied critical codec: $codec_dll"
-                    else
-                      echo "   MISSING critical codec: $codec_dll"
-                    fi
-                  done
-                  
-                  # Copy other executables from bin
-                  cp "release/$shader/gstreamer/bin"/*.exe "release/$shader/" 2>/dev/null || true
-                else
-                  echo " CRITICAL ERROR: No bin directory found in GStreamer bundle!"
-                fi
-                
-                # Debug: Final count of DLLs in exe directory
-                echo " Final DLL count in exe directory:"
-                ls -la "release/$shader/"*.dll 2>/dev/null | wc -l | xargs echo "  Total DLLs:"
-                
-                # Keep the lib folder structure for plugins
-                mkdir -p "release/$shader/lib"
-                cp -r "release/$shader/gstreamer/lib/gstreamer-1.0" "release/$shader/lib/" 2>/dev/null || true
-                
-                # Keep libexec for plugin scanner
-                if [[ -d "release/$shader/gstreamer/libexec" ]]; then
-                  cp -r "release/$shader/gstreamer/libexec" "release/$shader/" 2>/dev/null || true
-                fi
-                
-                # Keep etc for configs
-                if [[ -d "release/$shader/gstreamer/etc" ]]; then
-                  cp -r "release/$shader/gstreamer/etc" "release/$shader/" 2>/dev/null || true
-                fi
-                
-                # Remove the original gstreamer folder
-                rm -rf "release/$shader/gstreamer" 2>/dev/null || true
-                
-                echo " Windows structure: exe + DLLs + lib/ + etc/ + libexec/"
-              fi
-              
-              echo " GStreamer embedded and paths fixed"
-            fi
-            
-            # Create a README
-            REPO="https://github.com/altunenes/cuneus"
-            R="release/$shader/README.txt"
-            echo "$shader — a cuneus shader" > "$R"
-            echo "$REPO" >> "$R"
-            echo "" >> "$R"
-            echo "How to run:" >> "$R"
+            OUT="release/$shader"
+            mkdir -p "$OUT"
+            cp "examples/shaders/$shader.wgsl" "$OUT/"
+
             if [[ "${{ runner.os }}" == "Windows" ]]; then
-              echo "  Double-click run_$shader.bat  (or run it from a terminal)." >> "$R"
+              cp "target/release/examples/$shader.exe" "$OUT/"
+              ./rcedit.exe "$OUT/$shader.exe" --set-icon assets/icon.ico
+              if [[ "$MEDIA" == "true" ]]; then
+                cp gstreamer_bundle/lib/*.dll "$OUT/"
+                mkdir -p "$OUT/lib"
+                cp -r gstreamer_bundle/lib/gstreamer-1.0 "$OUT/lib/"
+                cp -r gstreamer_bundle/libexec gstreamer_bundle/etc "$OUT/"
+              fi
+
+            elif [[ "${{ runner.os }}" == "Linux" ]]; then
+              cp "target/release/examples/$shader" "$OUT/"
+              if [[ "$MEDIA" == "true" ]]; then
+                cp -r gstreamer_bundle "$OUT/gstreamer"
+                patchelf --set-rpath '$ORIGIN/gstreamer/lib' "$OUT/$shader"
+                for f in "$OUT"/gstreamer/lib/*.so*; do patchelf --set-rpath '$ORIGIN' "$f" || true; done
+                for f in "$OUT"/gstreamer/lib/gstreamer-1.0/*.so; do patchelf --set-rpath '$ORIGIN/..' "$f" || true; done
+                patchelf --set-rpath '$ORIGIN/../../lib' "$OUT/gstreamer/libexec/gstreamer-1.0/gst-plugin-scanner" || true
+              fi
+
             else
-              echo "  In a terminal, from this folder:  ./run_$shader.sh" >> "$R"
-            fi
-            echo "" >> "$R"
-            echo "Notes:" >> "$R"
-            echo "- Keep the \"shaders\" folder next to the executable." >> "$R"
-            if [[ "${{ matrix.shader_config.gstreamer_required }}" == "true" ]]; then
-              echo "- GStreamer is bundled — no separate install needed. Please use the" >> "$R"
-              echo "  launcher above so the bundled media plugins are found." >> "$R"
-              if [[ "${{ runner.os }}" == "Windows" ]]; then
-                echo "- If you see missing-DLL errors, install the Visual C++ Redistributable:" >> "$R"
-                echo "    https://aka.ms/vs/17/release/vc_redist.x64.exe" >> "$R"
+              APP="$OUT/$shader.app/Contents"
+              mkdir -p "$APP/MacOS" "$APP/Resources"
+              cp "target/release/examples/$shader" "$APP/MacOS/"
+              cp assets/icon.icns "$APP/Resources/icon.icns"
+              cat > "$APP/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>$shader</string>
+            <key>CFBundleExecutable</key><string>$shader</string>
+            <key>CFBundleIdentifier</key><string>io.github.altunenes.cuneus.$shader</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleIconFile</key><string>icon</string>
+            <key>CFBundleShortVersionString</key><string>$VERSION</string>
+            <key>CFBundleVersion</key><string>$VERSION</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>NSCameraUsageDescription</key><string>Webcam input for the shader.</string>
+            <key>NSMicrophoneUsageDescription</key><string>Audio input for the shader.</string>
+          </dict>
+          </plist>
+          EOF
+              if [[ "$MEDIA" == "true" ]]; then
+                G="$APP/Resources/gstreamer"
+                cp -r gstreamer_bundle "$G"
+                rebase() {
+                  otool -L "$1" | awk 'NR>1 {print $1}' | { grep -E "^(@rpath|/Library/Frameworks/GStreamer.framework)" || true; } | while read -r dep; do
+                    install_name_tool -change "$dep" "$2/$(basename "$dep")" "$1" 2>/dev/null || true
+                  done
+                }
+                rebase "$APP/MacOS/$shader" "@executable_path/../Resources/gstreamer/lib"
+                for f in "$G"/lib/*.dylib; do
+                  install_name_tool -id "@loader_path/$(basename "$f")" "$f" 2>/dev/null || true
+                  rebase "$f" "@loader_path"
+                done
+                for f in "$G"/lib/gstreamer-1.0/*.dylib; do rebase "$f" "@loader_path/.."; done
+                if [[ -f "$G/libexec/gstreamer-1.0/gst-plugin-scanner" ]]; then
+                  rebase "$G/libexec/gstreamer-1.0/gst-plugin-scanner" "@loader_path/../../lib"
+                fi
               fi
-            fi
-            echo "" >> "$R"
-            echo "Questions or bugs? Open an issue at $REPO/issues" >> "$R"
-            
-            # Windows-specific: create .bat launcher
-            if [[ "${{ runner.os }}" == "Windows" ]]; then
-              # For Windows,
-              if [[ "${{ matrix.shader_config.gstreamer_required }}" == "true" ]]; then
-                echo "@echo off" > "release/$shader/run_$shader.bat"
-                echo "setlocal" >> "release/$shader/run_$shader.bat"
-                echo "" >> "release/$shader/run_$shader.bat"
-                echo "REM Ensure shader directory exists" >> "release/$shader/run_$shader.bat"
-                echo "if not exist shaders mkdir shaders" >> "release/$shader/run_$shader.bat"
-                echo "" >> "release/$shader/run_$shader.bat"
-                echo "REM Set working directory to script location" >> "release/$shader/run_$shader.bat"
-                echo "cd /d \"%~dp0\"" >> "release/$shader/run_$shader.bat"
-                echo "" >> "release/$shader/run_$shader.bat"
-                echo "REM Configure GStreamer environment" >> "release/$shader/run_$shader.bat"
-                echo "set GST_PLUGIN_PATH=%~dp0lib\\gstreamer-1.0" >> "release/$shader/run_$shader.bat"
-                echo "set GST_PLUGIN_SYSTEM_PATH=" >> "release/$shader/run_$shader.bat"
-                echo "set GST_REGISTRY=%~dp0gst-registry.bin" >> "release/$shader/run_$shader.bat"
-                echo "set GST_PLUGIN_SCANNER=%~dp0libexec\\gstreamer-1.0\\gst-plugin-scanner.exe" >> "release/$shader/run_$shader.bat"
-                echo "" >> "release/$shader/run_$shader.bat"
-                echo "REM Disable conflicting environment variables" >> "release/$shader/run_$shader.bat"
-                echo "set GSTREAMER_1_0_ROOT_MSVC_X86_64=" >> "release/$shader/run_$shader.bat"
-                echo "set GSTREAMER_1_0_ROOT_MINGW_X86_64=" >> "release/$shader/run_$shader.bat"
-                echo "" >> "release/$shader/run_$shader.bat"
-                echo "REM Run the shader" >> "release/$shader/run_$shader.bat"
-                echo "$shader.exe %*" >> "release/$shader/run_$shader.bat"
-                echo "endlocal" >> "release/$shader/run_$shader.bat"
-              else
-                # Simple launcher for non-media shaders
-                echo "@echo off" > "release/$shader/run_$shader.bat"
-                echo "if not exist shaders mkdir shaders" >> "release/$shader/run_$shader.bat"
-                echo "$shader.exe %*" >> "release/$shader/run_$shader.bat"
-              fi
+              # install_name_tool breaks signatures and Apple Silicon kills unsigned code: re-sign ad hoc, inside out
+              find "$OUT/$shader.app" -type f \( -name '*.dylib' -o -name 'gst-plugin-scanner' \) -exec codesign --force -s - {} \;
+              codesign --force -s - "$OUT/$shader.app"
+              codesign --verify --deep --strict "$OUT/$shader.app"
             fi
 
-            # Create launcher script for Linux/MacOS
-            if [[ "${{ runner.os }}" != "Windows" ]]; then
-              echo '#!/bin/bash' > "release/$shader/run_$shader.sh"
-              echo 'mkdir -p shaders' >> "release/$shader/run_$shader.sh"
-              
-              # Add GStreamer environment setup for media shaders
-              if [[ "${{ matrix.shader_config.gstreamer_required }}" == "true" ]]; then
-                echo 'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' >> "release/$shader/run_$shader.sh"
-                echo 'export GST_PLUGIN_PATH="$SCRIPT_DIR/gstreamer/lib/gstreamer-1.0"' >> "release/$shader/run_$shader.sh"
-                echo 'export GST_PLUGIN_SYSTEM_PATH=""' >> "release/$shader/run_$shader.sh"
-                echo 'export GST_REGISTRY="$SCRIPT_DIR/gstreamer/registry.bin"' >> "release/$shader/run_$shader.sh"
-                
-                # Set plugin scanner for macOS and Linux
-                if [[ "${{ runner.os }}" == "macOS" ]]; then
-                  echo 'export GST_PLUGIN_SCANNER="$SCRIPT_DIR/gstreamer/libexec/gstreamer-1.0/gst-plugin-scanner"' >> "release/$shader/run_$shader.sh"
-                  echo '# Disable system GStreamer to prevent conflicts' >> "release/$shader/run_$shader.sh"
-                  echo 'export DYLD_LIBRARY_PATH="$SCRIPT_DIR/gstreamer/lib:$DYLD_LIBRARY_PATH"' >> "release/$shader/run_$shader.sh"
-                  echo 'export DYLD_FALLBACK_LIBRARY_PATH="$SCRIPT_DIR/gstreamer/lib"' >> "release/$shader/run_$shader.sh"
-                  echo 'unset PKG_CONFIG_PATH' >> "release/$shader/run_$shader.sh"
-                elif [[ "${{ runner.os }}" == "Linux" ]]; then
-                  echo 'export GST_PLUGIN_SCANNER="$SCRIPT_DIR/gstreamer/libexec/gstreamer-1.0/gst-plugin-scanner"' >> "release/$shader/run_$shader.sh"
-                fi
-                
-                # Linux-specific: Add library path
-                if [[ "${{ runner.os }}" == "Linux" ]]; then
-                  echo 'export LD_LIBRARY_PATH="$SCRIPT_DIR/gstreamer/lib:$LD_LIBRARY_PATH"' >> "release/$shader/run_$shader.sh"
-                fi
+            R="$OUT/README.txt"
+            {
+              echo "$shader, made with cuneus: https://github.com/altunenes/cuneus"
+              echo ""
+              if [[ "${{ runner.os }}" == "Windows" ]]; then
+                echo "Run: double-click $shader.exe"
+                if [[ "$MEDIA" == "true" ]]; then echo "Keep the DLLs and the lib, libexec and etc folders next to it."; fi
+                echo "Missing DLL errors: install https://aka.ms/vs/17/release/vc_redist.x64.exe"
+              elif [[ "${{ runner.os }}" == "Linux" ]]; then
+                echo "Run: ./$shader"
+                if [[ "$MEDIA" == "true" ]]; then echo "Keep the gstreamer folder next to it."; fi
+              else
+                echo "Run: open $shader.app"
+                echo "macOS blocks apps downloaded outside the App Store. Once, in this folder:"
+                echo "  xattr -dr com.apple.quarantine $shader.app"
               fi
-              
-              echo "./$shader \"\$@\"" >> "release/$shader/run_$shader.sh"
-              chmod +x "release/$shader/run_$shader.sh"
-            fi
+              echo ""
+              echo "$shader.wgsl is the shader's source; the app doesn't need it."
+              echo "Exports go to an export folder (your home folder when started from Finder)."
+              echo "Questions or bugs: https://github.com/altunenes/cuneus/issues"
+            } > "$R"
           done
 
-      # Create archives for each shader
       - name: Create archives
         shell: bash
         run: |
           cd release
           IFS=',' read -ra SHADERS <<< "${{ matrix.shader_config.shaders }}"
           for shader in "${SHADERS[@]}"; do
-            echo "Creating archive for: $shader"
             if [[ "${{ runner.os }}" == "Windows" ]]; then
               7z a "../$shader-${{ matrix.target }}${{ matrix.archive_ext }}" "$shader"
             else
@@ -799,35 +346,21 @@ jobs:
             fi
           done
 
-      # Upload artifacts for each shader
-      - name: Upload artifacts
-        shell: bash
-        run: |
-          IFS=',' read -ra SHADERS <<< "${{ matrix.shader_config.shaders }}"
-          for shader in "${SHADERS[@]}"; do
-            echo "Uploading artifact for: $shader"
-          done
-          
-      - name: Upload artifacts to GitHub
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.shader_config.group }}-${{ matrix.target }}
           path: "*-${{ matrix.target }}${{ matrix.archive_ext }}"
 
   release:
     needs: [build]
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
-          token: ${{ secrets.GITHUB_TOKEN }}
-          draft: false
-          prerelease: false
           generate_release_notes: true

@@ -8,6 +8,13 @@ use winit::{
     window::WindowAttributes,
 };
 
+/// Window and taskbar icon (Windows, Linux); macOS takes it from the app bundle
+fn window_icon() -> Option<winit::window::Icon> {
+    let img = image::load_from_memory(include_bytes!("../assets/icon.png")).ok()?.into_rgba8();
+    let (w, h) = img.dimensions();
+    winit::window::Icon::from_rgba(img.into_raw(), w, h).ok()
+}
+
 pub struct ShaderApp {
     window_title: String,
     window_size: (u32, u32),
@@ -20,6 +27,13 @@ impl ShaderApp {
         let event_loop = EventLoop::builder()
             .build()
             .expect("Failed to create event loop");
+
+        // an app opened from Finder starts in "/": exports go to the home folder instead
+        if std::env::current_dir().is_ok_and(|d| d.parent().is_none()) {
+            if let Some(home) = std::env::var_os("HOME") {
+                let _ = std::env::set_current_dir(home);
+            }
+        }
 
         //note: No window creation here - will happen in resumed event
         let app = Self {
@@ -76,6 +90,7 @@ impl<S: ShaderManager> ApplicationHandler for ShaderAppHandler<S> {
                 self.app.window_size.1,
             ))
             .with_title(&self.app.window_title)
+            .with_window_icon(window_icon())
             .with_resizable(true);
         let window = event_loop
             .create_window(window_attributes)

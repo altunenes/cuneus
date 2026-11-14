@@ -648,3 +648,13 @@ Use `.with_audio_spectrum(69)` to **visualize** audio from loaded media files. G
 The `.with_fonts()` method provides texture (see `assets/fonts/fonttexture.png`) needed to render text directly inside your shader
 
 - *Examples: `debugscreen.rs` uses this for its UI, and `cnn.rs` uses it to label its output bars.*
+
+## Shipping an App
+
+`.github/workflows/release.yaml` turns examples into downloadable apps on a `v*` tag; run it by hand (Actions → Run workflow) to get test builds without a release. Each app gets one folder:
+
+- **Windows:** `name.exe` with the cuneus icon; media apps add the GStreamer DLLs, `lib/`, `libexec/` and `etc/` next to it
+- **macOS:** `name.app` (icon, `Info.plist`, camera and microphone prompts); GStreamer goes in `Contents/Resources/gstreamer`, libraries are rewritten to it and the bundle is signed ad hoc
+- **Linux:** `name` with a `gstreamer/` folder, found through `$ORIGIN` rpaths
+
+There are no launcher scripts: shaders are compiled into the binary, and `cuneus::gst::init()` points GStreamer at a bundled copy when it finds one. To ship your own example, add its name to a `shaders` list in the workflow (`media` if it uses GStreamer). The icons live in `assets/` (`icon.png` for the window, `icon.ico` and `icon.icns` for the apps).

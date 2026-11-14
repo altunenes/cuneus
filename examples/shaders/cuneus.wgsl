@@ -10,7 +10,7 @@ struct TimeUniform {
 
 struct Params {
     background_color: f32,
-    _pad0: f32,
+    icon: f32,
     _pad00: f32,
     _pad000: f32,
     hue_color: vec4<f32>,
@@ -140,8 +140,12 @@ fn letters(pp: ptr<function, vec2<f32>>, off: f32) -> f32 {
     let l = hs(p2 - vec2<f32>(-0.25 * 3.0 / 4.0, -0.125 / 2.0),  vec2<f32>(0.0, 1.0), 0.375, vec2<f32>(0.2, 0.1));
     return min(u, l);
 }
-//CUNEUS
+//CUNEUS (icon: the C alone, centred)
 fn cuneus(p: vec2<f32>, off: f32) -> f32 {
+    if (params.icon > 0.5) {
+        var pc = p + vec2<f32>(0.5);
+        return letterc(&pc, off);
+    }
     var p2 = p + vec2<f32>(3.0 + 3.0 * off, 0.5);
     var d = 1.0e6;
     d = min(d, letterc(&p2, off));
@@ -177,6 +181,15 @@ fn texlight(uv: vec2<f32>, scale: f32, time: f32) -> array<vec2<f32>, 8> {
     // S
     positions[5] = vec2<f32>(-baseOffset + 5.525, 0.5);
     
+    if (params.icon > 0.5) {
+        for (var k = 0; k < 6; k++) {
+            positions[k] = 0.6 * vec2<f32>(cos(f32(k) * TAU / 6.0), sin(f32(k) * TAU / 6.0));
+        }
+        positions[6] = vec2<f32>(oscillate(-0.6, 0.6, 8.0, time), oscillate(-0.6, 0.6, 5.0, time));
+        positions[7] = vec2<f32>(oscillate(0.6, -0.6, 7.0, time), oscillate(0.6, -0.6, 6.0, time));
+        return positions;
+    }
+
     // Additional dynamic points
     positions[6] = vec2<f32>(-baseOffset + oscillate(0.0, 6.0, 8.0, time), 
                     oscillate(0.0, 1.0, 5.0, time));
@@ -274,7 +287,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var fragColor = vec4<f32>(vec3<f32>(params.background_color), 1.0);
     
     let fragCoord = vec2<f32>(f32(gid.x), f32(gid.y));
-    let uv = 6.0 * vec2<f32>(
+    let uv = select(6.0, 1.6, params.icon > 0.5) * vec2<f32>(
         fragCoord.x - 0.5 * f32(dimensions.x), 
         -(fragCoord.y - 0.5 * f32(dimensions.y))
     ) / f32(dimensions.y);
