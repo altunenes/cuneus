@@ -226,7 +226,7 @@ jobs:
         shell: bash
         run: curl -sL -o rcedit.exe https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe
 
-      # one folder per app: the app, README.txt and the shader's source
+      # one folder per app: the app and README.txt
       #   Windows: name.exe (+ GStreamer DLLs, lib/, libexec/, etc/)
       #   Linux:   name (+ gstreamer/)
       #   macOS:   name.app (GStreamer inside Contents/Resources/gstreamer)
@@ -240,7 +240,6 @@ jobs:
           for shader in "${SHADERS[@]}"; do
             OUT="release/$shader"
             mkdir -p "$OUT"
-            cp "examples/shaders/$shader.wgsl" "$OUT/"
 
             if [[ "${{ runner.os }}" == "Windows" ]]; then
               cp "target/release/examples/$shader.exe" "$OUT/"
@@ -322,12 +321,13 @@ jobs:
                 echo "Run: ./$shader"
                 if [[ "$MEDIA" == "true" ]]; then echo "Keep the gstreamer folder next to it."; fi
               else
-                echo "Run: open $shader.app"
-                echo "macOS blocks apps downloaded outside the App Store. Once, in this folder:"
-                echo "  xattr -dr com.apple.quarantine $shader.app"
+                echo "Run: double-click $shader.app"
+                echo "The first time, macOS blocks apps downloaded from the internet that aren't from the App Store:"
+                echo "  System Settings > Privacy & Security > Open Anyway (next to $shader), then open it again."
+                echo "Or once, in a terminal in this folder:  xattr -dr com.apple.quarantine $shader.app"
               fi
               echo ""
-              echo "$shader.wgsl is the shader's source; the app doesn't need it."
+              echo "Source: https://github.com/altunenes/cuneus/blob/main/examples/shaders/$shader.wgsl"
               echo "Exports go to an export folder (your home folder when started from Finder)."
               echo "Questions or bugs: https://github.com/altunenes/cuneus/issues"
             } > "$R"
