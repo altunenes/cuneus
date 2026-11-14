@@ -6,7 +6,7 @@ use cuneus::WindowEvent;
 cuneus::uniform_params! {
     struct ShaderParams {
     background_color: f32,
-    _pad0: f32,
+    icon: f32,
     _pad00: f32,
     _pad000: f32,
     hue_color: [f32; 3],
@@ -61,7 +61,7 @@ impl ShaderManager for Shader {
 
         let initial_params = ShaderParams {
             background_color: 0.4,
-            _pad0: 0.0,
+            icon: 0.0,
             _pad00: 0.0,
             _pad000: 0.0,
             hue_color: [1.0, 2.0, 3.0],
@@ -142,6 +142,12 @@ impl ShaderManager for Shader {
                     .resizable(true)
                     .default_width(250.0)
                     .show(ctx, |ui| {
+                        let mut icon = params.icon > 0.5;
+                        if ui.checkbox(&mut icon, "Icon (C only, export square)").changed() {
+                            params.icon = if icon { 1.0 } else { 0.0 };
+                            changed = true;
+                        }
+
                         egui::CollapsingHeader::new("Colors")
                             .default_open(false)
                             .show(ui, |ui| {
