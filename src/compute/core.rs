@@ -1662,10 +1662,9 @@ impl ComputeShader {
         }
         self.rebuild_multipass_caches(&core.device);
 
-        // Recreate atomic buffer if present
-        if let Some(atomic_buffer) = &mut self.atomic_buffer_raw {
-            let buffer_size = self.atomic_buffer_bytes.unwrap_or(
-                (width * height * self.atomic_buffer_channels * 4) as u64);
+        // Recreate a resolution-sized atomic buffer; a fixed-size one keeps its contents
+        if let (Some(atomic_buffer), None) = (&mut self.atomic_buffer_raw, self.atomic_buffer_bytes) {
+            let buffer_size = (width * height * self.atomic_buffer_channels * 4) as u64;
             *atomic_buffer = core.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Atomic Storage Buffer (resized)"),
                 size: buffer_size,
