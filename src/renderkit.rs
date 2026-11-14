@@ -222,7 +222,7 @@ impl RenderKit {
             time_uniform,
             resolution_uniform,
             key_handler: KeyInputHandler::new(),
-            export_manager: ExportManager::new(),
+            export_manager: ExportManager::new().with_size(core.size.width, core.size.height),
             controls: ShaderControls::new(),
             spectrum_analyzer: SpectrumAnalyzer::new(),
             #[cfg(feature = "media")]

@@ -108,6 +108,14 @@ impl ExportManager {
             temp_state,
         }
     }
+    /// Initial export resolution
+    pub fn with_size(mut self, width: u32, height: u32) -> Self {
+        self.settings.width = width;
+        self.settings.height = height;
+        self.temp_state.width = width;
+        self.temp_state.height = height;
+        self
+    }
     pub fn get_ui_request(&self) -> ExportUiRequest {
         ExportUiRequest {
             width: self.temp_state.width,
