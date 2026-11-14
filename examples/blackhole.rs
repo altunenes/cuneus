@@ -10,41 +10,59 @@ cuneus::uniform_params! {
         disk_inner: f32, disk_outer: f32, disk_thickness: f32, disk_brightness: f32,
         disk_density: f32, noise_scale: f32, swirl_speed: f32, temperature: f32,
         doppler: f32, redshift: f32, beaming: f32, ring_glow: f32,
-        cam_x: f32, cam_y: f32, cam_z: f32, cam_pitch: f32,
-        cam_yaw: f32, cam_roll: f32, fov: f32, taa_weight: f32,
+        pan_x: f32, pan_y: f32, pan_z: f32, elev: f32,
+        azim: f32, cam_roll: f32, fov: f32, taa_weight: f32,
         exposure: f32, bloom: f32, star_density: f32, gamma: f32,
         spectral_shift: f32, saturation: f32, reddening: f32, sharpen: f32,
         vividness: f32, opacity: f32, highlight: f32, spectral: f32,
         relief: f32, layering: f32, flare: f32, irradiation: f32,
+        aperture: f32, focus: f32, focus_range: f32, bokeh_radius: f32,
+        bokeh: f32, bloom_threshold: f32, self_shadow: f32, dist: f32,
+        cinematic: f32, prev_azim: f32, prev_elev: f32, prev_dist: f32,
     }
 }
+
+// baked disc noise volumes (radius x spiral angle x height)
+const DISC_VOLUME: [u32; 3] = [256, 128, 64];
 
 struct BlackHoleShader {
     base: RenderKit,
     compute_shader: ComputeShader,
     current_params: BlackHoleParams,
+    dragging: bool,
+    last_cursor: Option<(f64, f64)>,
+    // last frame's orbit + time (TAA)
+    prev_orbit: (f32, f32, f32, f32),
 }
 
 impl ShaderManager for BlackHoleShader {
     fn init(core: &Core) -> Self {
         let initial_params = BlackHoleParams {
-            disk_inner: 3.0, disk_outer: 14.0, disk_thickness: 0.45, disk_brightness: 1.0,
+            disk_inner: 3.0, disk_outer: 14.0, disk_thickness: 0.35, disk_brightness: 1.0,
             disk_density: 1.8, noise_scale: 1.0, swirl_speed: 0.25, temperature: 2.5,
             doppler: 0.75, redshift: 2.5, beaming: 4.0, ring_glow: 3.0,
-            cam_x: 0.0, cam_y: 1.6, cam_z: -18.0, cam_pitch: -0.08,
-            cam_yaw: 0.0, cam_roll: 0.0, fov: 80.0, taa_weight: 0.8,
+            pan_x: 0.0, pan_y: 0.0, pan_z: 0.0, elev: 0.0886,
+            azim: 0.0, cam_roll: 0.0, fov: 80.0, taa_weight: 0.8,
             exposure: 1.0, bloom: 2.0, star_density: 1.0, gamma: 1.2,
             spectral_shift: 0.0, saturation: 1.2, reddening: 0.6, sharpen: 0.7,
-            vividness: 0.35, opacity: 0.0, highlight: 0.08, spectral: 0.0,
+            vividness: 0.35, opacity: 0.4, highlight: 0.08, spectral: 0.0,
             relief: 0.6, layering: 0.55, flare: 0.5, irradiation: 0.7,
+            aperture: 0.0, focus: 1.0, focus_range: 0.0, bokeh_radius: 2.2,
+            bokeh: 1.0, bloom_threshold: 0.6, self_shadow: 0.7, dist: 18.07,
+            cinematic: 0.0, prev_azim: 0.0, prev_elev: 0.0886, prev_dist: 18.07,
         };
 
         let base = RenderKit::new(core);
 
+        let [vw, vh, vd] = DISC_VOLUME;
         let passes = vec![
+            // disc noise bake (run_once)
+            PassDescription::new("bake_a", &[]).with_volume(vw, vh, vd).run_once(),
+            PassDescription::new("bake_b", &[]).with_volume(vw, vh, vd).run_once(),
             PassDescription::new("bb_lut", &[]),
             PassDescription::new("scene", &["bb_lut"]),
-            PassDescription::new("resolve", &["scene", "resolve"]), // tex0=raw, tex1=history
+            PassDescription::new("dof", &["scene"]),
+            PassDescription::new("resolve", &["dof", "resolve"]),
             PassDescription::new("bloom_pre", &["resolve"]).with_resolution_scale(0.5),
             PassDescription::new("bd2", &["bloom_pre"]).with_resolution_scale(0.25),
             PassDescription::new("bd3", &["bd2"]).with_resolution_scale(0.125),
@@ -58,7 +76,7 @@ impl ShaderManager for BlackHoleShader {
         ];
 
         let config = ComputeShader::builder()
-            .with_entry_point("scene")
+            .with_entry_point("bake_a")
             .with_multi_pass(&passes)
             .with_custom_uniforms::<BlackHoleParams>()
             .with_workgroup_size([16, 16, 1])
@@ -73,13 +91,21 @@ impl ShaderManager for BlackHoleShader {
             base,
             compute_shader,
             current_params: initial_params,
+            dragging: false,
+            last_cursor: None,
+            prev_orbit: (0.0, 0.0886, 18.07, 0.0),
         }
     }
 
     fn update(&mut self, core: &Core) {
         let current_time = self.base.controls.get_time(&self.base.start_time);
-        let delta = 1.0 / 60.0;
+        let delta = (current_time - self.prev_orbit.3).clamp(0.0, 0.25);
         self.compute_shader.set_time(current_time, delta, &core.queue);
+        // last frame's camera (TAA)
+        let p = &mut self.current_params;
+        (p.prev_azim, p.prev_elev, p.prev_dist) = (self.prev_orbit.0, self.prev_orbit.1, self.prev_orbit.2);
+        self.compute_shader.set_custom_params(*p, &core.queue);
+        self.prev_orbit = (p.azim, p.elev, p.dist, current_time);
         self.compute_shader.handle_export(core, &mut self.base);
     }
 
@@ -91,6 +117,8 @@ impl ShaderManager for BlackHoleShader {
         let mut frame = self.base.begin_frame(core)?;
         let mut params = self.current_params;
         let mut changed = false;
+        // camera sliders don't reset TAA or rebake
+        let mut camera = false;
         let mut should_start_export = false;
         let mut export_request = self.base.export_manager.get_ui_request();
         let mut controls_request = self.base.controls.get_ui_request(
@@ -109,11 +137,12 @@ impl ShaderManager for BlackHoleShader {
                     .show(ctx, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
                         egui::CollapsingHeader::new("Camera").default_open(false).show(ui, |ui| {
-                                changed |= ui.add(egui::Slider::new(&mut params.cam_x, -50.0..=50.0).text("X")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.cam_y, -50.0..=50.0).text("Y")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.cam_z, -50.0..=50.0).text("Z")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.cam_pitch, -3.14..=3.14).text("Pitch")).changed();
-                                changed |= ui.add(egui::Slider::new(&mut params.cam_yaw, -3.14..=3.14).text("Yaw")).changed();
+                                ui.label("Drag to orbit, wheel to fly in and out");
+                                camera |= ui.add(egui::Slider::new(&mut params.dist, 2.5..=60.0).logarithmic(true).text("Distance")).changed();
+                                camera |= ui.add(egui::Slider::new(&mut params.pan_x, -15.0..=15.0).text("Camera X (left / right)")).changed();
+                                camera |= ui.add(egui::Slider::new(&mut params.pan_y, -15.0..=15.0).text("Camera Y (down / up)")).changed();
+                                camera |= ui.add(egui::Slider::new(&mut params.pan_z, -15.0..=15.0).text("Camera Z (back / forward)")).changed();
+                                camera |= ui.add(egui::Slider::new(&mut params.cinematic, 0.0..=2.0).text("Cinematic camera")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.cam_roll, -3.14..=3.14).text("Roll")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.fov, 15.0..=90.0).text("FOV")).changed();
                             });
@@ -135,6 +164,7 @@ impl ShaderManager for BlackHoleShader {
                                 changed |= ui.add(egui::Slider::new(&mut params.layering, 0.0..=1.0).text("Layering")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.flare, 0.0..=1.5).text("Flare")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.irradiation, 0.0..=1.5).text("Irradiation")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.self_shadow, 0.0..=1.0).text("Self-shadow")).changed();
                             });
 
                         egui::CollapsingHeader::new("Color").default_open(false).show(ui, |ui| {
@@ -153,9 +183,18 @@ impl ShaderManager for BlackHoleShader {
                                 changed |= ui.add(egui::Slider::new(&mut params.beaming, 0.0..=5.0).text("Beaming")).changed();
                             });
 
+                        egui::CollapsingHeader::new("Lens").default_open(false).show(ui, |ui| {
+                                changed |= ui.add(egui::Slider::new(&mut params.aperture, 0.0..=3.0).text("Aperture (DoF)")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.focus, 0.1..=4.0).logarithmic(true).text("Focus (1 = hole)")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.focus_range, 0.0..=20.0).text("Focus range (rs)")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.bokeh_radius, 0.3..=6.0).text("Max blur (% height)")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.bokeh, 0.0..=4.0).text("Bokeh highlights")).changed();
+                            });
+
                         egui::CollapsingHeader::new("Post").default_open(false).show(ui, |ui| {
                                 changed |= ui.add(egui::Slider::new(&mut params.exposure, 0.1..=3.0).text("Exposure")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.bloom, 0.0..=2.0).text("Bloom")).changed();
+                                changed |= ui.add(egui::Slider::new(&mut params.bloom_threshold, 0.0..=2.0).text("Bloom threshold")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.gamma, 0.6..=2.2).text("Gamma")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.sharpen, 0.0..=2.0).text("Sharpen")).changed();
                                 changed |= ui.add(egui::Slider::new(&mut params.taa_weight, 0.0..=0.95).text("TAA")).changed();
@@ -177,10 +216,11 @@ impl ShaderManager for BlackHoleShader {
 
         // if slider moved? -> so lets wipe TAA buffers so it doesn't smear
         if changed || controls_request.should_clear_buffers {
-            self.compute_shader.current_frame = 0;
-            self.compute_shader.time_uniform.data.frame = 0;
-            self.compute_shader.time_uniform.update(&core.queue);
+            self.current_params = params;
+            self.restart(core);
+            // rebake on disk changes
             self.compute_shader.clear_all_buffers(core);
+        } else if camera {
             self.current_params = params;
             self.compute_shader.set_custom_params(params, &core.queue);
         }
@@ -206,7 +246,46 @@ impl ShaderManager for BlackHoleShader {
     }
 
     fn handle_input(&mut self, core: &Core, event: &WindowEvent) -> bool {
-        self.base.default_handle_input(core, event)
+        if self.base.default_handle_input(core, event) {
+            return true;
+        }
+        match event {
+            WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
+                self.dragging = *state == winit::event::ElementState::Pressed;
+                self.last_cursor = None;
+                self.dragging
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let steps = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => *y,
+                    winit::event::MouseScrollDelta::PixelDelta(d) => d.y as f32 / 40.0,
+                };
+                let p = &mut self.current_params;
+                p.dist = (p.dist * 1.1f32.powf(-steps)).clamp(2.5, 60.0);
+                self.compute_shader.set_custom_params(*p, &core.queue);
+                true
+            }
+            WindowEvent::CursorMoved { position, .. } if self.dragging => {
+                if let Some((x, y)) = self.last_cursor {
+                    let p = &mut self.current_params;
+                    p.azim = (p.azim - (position.x - x) as f32 * 0.006).rem_euclid(std::f32::consts::TAU);
+                    p.elev = (p.elev + (position.y - y) as f32 * 0.005).clamp(-1.5, 1.5);
+                    self.compute_shader.set_custom_params(*p, &core.queue);
+                }
+                self.last_cursor = Some((position.x, position.y));
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+impl BlackHoleShader {
+    fn restart(&mut self, core: &Core) {
+        self.compute_shader.current_frame = 0;
+        self.compute_shader.time_uniform.data.frame = 0;
+        self.compute_shader.time_uniform.update(&core.queue);
+        self.compute_shader.set_custom_params(self.current_params, &core.queue);
     }
 }
 

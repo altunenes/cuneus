@@ -57,6 +57,12 @@ pub struct PassDescription {
     /// Optional resolution scale factor relative to screen size (e.g., 0.5 = half-res).
     /// Applied on creation and resize. Ignored if `resolution` is set.
     pub resolution_scale: Option<f32>,
+    /// 3D volume `[width, height, depth]` written instead of a 2D buffer
+    pub volume: Option<[u32; 3]>,
+    /// Volume texel format; `None` follows the builder's texture format
+    pub volume_format: Option<wgpu::TextureFormat>,
+    /// Run only when the output is stale
+    pub run_once: bool,
 }
 
 impl PassDescription {
@@ -73,6 +79,9 @@ impl PassDescription {
             workgroup_size: None,
             resolution: None,
             resolution_scale: None,
+            volume: None,
+            volume_format: None,
+            run_once: false,
         }
     }
 
@@ -107,7 +116,31 @@ impl PassDescription {
         self.resolution_scale = Some(scale);
         self
     }
+
+    /// Write a fixed-size 3D volume instead of a 2D buffer (ping-pongs, untouched by resize/export).
+    /// Volume `j` is bound in Group 3 at `16 + 3j` (texture, sampler, storage); up to 3 volumes.
+    pub fn with_volume(mut self, width: u32, height: u32, depth: u32) -> Self {
+        self.volume = Some([width.max(1), height.max(1), depth.max(1)]);
+        self.resolution = Some([1, 1]);
+        self
+    }
+
+    /// Volume format other than the builder's, e.g. `R16Float` for a single-channel field.
+    /// Must be storage-writable and filterable on this GPU (checked at creation).
+    pub fn with_volume_format(mut self, format: wgpu::TextureFormat) -> Self {
+        self.volume_format = Some(format);
+        self
+    }
+
+    /// Run only on the first frame, after a clear, hot reload, resize (2D only) or `rerun_pass(name)`.
+    pub fn run_once(mut self) -> Self {
+        self.run_once = true;
+        self
+    }
 }
+
+/// First Group 3 binding used by volumes
+pub const VOLUME_BINDING_BASE: u32 = 16;
 
 /// Specification for a user-defined storage buffer bound to Group 3.
 ///

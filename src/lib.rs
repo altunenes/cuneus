@@ -245,6 +245,8 @@ pub struct Core {
     pub config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
     pub window: Window,
+    /// For format capability queries
+    pub adapter: wgpu::Adapter,
 }
 impl Core {
     pub async fn new(window: Window) -> Self {
@@ -280,8 +282,11 @@ impl Core {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                // optional, when available: indirect draws starting at an instance (mesh GPU culling)
-                required_features: adapter.features() & wgpu::Features::INDIRECT_FIRST_INSTANCE,
+                // optional: mesh GPU culling, compact volume formats
+                required_features: adapter.features()
+                    & (wgpu::Features::INDIRECT_FIRST_INSTANCE
+                        | wgpu::Features::FLOAT32_FILTERABLE
+                        | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES),
                 required_limits,
                 memory_hints: Default::default(),
                 experimental_features: Default::default(),
@@ -318,6 +323,7 @@ impl Core {
             config,
             size,
             window,
+            adapter,
         }
     }
     pub fn window(&self) -> &Window {
